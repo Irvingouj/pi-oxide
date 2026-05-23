@@ -268,6 +268,13 @@ Tool implementation:
 - `edit`: real filesystem, exact replacement, rejects missing/ambiguous/overlapping edits, returns diff
 - `bash`: real shell, cwd-confined, timeout, abort, output tail truncation, no destructive auto-allow by default
 
+Current local `bash` is only smoke-test grade. The runtime model still needs:
+
+- streaming stdout/stderr so the host/UI can observe partial output
+- explicit background process lifecycle instead of shell-owned orphan processes
+- signal/abort support beyond timeout termination
+- async tool execution so the host loop remains responsive while tools run
+
 Safety:
 
 - default deny writes outside cwd
@@ -304,6 +311,21 @@ First artifact store:
 - later IndexedDB/OPFS for browser
 
 The artifact store remains host-owned because it is runtime I/O. The decision to replace, keep, head-trim, tail-trim, or drop belongs in Rust because it is portable agent behavior.
+
+### Milestone B.5: Local Tool Runtime Control
+
+Before treating the local host as production-grade, build a proper tool runtime.
+
+Runtime target:
+
+- `bash` streams stdout/stderr as updates.
+- background processes are tracked as jobs with IDs.
+- jobs can be stopped explicitly and cleaned up on shutdown.
+- user stop can abort in-flight tool execution.
+- timeout first attempts graceful termination, then escalates.
+- tool execution is async in the host; Rust core stays synchronous and receives updates/results.
+
+This is host runtime work. It must not introduce Node, shell, process, or signal assumptions into `pi-core`.
 
 ### Milestone C: Minimal Session Persistence
 

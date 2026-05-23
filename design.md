@@ -405,6 +405,9 @@ Local JS host owns:
 - permission policy
 - artifact/session persistence
 - trace sinks
+- stdout/stderr streaming
+- background process job table
+- signal delivery and process cleanup
 
 Rust owns:
 
@@ -412,6 +415,8 @@ Rust owns:
 - typed tool definitions/results
 - context projection policy
 - projection reports
+
+Current limitation: the first local tool implementation is smoke-test grade. A real local coding agent needs async host-side tool execution, streaming command output, explicit background process lifecycle, and abort/signal handling. See [LOCAL_TOOL_RUNTIME_SPEC.md](./LOCAL_TOOL_RUNTIME_SPEC.md).
 
 ### 4.2 Browser Host（浏览器事件循环）
 

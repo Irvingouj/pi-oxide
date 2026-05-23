@@ -33,6 +33,7 @@ For this repository, that means:
 - The Rust core must not assume Tokio, DOM, Node, browser APIs, filesystem, shell, or network.
 
 See also: [AGENT_RUNTIME_MEMO.md](./AGENT_RUNTIME_MEMO.md).
+See also: [LOCAL_TOOL_RUNTIME_SPEC.md](./LOCAL_TOOL_RUNTIME_SPEC.md).
 
 ## Current Baseline
 
@@ -355,6 +356,52 @@ Verification:
 - real bash command reports tests passing
 - trace contains read, edit/write, bash
 - context projection bounded any large outputs
+
+Known runtime limitations:
+
+- `bash` output is currently buffered; stdout/stderr are not streamed while the command runs.
+- background processes are not tracked as first-class jobs and can be orphaned if a smoke prompt starts a server poorly.
+- timeout/cancel behavior is not a full signal/abort protocol.
+- tool execution is not yet a fully async host job system.
+
+These are not blockers for the smoke test, but they must be addressed before long-running local agent work.
+
+## Milestone 6.5: Local Tool Runtime Control
+
+Goal: design and implement a real local tool runtime for long-running commands and responsive agent control.
+
+Scope:
+
+- Streaming stdout/stderr for `bash`.
+- Explicit background job lifecycle:
+  - start
+  - list
+  - stop
+  - cleanup on host shutdown
+- Signal and abort support:
+  - user stop
+  - timeout with graceful termination
+  - process-tree kill after grace period
+- Async host-side tool execution:
+  - do not block the host loop while a tool runs
+  - allow steering/stop while tools are running
+  - support parallel tool calls when allowed
+  - preserve serialized per-path file mutations
+- Typed tool runtime events/results that remain provider-neutral.
+
+Non-goals:
+
+- No UI yet.
+- No background job persistence yet.
+- No runtime-specific process logic inside `pi-core`.
+
+Verification:
+
+- a long-running command streams partial output into trace/UI-facing events.
+- a command can be cancelled before completion.
+- a background server can be started, observed, stopped, and cleaned up.
+- no orphan process remains after smoke/eval failure.
+- existing Rust and JS tests remain green.
 
 ## Milestone 7: Local Session and Artifact Persistence
 

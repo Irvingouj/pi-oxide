@@ -27,7 +27,7 @@ import {
   type AgentOptions,
 } from "./wasmBinding.ts";
 import { FakeLlm } from "./fakeLlm.ts";
-import { FakeToolRegistry } from "./fakeTools.ts";
+import { FakeToolRegistry, type ToolRegistry } from "./fakeTools.ts";
 
 export interface TraceEntry {
   phase: "action" | "event" | "host";
@@ -47,12 +47,12 @@ export interface AgentRunResult {
 export class AgentHost {
   readonly trace: TraceEntry[] = [];
   readonly llm: FakeLlm;
-  readonly tools: FakeToolRegistry;
+  readonly tools: ToolRegistry;
   /** Optional hook called when stream_llm is encountered, before the LLM responds.
    *  Receives the agent handle. Use to inject followUp/steer mid-run. */
   onStreamLlm?: (handle: number) => void;
 
-  constructor(llm: FakeLlm, tools: FakeToolRegistry) {
+  constructor(llm: FakeLlm, tools: ToolRegistry) {
     this.llm = llm;
     this.tools = tools;
   }

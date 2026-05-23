@@ -6,6 +6,12 @@
 
 import type { ToolCall } from "./wasmBinding.ts";
 
+/** Interface for tool registries used by AgentHost. */
+export interface ToolRegistry {
+  readonly log: string[];
+  execute(call: ToolCall): object;
+}
+
 export interface FakeToolResult {
   /** Text content to return. */
   text: string;
@@ -17,7 +23,7 @@ export interface FakeToolResult {
 
 export type FakeToolHandler = (call: ToolCall) => FakeToolResult;
 
-export class FakeToolRegistry {
+export class FakeToolRegistry implements ToolRegistry {
   private handlers = new Map<string, FakeToolHandler>();
   public readonly log: string[] = [];
 

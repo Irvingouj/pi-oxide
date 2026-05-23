@@ -1,0 +1,33 @@
+[package]
+name = "pi-host-web"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WASM host for pi-core. Browser FileSystem Access API, fetch(), JS event loop."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pi-core = { workspace = true }
+pi-llm = { workspace = true }
+
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "console",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Window",
+] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde-wasm-bindgen = "0.6"
+console_error_panic_hook = "0.1"
+thiserror = { workspace = true }
+tracing = { workspace = true }

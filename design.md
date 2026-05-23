@@ -1,0 +1,912 @@
+# pi-oxide: Rust Agent-Core Runtime 设计文档
+
+> 一个无异步运行时的 Rust agent-core，通过同步状态机 + Host 驱动事件循环实现跨平台绑定。每个 Host 平台（Desktop / Web / Mobile / Embedded）自行提供 shell、UI、tools。
+
+---
+
+## 1. 设计哲学
+
+### 1.1 核心约束
+
+- **pi-core 零异步**：不使用 `tokio`、`async-std`、`futures`、`async-trait`。纯同步 Rust。
+- **Host 驱动事件循环**：LLM 流式响应、Shell 执行、文件 I/O 等所有异步操作由 Host 层完成，完成后通过同步回调推进 core 状态机。
+- **稳定跨平台绑定**：通过 C ABI（Opaque Pointer + JSON 线协议）输出，不暴露 Rust 内部类型布局。
+- **平台能力注入**：core 只定义接口（trait），不实现任何平台相关逻辑。
+
+### 1.2 为什么 Core 必须无 Async
+
+| 问题 | 如果 Core 含 Tokio | Core 无 Async 的解决方式 |
+|---|---|---|
+| WASM 目标 | Tokio 不支持 WASM32 | Host（浏览器）自带事件循环 |
+| 嵌入式/RTOS | Tokio 体积过大 | Host 提供最小执行环境 |
+| C FFI 绑定 | `tokio::Runtime` 跨 FFI 管理复杂 | Host 自己管理运行时，Core 纯同步 |
+| 多宿主共存 | Desktop (tokio) + Web (wasm) 需条件编译 | 统一同步 API，Host 各自桥接 |
+| 测试确定性 | Async 测试需 runtime，时序难控 | 同步状态机，单线程可完全确定性地测试 |
+
+---
+
+## 2. 分层架构
+
+```
+pi-oxide/
+├── pi-core/              # 纯同步 Agent 状态机（无 async，无 I/O）
+│   ├── src/
+│   │   ├── agent.rs      # Agent 状态机：Host 驱动，同步响应
+│   │   ├── loop.rs       # Turn 编排逻辑（同步）
+│   │   ├── events.rs     # AgentEvent / AgentAction enum
+│   │   ├── tool.rs       # Tool trait（同步定义）
+│   │   ├── message.rs    # Message / Content 类型系统
+│   │   ├── session.rs    # Session 树结构（内存表示）
+│   │   ├── context.rs    # AgentContext / LlmContext
+│   │   └── llm.rs        # LlmProvider trait（同步定义）
+│   └── Cargo.toml        # 零异步依赖
+│
+├── pi-bindings/          # C ABI 稳定绑定层
+│   ├── src/
+│   │   ├── c_api.rs      # `extern "C"` 函数
+│   │   ├── types.rs      # Opaque Pointer 管理
+│   │   └── bridge.rs     # JSON 序列化桥接
+│   └── Cargo.toml        # 依赖 pi-core + serde_json
+│
+├── pi-host-desktop/      # Desktop Host（macOS/Windows/Linux）
+│   ├── src/
+│   │   ├── main.rs       # CLI 入口
+│   │   ├── runner.rs     # Tokio async 事件循环，驱动 core
+│   │   ├── env.rs        # DesktopExecutionEnv（tokio::process, fs）
+│   │   ├── tools/        # bash/read/write/edit/find/grep/ls
+│   │   ├── llm.rs        # HTTP 流式请求（reqwest + SSE）
+│   │   └── tui.rs        # Ratatui 渲染适配
+│   └── Cargo.toml        # 依赖 tokio, reqwest, ratatui, crossterm
+│
+├── pi-host-web/          # WASM Host（浏览器）
+│   ├── src/
+│   │   ├── lib.rs        # wasm-bindgen 导出
+│   │   ├── runner.rs     # JS Promise 驱动的事件循环
+│   │   ├── env.rs        # Web FileSystem Access API 适配
+│   │   ├── tools.rs        # 沙箱 tool 实现
+│   │   └── llm.rs        # fetch() 流式适配
+│   └── Cargo.toml        # wasm-bindgen, js-sys, web-sys
+│
+├── pi-host-mobile/       # Mobile Host（iOS/Android）
+│   └── ...               # 通过 C FFI 调用 pi-bindings，各自用原生语言写 UI
+│
+└── pi-llm/               # LLM Provider 协议定义（纯类型，无网络实现）
+    └── src/
+        ├── model.rs        # Model / Provider 定义
+        ├── stream.rs       # LlmEvent / LlmChunk 类型
+        └── schema.rs       # JSON Schema 辅助
+```
+
+---
+
+## 3. Core 层设计：同步状态机
+
+### 3.1 核心交互模式
+
+`Agent` 是一个**被动式同步状态机**。它不主动发起任何 I/O，而是响应 Host 的调用，返回 `Vec<AgentEvent>` 和 `Vec<AgentAction>`。
+
+```
+Host 事件循环（async）                          Core（同步）
+┌─────────────────────┐                       ┌──────────────┐
+│ 1. 用户输入 prompt  │ ──agent.start_turn()──>│ 状态机推进   │
+│                     │ <──[AgentAction]───────│              │
+│ 2. 看到 StreamLlm   │                       │              │
+│    发起 HTTP 请求   │                       │              │
+│ 3. SSE chunk 到达   │ ──agent.feed_chunk()──>│ 更新 message │
+│                     │ <──[AgentEvent]────────│              │
+│ 4. 响应完成         │ ──agent.on_llm_done()──>│ 检查 tool calls│
+│                     │ <──[ExecuteTool]───────│              │
+│ 5. 异步执行 tool    │                       │              │
+│ 6. tool 完成        │ ──agent.tool_done()────>│ 状态机推进   │
+│                     │ <──[AgentEvent]────────│              │
+│ 7. 进入下一轮或结束 │                       │              │
+└─────────────────────┘                       └──────────────┘
+```
+
+### 3.2 关键类型
+
+#### AgentAction —— Core 请求 Host 执行的操作
+
+```rust
+pub enum AgentAction {
+    /// Core 需要 Host 向 LLM 发起流式请求
+    StreamLlm {
+        context: LlmContext,
+        session_id: Option<String>,
+    },
+
+    /// Core 需要 Host 执行一组 tool calls
+    ExecuteTools {
+        calls: Vec<ToolCall>,
+    },
+
+    /// Core 进入等待状态，需要 steering / follow-up 消息才能继续
+    WaitForInput {
+        mode: WaitMode,
+    },
+
+    /// 当前 run 完全结束
+    Finished {
+        messages: Vec<AgentMessage>,
+    },
+}
+
+pub enum WaitMode {
+    Steering,   // 可以接受 steer() 注入消息
+    FollowUp,   // 可以接受 followUp() 注入消息
+    Any,        // 接受任何消息
+}
+```
+
+#### AgentEvent —— Core 通知 Host 的状态变化
+
+```rust
+pub enum AgentEvent {
+    // Agent 生命周期
+    AgentStart,
+    AgentEnd { messages: Vec<AgentMessage> },
+
+    // Turn 生命周期
+    TurnStart,
+    TurnEnd { message: AssistantMessage, tool_results: Vec<ToolResultMessage> },
+
+    // Message 生命周期（流式）
+    MessageStart { message: AgentMessage },
+    MessageUpdate { message: AgentMessage, delta: ContentDelta },
+    MessageEnd { message: AgentMessage },
+
+    // Tool 生命周期
+    ToolExecutionStart { tool_call_id: String, tool_name: String, args: Value },
+    ToolExecutionUpdate { tool_call_id: String, partial_result: ToolResult },
+    ToolExecutionEnd { tool_call_id: String, result: ToolResult, is_error: bool },
+
+    // Queue 状态
+    QueueUpdate { steer: Vec<AgentMessage>, follow_up: Vec<AgentMessage> },
+
+    // Compaction / Session
+    SavePoint { had_pending_writes: bool },
+    Settled,
+}
+```
+
+### 3.3 Agent 状态机 API
+
+```rust
+pub struct Agent {
+    state: AgentState,
+    steering_queue: Vec<AgentMessage>,
+    follow_up_queue: Vec<AgentMessage>,
+    phase: Phase,
+    pending_tool_calls: HashMap<String, ToolCall>,
+}
+
+enum Phase {
+    Idle,
+    Streaming,         // 等待 LLM 流式数据
+    ExecutingTools,    // 等待 tool 执行完成
+    WaitForInput,      // 等待用户/steering/follow-up
+}
+
+impl Agent {
+    /// 创建 Agent。所有依赖通过构造时注入。
+    pub fn new(options: AgentOptions) -> Self;
+
+    /// Host 调用：开始处理用户 prompt。返回 (events, actions)。
+    pub fn start_turn(&mut self, prompt: AgentMessage) -> (Vec<AgentEvent>, Vec<AgentAction>);
+
+    /// Host 调用：继续当前会话（无新 prompt）。
+    pub fn continue_turn(&mut self) -> (Vec<AgentEvent>, Vec<AgentAction>);
+
+    /// Host 调用：LLM 流式 chunk 到达。
+    pub fn feed_llm_chunk(&mut self, chunk: LlmChunk) -> Vec<AgentEvent>;
+
+    /// Host 调用：LLM 流结束（正常完成或报错）。
+    pub fn on_llm_done(&mut self, result: LlmResult) -> (Vec<AgentEvent>, Vec<AgentAction>);
+
+    /// Host 调用：单个 tool 执行完成。
+    pub fn on_tool_done(
+        &mut self,
+        tool_call_id: String,
+        result: Result<ToolResult, ToolError>,
+    ) -> (Vec<AgentEvent>, Vec<AgentAction>);
+
+    /// Host 调用：注入 steering 消息（ mid-run 干预）。
+    pub fn steer(&mut self, message: AgentMessage) -> Vec<AgentEvent>;
+
+    /// Host 调用：注入 follow-up 消息（ run 结束后继续）。
+    pub fn follow_up(&mut self, message: AgentMessage);
+
+    /// Host 调用：取消当前运行。
+    pub fn abort(&mut self) -> Vec<AgentEvent>;
+
+    /// 只读访问当前状态。
+    pub fn state(&self) -> &AgentState;
+
+    /// 重置状态（清空消息、队列、运行时状态）。
+    pub fn reset(&mut self);
+}
+```
+
+### 3.4 Turn 内循环逻辑（伪代码）
+
+```rust
+fn on_llm_done(&mut self, result: LlmResult) -> (Vec<AgentEvent>, Vec<AgentAction>) {
+    let mut events = vec![];
+    let mut actions = vec![];
+
+    // 1. 完成 assistant message
+    let assistant_msg = result.finalize_message();
+    events.push(AgentEvent::MessageEnd { message: assistant_msg.clone() });
+    self.state.messages.push(assistant_msg.clone());
+
+    // 2. 检查 tool calls
+    let tool_calls: Vec<_> = assistant_msg.content.iter()
+        .filter_map(|c| match c { Content::ToolCall(tc) => Some(tc), _ => None })
+        .cloned()
+        .collect();
+
+    if tool_calls.is_empty() {
+        // 无 tool calls，turn 结束
+        events.push(AgentEvent::TurnEnd { message: assistant_msg, tool_results: vec![] });
+
+        // 检查 steering / follow-up 队列
+        if let Some(pending) = self.drain_steering() {
+            // 有 steering，继续 inner loop
+            return self.start_inner_turn(pending, events);
+        } else if let Some(follow) = self.drain_follow_up() {
+            // 有 follow-up，进入 outer loop
+            return self.start_outer_turn(follow, events);
+        } else {
+            // 完全结束
+            events.push(AgentEvent::AgentEnd { messages: self.state.messages.clone() });
+            actions.push(AgentAction::Finished { messages: self.state.messages.clone() });
+            self.phase = Phase::Idle;
+            return (events, actions);
+        }
+    }
+
+    // 3. 有 tool calls，请求 Host 执行
+    self.phase = Phase::ExecutingTools;
+    for tc in &tool_calls {
+        self.pending_tool_calls.insert(tc.id.clone(), tc.clone());
+        events.push(AgentEvent::ToolExecutionStart {
+            tool_call_id: tc.id.clone(),
+            tool_name: tc.name.clone(),
+            args: tc.arguments.clone(),
+        });
+    }
+    actions.push(AgentAction::ExecuteTools { calls: tool_calls });
+
+    (events, actions)
+}
+```
+
+### 3.5 Tool 接口（同步定义）
+
+Core 不执行 tool，只定义 tool 的元数据 schema。Host 执行完成后通过 `agent.on_tool_done()` 通知 core。
+
+```rust
+pub struct ToolDefinition {
+    pub name: String,
+    pub label: String,
+    pub description: String,
+    pub parameters: Value, // JSON Schema
+    pub execution_mode: ExecutionMode,
+}
+
+pub enum ExecutionMode {
+    Parallel,   // 可与其他 tool 并发执行
+    Sequential, // 必须串行执行
+}
+
+/// Tool 注册表由 Host 在构造 Agent 时注入
+pub struct AgentOptions {
+    pub tools: Vec<ToolDefinition>,
+    pub system_prompt: String,
+    pub model: Model,
+    pub convert_to_llm: Option<Box<dyn ConvertToLlm>>,
+    pub transform_context: Option<Box<dyn TransformContext>>,
+    pub thinking_level: ThinkingLevel,
+    pub steering_mode: QueueMode,
+    pub follow_up_mode: QueueMode,
+    pub tool_execution_mode: ToolExecutionMode,
+    pub session_id: Option<String>,
+    pub before_tool_call: Option<Box<dyn BeforeToolCallHook>>,
+    pub after_tool_call: Option<Box<dyn AfterToolCallHook>>,
+}
+```
+
+---
+
+## 4. Host 层设计：异步事件循环
+
+### 4.1 Desktop Host（Tokio）
+
+Desktop Host 拥有完整的 tokio runtime，负责把 core 的同步状态机桥接到异步世界。
+
+```rust
+// pi-host-desktop/src/runner.rs
+use pi_core::{Agent, AgentAction, AgentEvent, LlmChunk, ToolResult};
+use tokio;
+
+pub struct DesktopRunner {
+    agent: Agent,
+    event_sink: tokio::sync::mpsc::Sender<AgentEvent>,
+    llm_client: reqwest::Client,
+}
+
+impl DesktopRunner {
+    pub async fn run_prompt(&mut self, text: String) {
+        let prompt = AgentMessage::user(text);
+        let (events, actions) = self.agent.start_turn(prompt);
+        self.emit_all(events).await;
+
+        for action in actions {
+            match action {
+                AgentAction::StreamLlm { context, .. } => {
+                    self.stream_llm(context).await;
+                }
+                AgentAction::ExecuteTools { calls } => {
+                    self.execute_tools(calls).await;
+                }
+                AgentAction::Finished { .. } => return,
+                _ => {}
+            }
+        }
+    }
+
+    async fn stream_llm(&mut self, context: LlmContext) {
+        let mut stream = self.llm_client.post(context).send().await.unwrap()
+            .bytes_stream();
+
+        while let Some(chunk) = stream.next().await {
+            let llm_chunk = parse_sse_chunk(chunk.unwrap());
+            let events = self.agent.feed_llm_chunk(llm_chunk);
+            self.emit_all(events).await;
+        }
+
+        // 流结束
+        let (events, actions) = self.agent.on_llm_done(LlmResult::done());
+        self.emit_all(events).await;
+        self.handle_actions(actions).await;
+    }
+
+    async fn execute_tools(&mut self, calls: Vec<ToolCall>) {
+        let mut futures = vec![];
+        for call in calls {
+            let env = self.env.clone();
+            futures.push(tokio::spawn(async move {
+                let result = execute_tool_on_host(call, env).await;
+                (call.id, result)
+            }));
+        }
+
+        for fut in futures {
+            let (id, result) = fut.await.unwrap();
+            let (events, actions) = self.agent.on_tool_done(id, result);
+            self.emit_all(events).await;
+            self.handle_actions(actions).await;
+        }
+    }
+}
+```
+
+### 4.2 Web Host（浏览器事件循环）
+
+Web Host 没有 tokio，使用浏览器原生的 `Promise` 和 `fetch()`。
+
+```rust
+// pi-host-web/src/runner.rs
+use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::spawn_local;
+use pi_core::{Agent, AgentAction, AgentEvent};
+
+#[wasm_bindgen]
+pub struct WebRunner {
+    agent: Agent,
+    on_event: js_sys::Function, // JS 回调
+}
+
+#[wasm_bindgen]
+impl WebRunner {
+    pub fn prompt(&mut self, text: String) {
+        let prompt = AgentMessage::user(text);
+        let (events, actions) = self.agent.start_turn(prompt);
+        self.emit_js(events);
+
+        for action in actions {
+            match action {
+                AgentAction::StreamLlm { context, .. } => {
+                    self.spawn_fetch(context);
+                }
+                AgentAction::ExecuteTools { calls } => {
+                    self.spawn_tool_execution(calls);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn spawn_fetch(&self, context: LlmContext) {
+        let mut agent = self.agent; // 需要内部可变性，用 RefCell 或特殊设计
+        spawn_local(async move {
+            let response = web_sys::window().unwrap()
+                .fetch_with_str_and_init(&url, &opts)
+                .dyn_into::<web_sys::Response>().unwrap();
+
+            let reader = response.body().unwrap()
+                .get_reader().dyn_into::<web_sys::ReadableStreamDefaultReader>().unwrap();
+
+            loop {
+                let chunk = js_sys::Promise::from(reader.read());
+                let result = wasm_bindgen_futures::JsFuture::from(chunk).await.unwrap();
+                let done = js_sys::Reflect::get(&result, &"done".into()).unwrap().as_bool().unwrap();
+                if done { break; }
+
+                let value = js_sys::Reflect::get(&result, &"value".into()).unwrap();
+                let bytes = js_sys::Uint8Array::from(value).to_vec();
+                let llm_chunk = parse_sse(&bytes);
+
+                let events = agent.feed_llm_chunk(llm_chunk);
+                // 通过 JS 回调 emit...
+            }
+        });
+    }
+}
+```
+
+---
+
+## 5. 稳定 C ABI 绑定（pi-bindings）
+
+### 5.1 绑定策略：Opaque Pointer + JSON
+
+不暴露任何 Rust struct layout。所有参数和返回值通过 JSON 字符串传递。C 侧只持有不透明指针。
+
+```rust
+// pi-bindings/src/c_api.rs
+use std::ffi::{c_char, c_void, CStr, CString};
+use std::sync::{Arc, Mutex};
+use pi_core::{Agent, AgentOptions};
+
+/// 不透明 Agent 句柄
+pub struct PiAgent(Mutex<Agent>);
+
+/// 事件回调类型
+pub type PiEventCallback = extern "C" fn(event_json: *const c_char, user_data: *mut c_void);
+
+/// 创建 Agent
+/// `options_json`: JSON 字符串，序列化的 AgentOptions
+/// `callback`: C 侧事件接收函数
+/// `user_data`: C 侧上下文指针
+/// 返回: 不透明句柄，或 NULL 如果配置错误
+#[no_mangle]
+pub extern "C" fn pi_agent_create(
+    options_json: *const c_char,
+    callback: PiEventCallback,
+    user_data: *mut c_void,
+) -> *mut PiAgent {
+    let options_str = unsafe {
+        CStr::from_ptr(options_json).to_str().expect("invalid UTF-8")
+    };
+    let options: AgentOptions = serde_json::from_str(options_str)
+        .expect("invalid options JSON");
+
+    let agent = Agent::new(options);
+    Box::into_raw(Box::new(PiAgent(Mutex::new(agent))))
+}
+
+/// 发送 prompt
+/// `agent`: pi_agent_create 返回的句柄
+/// `prompt_json`: JSON 字符串，AgentMessage[] 或 { text, images? }
+/// 返回: JSON 字符串 `[{ "type": "StreamLlm", ... }, ...]` 表示需要 Host 执行的动作
+///       调用者负责 `free()` 返回的字符串（见 pi_free_string）
+#[no_mangle]
+pub extern "C" fn pi_agent_prompt(
+    agent: *mut PiAgent,
+    prompt_json: *const c_char,
+) -> *mut c_char {
+    let agent = unsafe { &*agent };
+    let prompt_str = unsafe { CStr::from_ptr(prompt_json).to_str().unwrap() };
+    let prompt: AgentMessage = serde_json::from_str(prompt_str).unwrap();
+
+    let mut guard = agent.0.lock().unwrap();
+    let (_events, actions) = guard.start_turn(prompt);
+
+    let actions_json = serde_json::to_string(&actions).unwrap();
+    CString::new(actions_json).unwrap().into_raw()
+}
+
+/// 注入 LLM 流式 chunk
+/// `chunk_json`: JSON 字符串，LlmChunk
+/// 返回: JSON 字符串，AgentEvent[]
+#[no_mangle]
+pub extern "C" fn pi_agent_feed_llm_chunk(
+    agent: *mut PiAgent,
+    chunk_json: *const c_char,
+) -> *mut c_char {
+    let agent = unsafe { &*agent };
+    let chunk_str = unsafe { CStr::from_ptr(chunk_json).to_str().unwrap() };
+    let chunk: LlmChunk = serde_json::from_str(chunk_str).unwrap();
+
+    let mut guard = agent.0.lock().unwrap();
+    let events = guard.feed_llm_chunk(chunk);
+
+    let events_json = serde_json::to_string(&events).unwrap();
+    CString::new(events_json).unwrap().into_raw()
+}
+
+/// LLM 流结束
+/// `result_json`: JSON 字符串，{ "ok": true, "message": AssistantMessage }
+///                或 { "ok": false, "error": "...", "aborted": false }
+/// 返回: JSON 字符串，{ "events": [...], "actions": [...] }
+#[no_mangle]
+pub extern "C" fn pi_agent_on_llm_done(
+    agent: *mut PiAgent,
+    result_json: *const c_char,
+) -> *mut c_char {
+    let agent = unsafe { &*agent };
+    let result_str = unsafe { CStr::from_ptr(result_json).to_str().unwrap() };
+    let result: LlmResult = serde_json::from_str(result_str).unwrap();
+
+    let mut guard = agent.0.lock().unwrap();
+    let (events, actions) = guard.on_llm_done(result);
+
+    let out = serde_json::json!({ "events": events, "actions": actions });
+    CString::new(out.to_string()).unwrap().into_raw()
+}
+
+/// Tool 执行完成
+/// `tool_call_id`: tool call ID 字符串
+/// `result_json`: JSON 字符串，ToolResult 或 { "error": "..." }
+/// 返回: JSON 字符串，{ "events": [...], "actions": [...] }
+#[no_mangle]
+pub extern "C" fn pi_agent_on_tool_done(
+    agent: *mut PiAgent,
+    tool_call_id: *const c_char,
+    result_json: *const c_char,
+) -> *mut c_char {
+    let agent = unsafe { &*agent };
+    let id = unsafe { CStr::from_ptr(tool_call_id).to_str().unwrap() };
+    let result_str = unsafe { CStr::from_ptr(result_json).to_str().unwrap() };
+
+    let result = if result_str.starts_with("{\"error\":") {
+        let err: ToolError = serde_json::from_str(result_str).unwrap();
+        Err(err)
+    } else {
+        let ok: ToolResult = serde_json::from_str(result_str).unwrap();
+        Ok(ok)
+    };
+
+    let mut guard = agent.0.lock().unwrap();
+    let (events, actions) = guard.on_tool_done(id.to_string(), result);
+
+    let out = serde_json::json!({ "events": events, "actions": actions });
+    CString::new(out.to_string()).unwrap().into_raw()
+}
+
+/// Steering / FollowUp
+#[no_mangle]
+pub extern "C" fn pi_agent_steer(
+    agent: *mut PiAgent,
+    message_json: *const c_char,
+) -> *mut c_char {
+    let agent = unsafe { &*agent };
+    let msg: AgentMessage = serde_json::from_str(
+        unsafe { CStr::from_ptr(message_json).to_str().unwrap() }
+    ).unwrap();
+
+    let mut guard = agent.0.lock().unwrap();
+    let events = guard.steer(msg);
+    CString::new(serde_json::to_string(&events).unwrap()).unwrap().into_raw()
+}
+
+/// 获取当前状态快照（JSON）
+#[no_mangle]
+pub extern "C" fn pi_agent_state(agent: *const PiAgent) -> *mut c_char {
+    let agent = unsafe { &*agent };
+    let guard = agent.0.lock().unwrap();
+    let state = guard.state();
+    CString::new(serde_json::to_string(state).unwrap()).unwrap().into_raw()
+}
+
+/// 重置
+#[no_mangle]
+pub extern "C" fn pi_agent_reset(agent: *mut PiAgent) {
+    let agent = unsafe { &*agent };
+    let mut guard = agent.0.lock().unwrap();
+    guard.reset();
+}
+
+/// 释放 Agent
+#[no_mangle]
+pub extern "C" fn pi_agent_destroy(agent: *mut PiAgent) {
+    if !agent.is_null() {
+        unsafe { drop(Box::from_raw(agent)) };
+    }
+}
+
+/// 释放 Rust 分配的字符串（C 侧调用完必须释放）
+#[no_mangle]
+pub extern "C" fn pi_free_string(s: *mut c_char) {
+    if !s.is_null() {
+        unsafe { drop(CString::from_raw(s)) };
+    }
+}
+```
+
+### 5.2 C 侧调用示例
+
+```c
+// host.c
+#include "pi_oxide.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+void on_event(const char* event_json, void* user_data) {
+    printf("EVENT: %s\n", event_json);
+}
+
+int main() {
+    // 1. 创建 Agent
+    const char* options = "{"
+        "\"system_prompt\":\"You are a helpful assistant.\",""
+        "\"tools\":[{\"name\":\"bash\",\"label\":\"Bash\",\"description\":\"Execute shell commands.\",""
+        "  \"parameters\":{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}}},\""
+        "  \"execution_mode\":\"parallel\"}],\""
+        "\"model\":{\"id\":\"gpt-4o\",\"provider\":\"openai\"}\""
+        "}";
+
+    void* agent = pi_agent_create(options, on_event, NULL);
+    if (!agent) {
+        fprintf(stderr, "Failed to create agent\n");
+        return 1;
+    }
+
+    // 2. 发送 prompt
+    const char* prompt = "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Hello\"}]}";
+    char* actions = pi_agent_prompt(agent, prompt);
+    printf("ACTIONS: %s\n", actions);
+    pi_free_string(actions);
+
+    // 3. 假设 LLM 返回了一个 tool call，Host 执行后通知 core
+    const char* tool_result = "{\"content\":[{\"type\":\"text\",\"text\":\"result\"}]}";
+    char* response = pi_agent_on_tool_done(agent, "call_123", tool_result);
+    printf("RESPONSE: %s\n", response);
+    pi_free_string(response);
+
+    // 4. 清理
+    pi_agent_destroy(agent);
+    return 0;
+}
+```
+
+### 5.3 为什么不用 uniffi / cxx
+
+| 方案 | 适用场景 | 本项目的取舍 |
+|---|---|---|
+| **C ABI + JSON** | 任何语言都能绑定，ABI 最稳定 | **选用**。牺牲微量序列化性能，换取最大兼容性 |
+| `uniffi` | Mozilla 生态，自动生成 Swift/Kotlin/Python | 不选用。C 支持弱，依赖 UDL 文件 |
+| `cxx` | C++ 互操作 | 不选用。仅限 C++，无法覆盖 Web/Mobile 全场景 |
+| `wasm-bindgen` | Web 专用 | **Web Host 内部可用**，但不是 core 绑定层 |
+
+---
+
+## 6. Session / Compaction / Branch 树
+
+### 6.1 设计原则
+
+- **Core 只定义内存数据结构**，不实现持久化
+- **Host 提供 `SessionStorage` trait 实现**：决定是写 JSONL 文件、IndexedDB、SQLite 还是网络后端
+- 序列化格式与原项目 JSONL 兼容，方便数据互通
+
+### 6.2 内存模型
+
+```rust
+// pi-core/src/session.rs
+
+/// SessionEntry 构成一棵树，parent_id 指向父节点
+pub struct SessionEntry {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub kind: EntryKind,
+    pub timestamp: u64,
+}
+
+pub enum EntryKind {
+    Message(AgentMessage),
+    Compaction {
+        summary: String,
+        first_kept_entry_id: String,
+        tokens_before: u32,
+        details: Value,
+    },
+    BranchSummary {
+        summary: String,
+        details: Value,
+    },
+    ModelChange {
+        provider: String,
+        model_id: String,
+    },
+    ThinkingLevelChange(ThinkingLevel),
+    Custom {
+        custom_type: String,
+        data: Value,
+    },
+}
+
+/// Session 状态
+pub struct SessionState {
+    pub entries: Vec<SessionEntry>,
+    pub leaf_id: String,        // 当前分支末端
+    pub name: String,           // 会话名称
+}
+
+/// Core 提供的纯函数操作（无副作用）
+impl SessionState {
+    /// 获取从 root 到 leaf 的完整分支
+    pub fn get_branch(&self) -> Vec<&SessionEntry>;
+
+    /// 移动到某节点，创建 branch summary（内存操作，不持久化）
+    pub fn move_to(&mut self, target_id: &str, summary: Option<BranchSummary>) -> Option<String>;
+
+    /// 构建给 LLM 的上下文（过滤、截断）
+    pub fn build_context(&self) -> Vec<AgentMessage>;
+}
+```
+
+### 6.3 Host 持久化接口
+
+```rust
+// pi-core/src/session.rs
+
+/// Host 实现此 trait 以提供持久化
+pub trait SessionStorage: Send + Sync {
+    fn append_entry(&mut self, entry: SessionEntry) -> Result<String, SessionError>;
+    fn get_entry(&self, id: &str) -> Result<Option<SessionEntry>, SessionError>;
+    fn get_branch(&self, leaf_id: &str) -> Result<Vec<SessionEntry>, SessionError>;
+    fn move_to(&mut self, target_id: &str, summary: Option<BranchSummary>) -> Result<Option<String>, SessionError>;
+    fn set_leaf_id(&mut self, id: &str) -> Result<(), SessionError>;
+    fn get_leaf_id(&self) -> Result<String, SessionError>;
+    fn append_compaction(&mut self, summary: String, first_kept: String, tokens: u32, details: Value)
+        -> Result<String, SessionError>;
+}
+```
+
+**注意**：`SessionStorage` 是同步 trait。如果 Host 的持久化是异步的（如 IndexedDB、网络），Host _runner_ 应在异步任务中完成 I/O，再通过同步回调更新 core 的 `SessionState` 缓存。
+
+### 6.4 Compaction 流程
+
+1. Core 的 `prepare_compaction()` 纯函数分析消息树，决定哪些旧消息可被总结
+2. Host 的 runner 拿到 `CompactionPreparation`，用异步 HTTP 请求 LLM 生成 summary
+3. Host 拿到 summary 后，调用 `SessionStorage::append_compaction()` 持久化
+4. Core 的 `SessionState` 更新，后续 `build_context()` 自动使用 compaction 后的精简历史
+
+---
+
+## 7. 实现路线图
+
+### Phase 1: 核心类型系统（第 1-2 周）
+
+目标：`pi-core` 编译通过，可单元测试。
+
+- 定义 `Message`、`Content`、`AgentEvent`、`AgentAction` enum
+- 定义 `ToolDefinition`、`Model`、`LlmContext`
+- 实现 `AgentState` 结构
+- 写同步单元测试（Mock LLM、Mock Tool）
+- **零 I/O，零网络，零 async**
+
+### Phase 2: Agent 状态机（第 2-3 周）
+
+- 实现 `Agent::new()`、`Agent::start_turn()`、`Agent::on_llm_done()`、`Agent::on_tool_done()`
+- 实现 turn 内外层循环（steering / follow-up 队列）
+- 实现 `MessageQueue`（`all` vs `one-at-a-time` drain 模式）
+- 实现 `abort()` 和 `reset()`
+- 单元测试覆盖：无 tool turn、单 tool turn、多 tool parallel、steering mid-run、error recovery
+
+### Phase 3: C FFI 绑定层（第 3-4 周）
+
+- `pi-bindings` crate：所有 `extern "C"` 函数
+- JSON 序列化/反序列化测试
+- C 侧测试程序编译运行
+- `cbindgen` 生成头文件
+- 内存安全测试（valgrind / address sanitizer）
+
+### Phase 4: Desktop Host（第 4-6 周）
+
+- `pi-host-desktop`：tokio runner
+- `reqwest` + SSE 实现 LLM 流式请求（OpenAI / Anthropic）
+- `tokio::process` 实现 bash tool
+- `tokio::fs` 实现 read / write / edit / ls / find / grep tools
+- `ratatui` + `crossterm` 实现 TUI
+- CLI 参数解析、配置管理
+- 端到端测试：完整 prompt -> LLM -> tool -> 渲染 流程
+
+### Phase 5: Session & Compaction（第 6-7 周）
+
+- `SessionStorage` trait + JSONL 实现
+- Branch navigation UI
+- Compaction 触发逻辑 + LLM summary 请求
+- 会话持久化测试
+
+### Phase 6: Web Host（按需）
+
+- `wasm-bindgen` 导出 `WebRunner`
+- `fetch()` 实现 LLM 请求
+- 浏览器 FileSystem Access API 适配 `ExecutionEnv`
+- 沙箱 tool 实现（无真实 shell）
+- React/Vue 组件对接 `WebRunner`
+
+---
+
+## 8. 与原 TypeScript 项目的核心差异
+
+| 维度 | TypeScript `pi` | Rust `pi-oxide` |
+|---|---|---|
+| **运行时模型** | `Agent` 主动 async，内部 await LLM / tools | `Agent` 纯同步状态机，Host 驱动事件循环 |
+| **Async Runtime** | Node.js / Bun 内置 | Core 无 async runtime，Host 自选（tokio / JS event loop / 裸机） |
+| **部署形态** | npm 包，依赖 Node.js | Rust crate / `.so` / `.wasm` / 静态库，无运行时依赖 |
+| **跨语言绑定** | 仅限 JS 生态 | C ABI 全覆盖：C/C++/Python/Swift/Kotlin/Go |
+| **Web 支持** | 无（Node.js 独占） | 原生 WASM 目标，浏览器直接运行 |
+| **嵌入式支持** | 不可能 | `no_std` 潜在可能（需替换 serde/alloc） |
+| **测试确定性** | 需要 mock fetch / mock fs，时序难控 | 纯同步状态机，输入确定则输出 100% 确定 |
+| **Tool 扩展** | JS 动态 import | Rust trait object + Host 注册，或 FFI 动态注册 |
+| **内存模型** | GC 管理，无生命周期问题 | 显式所有权，FFI 边界用 Opaque Pointer + JSON 隔离 |
+| **错误处理** | `try/catch` + 手动 Result | `Result<T, E>` 类型系统强制，FFI 边界序列化 error |
+| **性能** | 解释执行，V8 优化不确定 | 零成本抽象，无 GC 停顿，LLM 等待期间 CPU 占用趋近于零 |
+
+---
+
+## 9. 关键设计决策记录
+
+### 9.1 为什么 Core 不用 `async-trait` 而是纯同步
+
+**否决的方案**：在 core 里用 `async-trait` 定义 `Tool::execute()` 和 `LlmProvider::stream()`。
+
+**否决原因**：
+- `async-trait` 依赖 `futures` + `pin-project`，增加 core 体积
+- WASM32 目标下 `async-trait` 的 `Send` bound 有问题
+- C FFI 无法直接暴露 async trait，必须再包一层同步桥接，增加复杂度
+- 测试需要 `tokio::test`，core 失去"任意环境可运行"的优势
+
+**采用的方案**：Host 异步执行 -> 完成后通过同步回调推进 core。
+
+### 9.2 为什么 C FFI 用 JSON 而不是复杂 struct
+
+**否决的方案**：用 `#[repr(C)]` struct 直接暴露给 FFI。
+
+**否决原因**：
+- Rust struct layout 不保证跨版本稳定
+- C 侧需要管理 `String` / `Vec` 的内存布局，极易出错
+- 新增字段会破坏 ABI
+
+**采用的方案**：所有参数和返回值用 JSON 字符串，C 侧只需处理 `char*`。
+
+### 9.3 为什么 Session 持久化在 Host 而非 Core
+
+**否决的方案**：Core 内建 `tokio::fs` 或 `wasm-bindgen` 的持久化。
+
+**否决原因**：
+- 违反"core 零 I/O"原则
+- 不同 Host 的持久化语义不同：Desktop 用 JSONL 文件，Web 用 IndexedDB，Mobile 用 SQLite
+
+**采用的方案**：Core 定义 `SessionStorage` trait（同步），Host 实现并注入。
+
+---
+
+## 10. 结语
+
+`pi-oxide` 的核心设计可概括为一句话：
+
+> **Core 是一个无 I/O 的同步状态机，Host 是异步世界与 Core 之间的桥接层。**
+
+这种架构强迫所有平台相关能力（shell、文件系统、网络、UI）从构造时注入，而不是编译时依赖。结果是：
+
+1. **Core 可用任意方式测试**：Mock 输入 -> 同步推进 -> 断言输出
+2. **Host 可独立演进**：Desktop Host 用 tokio，Web Host 用浏览器 API，Mobile Host 用原生线程，互不干扰
+3. **绑定层极简稳定**：C 侧只需要 8-10 个函数，JSON 线协议天然向后兼容
+4. **分发极度灵活**：单二进制 CLI、WASM 嵌入网页、iOS/Android SDK、嵌入式固件——同一套 core 代码
+
+这份设计文档应作为项目启动时的架构契约。任何新增 feature（如多模态输入、MCP 协议支持、新的 LLM provider）都应先回答：它属于 core 的同步逻辑，还是 host 的异步实现？

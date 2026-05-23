@@ -21,7 +21,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 
 import { RealAgentHost, RealLlm } from "../src/providers/realLlm.ts";
-import { LocalToolRegistry } from "../src/local/localToolRegistry.ts";
+import { ToolRuntime, type ToolUpdate } from "../src/local/toolRuntime.ts";
 import { PI_CODING_TOOLS } from "../src/tools/schemas.ts";
 import { MemoryArtifactStore } from "../src/context/rustProjection.ts";
 
@@ -46,10 +46,15 @@ async function main() {
   console.log(`Project dir: ${projectDir}`);
   console.log();
 
-  // Set up tools — real local filesystem + bash
-  const registry = new LocalToolRegistry({
+  // Set up async tool runtime with streaming
+  const updates: ToolUpdate[] = [];
+  const runtime = new ToolRuntime({
     cwd: projectDir,
     bashPolicy: { mode: "unrestricted" },
+    callbacks: {
+      onUpdate: (update) => updates.push(update),
+    },
+    enableBackgroundJobs: true,
   });
 
   // Set up LLM with Rust context projection
@@ -67,7 +72,7 @@ async function main() {
     },
   );
 
-  const host = new RealAgentHost(llm, registry);
+  const host = new RealAgentHost(llm, { log: [] as string[], execute: () => ({ error: { code: "sync_fallback_unavailable", message: "sync tools not available when using ToolRuntime" } }) }, runtime);
 
   const options = {
     system_prompt:
@@ -107,7 +112,13 @@ async function main() {
       if (entry.phase === "action") {
         console.log(`  [action] ${entry.type}`);
       } else if (entry.phase === "event") {
-        console.log(`  [event]  ${entry.type}`);
+        const data = entry.data as Record<string, unknown> | undefined;
+        if (entry.type === "tool_execution_update" && data) {
+          const preview = String(data.chunk ?? "").slice(0, 60).replace(/\n/g, "\\n");
+          console.log(`  [event]  ${entry.type} stream=${JSON.stringify(data.stream ?? "?")} seq=${JSON.stringify(data.sequence ?? "?")} "${preview}"`);
+        } else {
+          console.log(`  [event]  ${entry.type}`);
+        }
       } else {
         const data = entry.data as Record<string, unknown>;
         if (entry.type === "tool_done") {
@@ -224,11 +235,34 @@ async function main() {
       failed = true;
     }
 
+    // 6. Streaming tool updates present in trace
+    const toolExecUpdates = result.trace.filter(
+      (e) => e.phase === "event" && e.type === "tool_execution_update",
+    );
+    if (toolExecUpdates.length > 0) {
+      console.log(`✅ Streaming tool updates present (${toolExecUpdates.length} events)`);
+    } else {
+      console.error("❌ FAIL: no tool_execution_update events in trace");
+      failed = true;
+    }
+
+    // 7. Tool execution start events present
+    const toolExecStarts = result.trace.filter(
+      (e) => e.phase === "event" && e.type === "tool_execution_start",
+    );
+    if (toolExecStarts.length > 0) {
+      console.log(`✅ Tool execution start events present (${toolExecStarts.length} events)`);
+    } else {
+      console.error("❌ FAIL: no tool_execution_start events in trace");
+      failed = true;
+    }
+
     console.log();
     console.log(`Tools used: ${toolNames.join(", ")}`);
     console.log(`Tool calls: ${toolNames.length}`);
 
     host.cleanup(result.handle);
+    runtime.cleanup();
 
     // Kill any leftover python servers
     try {

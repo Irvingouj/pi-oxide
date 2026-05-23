@@ -4,6 +4,51 @@ use crate::message::{AgentMessage, ToolCall, ToolResultMessage};
 use crate::tool::ToolResult as ToolExecResult;
 use crate::types::{SessionId, ToolArguments, ToolCallId, ToolName};
 
+// ---------------------------------------------------------------------------
+// Tool execution lifecycle types
+// ---------------------------------------------------------------------------
+
+/// Which output stream a tool update chunk came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolOutputStream {
+    Stdout,
+    Stderr,
+    Status,
+}
+
+/// Reason a tool was cancelled.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CancelReason {
+    UserRequested,
+    Timeout,
+    AgentAborted,
+    DependencyFailed { cause_tool_call_id: ToolCallId },
+}
+
+/// A streaming update from a running tool execution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolExecutionUpdate {
+    pub tool_call_id: ToolCallId,
+    pub stream: ToolOutputStream,
+    pub chunk: String,
+    pub sequence: u64,
+    pub timestamp: u64,
+}
+
+/// Reference to a background job started by a tool.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BackgroundJobRef {
+    pub job_id: String,
+    pub tool_call_id: ToolCallId,
+    pub command_label: String,
+}
+
+// ---------------------------------------------------------------------------
+// Actions and events
+// ---------------------------------------------------------------------------
+
 /// Actions that the core requests the host to perform.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -15,6 +60,10 @@ pub enum AgentAction {
     },
     ExecuteTools {
         calls: Vec<ToolCall>,
+    },
+    CancelTools {
+        tool_call_ids: Vec<ToolCallId>,
+        reason: CancelReason,
     },
     WaitForInput {
         mode: WaitMode,
@@ -55,12 +104,19 @@ pub enum AgentEvent {
     },
     ToolExecutionUpdate {
         tool_call_id: ToolCallId,
-        partial_result: ToolExecResult,
+        stream: ToolOutputStream,
+        chunk: String,
+        sequence: u64,
+        timestamp: u64,
     },
     ToolExecutionEnd {
         tool_call_id: ToolCallId,
         result: ToolExecResult,
         is_error: bool,
+    },
+    ToolExecutionCancelled {
+        tool_call_id: ToolCallId,
+        reason: CancelReason,
     },
     QueueUpdate {
         steer: Vec<AgentMessage>,

@@ -28,9 +28,25 @@ export function followUp(handle: number, message_json: string): string;
 export function onLlmDone(handle: number, result_json: string): string;
 
 /**
+ * Notify the agent that a tool was cancelled.
+ */
+export function onToolCancelled(handle: number, tool_call_id: string, reason_json: string): string;
+
+/**
  * Notify the agent that a tool has finished executing.
  */
 export function onToolDone(handle: number, tool_call_id: string, result_json: string): string;
+
+/**
+ * Notify the agent that a tool has started executing.
+ */
+export function onToolStarted(handle: number, tool_call_id: string): string;
+
+/**
+ * Send a streaming tool execution update to the agent.
+ * Input JSON must match `ToolExecutionUpdate`.
+ */
+export function onToolUpdate(handle: number, update_json: string): string;
 
 /**
  * Project context: run the Rust context projection engine.

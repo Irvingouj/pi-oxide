@@ -108,6 +108,31 @@ function onLlmDone(handle, result_json) {
 exports.onLlmDone = onLlmDone;
 
 /**
+ * Notify the agent that a tool was cancelled.
+ * @param {number} handle
+ * @param {string} tool_call_id
+ * @param {string} reason_json
+ * @returns {string}
+ */
+function onToolCancelled(handle, tool_call_id, reason_json) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(tool_call_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(reason_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.onToolCancelled(handle, ptr0, len0, ptr1, len1);
+        deferred3_0 = ret[0];
+        deferred3_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+exports.onToolCancelled = onToolCancelled;
+
+/**
  * Notify the agent that a tool has finished executing.
  * @param {number} handle
  * @param {string} tool_call_id
@@ -131,6 +156,51 @@ function onToolDone(handle, tool_call_id, result_json) {
     }
 }
 exports.onToolDone = onToolDone;
+
+/**
+ * Notify the agent that a tool has started executing.
+ * @param {number} handle
+ * @param {string} tool_call_id
+ * @returns {string}
+ */
+function onToolStarted(handle, tool_call_id) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(tool_call_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.onToolStarted(handle, ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+exports.onToolStarted = onToolStarted;
+
+/**
+ * Send a streaming tool execution update to the agent.
+ * Input JSON must match `ToolExecutionUpdate`.
+ * @param {number} handle
+ * @param {string} update_json
+ * @returns {string}
+ */
+function onToolUpdate(handle, update_json) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(update_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.onToolUpdate(handle, ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+exports.onToolUpdate = onToolUpdate;
 
 /**
  * Project context: run the Rust context projection engine.

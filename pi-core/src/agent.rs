@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::context::LlmContext;
-use crate::events::{AgentAction, AgentEvent, ContentDelta, QueueMode, ThinkingLevel, WaitMode};
+use crate::events::{AgentAction, AgentEvent, CancelReason, ContentDelta, QueueMode, ThinkingLevel, ToolExecutionUpdate, WaitMode};
 use crate::llm::{LlmChunk, LlmResult, Model};
 use crate::message::{AgentMessage, Content, StopReason, ToolCall, ToolResultMessage};
 use crate::tool::{ToolDefinition, ToolError, ToolExecutionMode, ToolResult};
@@ -486,6 +486,171 @@ impl Agent {
         // Continue with another LLM call
         self.phase = Phase::Streaming;
         debug!("tool batch finished; requesting next llm turn");
+        events.push(AgentEvent::TurnStart);
+        let actions = vec![AgentAction::StreamLlm {
+            context: self.build_llm_context(),
+            session_id: self.session_id.clone(),
+        }];
+
+        (events, actions)
+    }
+
+    /// Called by the host when a tool starts executing.
+    /// Emits a ToolExecutionUpdate event for trace/observability.
+    /// Does not change the core state machine phase.
+    pub fn on_tool_started(&mut self, tool_call_id: ToolCallId) -> Vec<AgentEvent> {
+        if self.phase != Phase::ExecutingTools {
+            trace!(phase = ?self.phase, "on_tool_started outside executing tools phase");
+            return vec![];
+        }
+        if !self.pending_tool_calls.contains_key(&tool_call_id) {
+            trace!(tool_call_id = tool_call_id.as_str(), "on_tool_started for unknown tool");
+            return vec![];
+        }
+        trace!(tool_call_id = tool_call_id.as_str(), "tool execution started");
+        vec![AgentEvent::ToolExecutionUpdate {
+            tool_call_id,
+            stream: crate::events::ToolOutputStream::Status,
+            chunk: "[started]".to_string(),
+            sequence: 0,
+            timestamp: current_timestamp(),
+        }]
+    }
+
+    /// Called by the host with a streaming chunk from a running tool.
+    /// Emits a ToolExecutionUpdate event for trace/observability only.
+    /// Does NOT add to the canonical model transcript.
+    pub fn on_tool_update(&mut self, update: ToolExecutionUpdate) -> Vec<AgentEvent> {
+        if self.phase != Phase::ExecutingTools {
+            return vec![];
+        }
+        if !self.pending_tool_calls.contains_key(&update.tool_call_id) {
+            return vec![];
+        }
+        trace!(
+            tool_call_id = update.tool_call_id.as_str(),
+            stream = ?update.stream,
+            seq = update.sequence,
+            bytes = update.chunk.len(),
+            "tool execution update"
+        );
+        vec![AgentEvent::ToolExecutionUpdate {
+            tool_call_id: update.tool_call_id,
+            stream: update.stream,
+            chunk: update.chunk,
+            sequence: update.sequence,
+            timestamp: update.timestamp,
+        }]
+    }
+
+    /// Called by the host when a tool is cancelled.
+    /// Treats cancellation like a tool error result so the state machine can advance.
+    pub fn on_tool_cancelled(
+        &mut self,
+        tool_call_id: ToolCallId,
+        reason: CancelReason,
+    ) -> (Vec<AgentEvent>, Vec<AgentAction>) {
+        if self.phase != Phase::ExecutingTools {
+            return (vec![], vec![]);
+        }
+
+        let tool_call = match self.pending_tool_calls.remove(&tool_call_id) {
+            Some(tc) => tc,
+            None => {
+                warn!(tool_call_id = tool_call_id.as_str(), "on_tool_cancelled for unknown tool");
+                return (vec![], vec![]);
+            }
+        };
+        self.state
+            .pending_tool_calls
+            .retain(|id| id != tool_call_id.as_str());
+
+        let reason_str = match &reason {
+            CancelReason::UserRequested => "cancelled by user".to_string(),
+            CancelReason::Timeout => "cancelled due to timeout".to_string(),
+            CancelReason::AgentAborted => "cancelled due to agent abort".to_string(),
+            CancelReason::DependencyFailed { cause_tool_call_id } => {
+                format!("cancelled because dependency {} failed", cause_tool_call_id.as_str())
+            }
+        };
+
+        let result_msg = ToolResultMessage {
+            role: "tool_result".to_string(),
+            tool_call_id: tool_call_id.clone(),
+            tool_name: tool_call.name.clone(),
+            content: vec![Content::Text(crate::message::TextContent {
+                text: format!("Tool execution was cancelled: {}", reason_str),
+            })],
+            details: None,
+            is_error: true,
+            timestamp: current_timestamp(),
+        };
+
+        let mut events = vec![
+            AgentEvent::ToolExecutionCancelled {
+                tool_call_id: tool_call_id.clone(),
+                reason,
+            },
+            AgentEvent::ToolExecutionEnd {
+                tool_call_id: tool_call_id.clone(),
+                result: ToolResult {
+                    content: result_msg.content.clone(),
+                    details: None,
+                    terminate: None,
+                },
+                is_error: true,
+            },
+        ];
+
+        let agent_msg = AgentMessage::ToolResult(result_msg);
+        self.completed_tool_results.push(
+            match &agent_msg {
+                AgentMessage::ToolResult(m) => m.clone(),
+                _ => unreachable!(),
+            },
+        );
+        self.completed_tool_terminations.push(false);
+        self.state.messages.push(agent_msg.clone());
+        events.push(AgentEvent::MessageStart {
+            message: agent_msg.clone(),
+        });
+        events.push(AgentEvent::MessageEnd {
+            message: agent_msg.clone(),
+        });
+
+        // If all tools are done, advance the state machine
+        if !self.pending_tool_calls.is_empty() {
+            return (events, vec![]);
+        }
+
+        // All tools done
+        let assistant_msg = self
+            .state
+            .messages
+            .iter()
+            .rev()
+            .find(|msg| matches!(msg, AgentMessage::Assistant(_)))
+            .cloned()
+            .unwrap_or_else(|| agent_msg.clone());
+        let tool_results = std::mem::take(&mut self.completed_tool_results);
+        self.completed_tool_terminations.clear();
+
+        events.push(AgentEvent::TurnEnd {
+            message: assistant_msg,
+            tool_results,
+        });
+
+        let steering = self.drain_steering();
+        if !steering.is_empty() {
+            return self.inject_messages_and_stream(steering);
+        }
+
+        let follow = self.drain_follow_up();
+        if !follow.is_empty() {
+            return self.inject_messages_and_stream(follow);
+        }
+
+        self.phase = Phase::Streaming;
         events.push(AgentEvent::TurnStart);
         let actions = vec![AgentAction::StreamLlm {
             context: self.build_llm_context(),

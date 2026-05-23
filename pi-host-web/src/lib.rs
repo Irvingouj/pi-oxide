@@ -15,6 +15,7 @@ use wasm_bindgen::prelude::*;
 use pi_core::{
     Agent, AgentAction, AgentEvent, AgentMessage, AgentOptions, AgentState, LlmChunk, LlmResult,
     ToolCallId, ToolError, ToolResult,
+    CancelReason, ToolExecutionUpdate,
     ProjectionInput, project as project_context,
 };
 use serde::{Deserialize, Serialize};
@@ -293,6 +294,56 @@ pub fn on_tool_done(handle: u32, tool_call_id: &str, result_json: &str) -> Strin
         let result: Result<ToolResult, ToolError> =
             parse_json::<ToolDonePayload>(result_json, "ToolDonePayload")?.into();
         with_agent(handle, |agent| agent.on_tool_done(id, result))
+    })();
+
+    match result {
+        Ok((events, actions)) => ok_json(StepOutput { events, actions }),
+        Err(err) => error_json(&err),
+    }
+}
+
+/// Notify the agent that a tool has started executing.
+#[wasm_bindgen(js_name = "onToolStarted")]
+pub fn on_tool_started(handle: u32, tool_call_id: &str) -> String {
+    console_error_panic_hook::set_once();
+
+    let result = (|| {
+        let id = ToolCallId::new(tool_call_id);
+        Ok(with_agent(handle, |agent| agent.on_tool_started(id))?)
+    })();
+
+    match result {
+        Ok(events) => ok_json(EventsOutput { events }),
+        Err(err) => error_json(&err),
+    }
+}
+
+/// Send a streaming tool execution update to the agent.
+/// Input JSON must match `ToolExecutionUpdate`.
+#[wasm_bindgen(js_name = "onToolUpdate")]
+pub fn on_tool_update(handle: u32, update_json: &str) -> String {
+    console_error_panic_hook::set_once();
+
+    let result = (|| {
+        let update: ToolExecutionUpdate = parse_json(update_json, "ToolExecutionUpdate")?;
+        Ok(with_agent(handle, |agent| agent.on_tool_update(update))?)
+    })();
+
+    match result {
+        Ok(events) => ok_json(EventsOutput { events }),
+        Err(err) => error_json(&err),
+    }
+}
+
+/// Notify the agent that a tool was cancelled.
+#[wasm_bindgen(js_name = "onToolCancelled")]
+pub fn on_tool_cancelled(handle: u32, tool_call_id: &str, reason_json: &str) -> String {
+    console_error_panic_hook::set_once();
+
+    let result = (|| {
+        let id = ToolCallId::new(tool_call_id);
+        let reason: CancelReason = parse_json(reason_json, "CancelReason")?;
+        with_agent(handle, |agent| agent.on_tool_cancelled(id, reason))
     })();
 
     match result {

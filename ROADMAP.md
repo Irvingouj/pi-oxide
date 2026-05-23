@@ -34,6 +34,7 @@ For this repository, that means:
 
 See also: [AGENT_RUNTIME_MEMO.md](./AGENT_RUNTIME_MEMO.md).
 See also: [LOCAL_TOOL_RUNTIME_SPEC.md](./LOCAL_TOOL_RUNTIME_SPEC.md).
+See also: [MILESTONE_6_5_LOCAL_TOOL_RUNTIME.md](./MILESTONE_6_5_LOCAL_TOOL_RUNTIME.md).
 
 ## Current Baseline
 
@@ -369,6 +370,8 @@ These are not blockers for the smoke test, but they must be addressed before lon
 ## Milestone 6.5: Local Tool Runtime Control
 
 Goal: design and implement a real local tool runtime for long-running commands and responsive agent control.
+
+Detailed implementation prompt: [MILESTONE_6_5_LOCAL_TOOL_RUNTIME.md](./MILESTONE_6_5_LOCAL_TOOL_RUNTIME.md).
 
 Scope:
 

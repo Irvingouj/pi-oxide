@@ -11,11 +11,18 @@ import {
   feedLlmChunk,
   onLlmDone,
   onToolDone,
+  onToolStarted,
+  onToolUpdate,
+  onToolCancelled,
   prompt,
   type AgentAction,
   type AgentOptions,
+  type ToolCall,
+  type ToolExecutionUpdate as ToolExecutionUpdateShape,
+  type CancelReason,
 } from "../wasmBinding.ts";
 import type { ToolRegistry } from "../fakeTools.ts";
+import type { ToolRuntime, ToolUpdate } from "../local/toolRuntime.ts";
 import type { LlmRequest } from "./types.ts";
 import { callAnthropic, type AnthropicConfig } from "./anthropic.ts";
 import {
@@ -110,10 +117,13 @@ export class RealAgentHost {
   readonly trace: TraceEntry[] = [];
   readonly llm: RealLlm;
   readonly tools: ToolRegistry;
+  /** If provided, tool execution uses the async ToolRuntime path with streaming updates. */
+  private readonly runtime?: ToolRuntime;
 
-  constructor(llm: RealLlm, tools: ToolRegistry) {
+  constructor(llm: RealLlm, tools: ToolRegistry, runtime?: ToolRuntime) {
     this.llm = llm;
     this.tools = tools;
+    this.runtime = runtime;
   }
 
   private log(phase: TraceEntry["phase"], type: string, data: unknown): void {
@@ -148,6 +158,8 @@ export class RealAgentHost {
           return this.handleStreamLlm(handle, action.context);
         case "execute_tools":
           return this.handleExecuteTools(handle, action.calls);
+        case "cancel_tools":
+          return this.handleCancelTools(handle, action.tool_call_ids, action.reason);
         case "finished":
           return action;
         case "wait_for_input":
@@ -190,7 +202,21 @@ export class RealAgentHost {
 
   private async handleExecuteTools(
     handle: number,
-    calls: import("../wasmBinding.ts").ToolCall[],
+    calls: ToolCall[],
+  ): Promise<AgentAction> {
+    if (this.runtime) {
+      return this.handleAsyncTools(handle, calls);
+    }
+    return this.handleSyncTools(handle, calls);
+  }
+
+  /**
+   * Sync tool execution path — used when no ToolRuntime is provided.
+   * Matches the original behavior for backward compatibility.
+   */
+  private async handleSyncTools(
+    handle: number,
+    calls: ToolCall[],
   ): Promise<AgentAction> {
     let lastActions: AgentAction[] = [];
 
@@ -199,6 +225,99 @@ export class RealAgentHost {
       this.log("host", "tool_done", { tool_call_id: call.id, tool_name: call.name, payload: toolResultPayload });
 
       const step = onToolDone(handle, call.id, toolResultPayload);
+      for (const event of step.events) {
+        this.log("event", event.type, event);
+      }
+      lastActions = step.actions;
+    }
+
+    return this.processActions(handle, lastActions);
+  }
+
+  /**
+   * Async tool execution path — uses ToolRuntime with streaming updates.
+   *
+   * For each tool call:
+   * 1. Call onToolStarted() to notify Rust
+   * 2. Execute tool asynchronously through ToolRuntime
+   * 3. Streaming updates (stdout/stderr) are forwarded to Rust via onToolUpdate()
+   * 4. On completion, call onToolDone() to finalize in Rust
+   *
+   * Cancellation is handled via cancel_tools action from Rust.
+   */
+  private async handleAsyncTools(
+    handle: number,
+    calls: ToolCall[],
+  ): Promise<AgentAction> {
+    // Wire the runtime's streaming updates into Rust via onToolUpdate
+    this.runtime!.hostUpdateListener = (update: ToolUpdate) => {
+      const rustUpdate: ToolExecutionUpdateShape = {
+        tool_call_id: update.toolCallId,
+        stream: update.stream,
+        chunk: update.chunk,
+        sequence: update.sequence,
+        timestamp: Date.now(),
+      };
+      const updateOutput = onToolUpdate(handle, rustUpdate);
+      for (const event of updateOutput.events) {
+        this.log("event", event.type, event);
+      }
+    };
+
+    // Start all tools concurrently
+    const toolPromises = calls.map(async (call) => {
+      // 1. Notify Rust that this tool has started
+      const startedOutput = onToolStarted(handle, call.id);
+      for (const event of startedOutput.events) {
+        this.log("event", event.type, event);
+      }
+
+      // 2. Execute the tool asynchronously
+      const toolResultPayload = await this.runtime!.execute(call);
+      this.log("host", "tool_done", { tool_call_id: call.id, tool_name: call.name, payload: toolResultPayload });
+
+      return { call, payload: toolResultPayload };
+    });
+
+    // Wait for all tools to complete
+    const results = await Promise.all(toolPromises);
+
+    // Clear the host listener now that tools are done
+    this.runtime!.hostUpdateListener = undefined;
+
+    // Feed results into Rust in order
+    let lastActions: AgentAction[] = [];
+    for (const { call, payload } of results) {
+      const step = onToolDone(handle, call.id, payload);
+      for (const event of step.events) {
+        this.log("event", event.type, event);
+      }
+      lastActions = step.actions;
+    }
+
+    // Process any pending actions
+    return this.processActions(handle, lastActions);
+  }
+
+  /**
+   * Handle cancel_tools action from Rust.
+   * Cancels running tools via ToolRuntime (if available) and notifies Rust.
+   */
+  private async handleCancelTools(
+    handle: number,
+    toolCallIds: string[],
+    reason: CancelReason,
+  ): Promise<AgentAction> {
+    let lastActions: AgentAction[] = [];
+
+    for (const id of toolCallIds) {
+      // Cancel via runtime if available
+      if (this.runtime) {
+        this.runtime.cancel(id);
+      }
+
+      // Notify Rust that this tool was cancelled
+      const step = onToolCancelled(handle, id, reason);
       for (const event of step.events) {
         this.log("event", event.type, event);
       }

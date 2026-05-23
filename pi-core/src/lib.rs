@@ -24,7 +24,7 @@ pub use context_projection::{
     ContextReplacement, ProjectionInput, ProjectionOutput, estimate_tokens,
     estimate_tokens_for_text, project,
 };
-pub use events::{AgentAction, AgentEvent, ContentDelta, QueueMode, ThinkingLevel, WaitMode};
+pub use events::{AgentAction, AgentEvent, BackgroundJobRef, CancelReason, ContentDelta, QueueMode, ThinkingLevel, ToolExecutionUpdate, ToolOutputStream, WaitMode};
 pub use llm::{LlmChunk, LlmError, LlmResult, Model, ModelCapabilities, ModelCost, ModelProvider};
 pub use message::StopReason;
 pub use message::{

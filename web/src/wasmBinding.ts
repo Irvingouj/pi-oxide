@@ -57,6 +57,12 @@ export interface ExecuteToolsAction {
   calls: ToolCall[];
 }
 
+export interface CancelToolsAction {
+  type: "cancel_tools";
+  tool_call_ids: string[];
+  reason: CancelReason;
+}
+
 export interface WaitForInputAction {
   type: "wait_for_input";
   mode: "steering" | "follow_up" | "any";
@@ -70,6 +76,7 @@ export interface FinishedAction {
 export type AgentAction =
   | StreamLlmAction
   | ExecuteToolsAction
+  | CancelToolsAction
   | WaitForInputAction
   | FinishedAction;
 
@@ -88,6 +95,22 @@ export interface StepOutput {
 
 export interface EventsOutput {
   events: AgentEvent[];
+}
+
+export type ToolOutputStream = "stdout" | "stderr" | "status";
+
+export type CancelReason =
+  | { type: "user_requested" }
+  | { type: "timeout" }
+  | { type: "agent_aborted" }
+  | { type: "dependency_failed"; cause_tool_call_id: string };
+
+export interface ToolExecutionUpdate {
+  tool_call_id: string;
+  stream: ToolOutputStream;
+  chunk: string;
+  sequence: number;
+  timestamp: number;
 }
 
 export interface StateOutput {
@@ -159,6 +182,29 @@ export function onToolDone(
 ): StepOutput {
   return unwrap<StepOutput>(
     raw.onToolDone(handle, toolCallId, JSON.stringify(result))
+  );
+}
+
+export function onToolStarted(handle: number, toolCallId: string): EventsOutput {
+  return unwrap<EventsOutput>(raw.onToolStarted(handle, toolCallId));
+}
+
+export function onToolUpdate(
+  handle: number,
+  update: ToolExecutionUpdate
+): EventsOutput {
+  return unwrap<EventsOutput>(
+    raw.onToolUpdate(handle, JSON.stringify(update))
+  );
+}
+
+export function onToolCancelled(
+  handle: number,
+  toolCallId: string,
+  reason: CancelReason
+): StepOutput {
+  return unwrap<StepOutput>(
+    raw.onToolCancelled(handle, toolCallId, JSON.stringify(reason))
   );
 }
 

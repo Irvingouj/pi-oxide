@@ -26,6 +26,12 @@ export interface FileArtifactMeta {
   createdAt: number;
 }
 
+function assertSafeArtifactId(id: string): void {
+  if (!/^[A-Za-z0-9._-]+$/.test(id)) {
+    throw new Error(`invalid artifact id: ${id}`);
+  }
+}
+
 export class FileArtifactStore implements ArtifactStore {
   readonly artifactsDir: string;
 
@@ -36,6 +42,7 @@ export class FileArtifactStore implements ArtifactStore {
 
   /** Store an artifact. Writes content to a file and metadata to a sidecar. */
   put(record: ArtifactRecord): string {
+    assertSafeArtifactId(record.id);
     const contentPath = path.join(this.artifactsDir, `${record.id}.txt`);
     const metaPath = path.join(this.artifactsDir, `${record.id}.meta.json`);
 
@@ -55,35 +62,28 @@ export class FileArtifactStore implements ArtifactStore {
 
   /** Retrieve an artifact by ID. Returns undefined if not found. */
   get(id: string): ArtifactRecord | undefined {
+    assertSafeArtifactId(id);
     const contentPath = path.join(this.artifactsDir, `${id}.txt`);
-    const metaPath = path.join(this.artifactsDir, `${id}.meta.json`);
 
     if (!fs.existsSync(contentPath)) {
       return undefined;
     }
 
     const content = fs.readFileSync(contentPath, "utf-8");
-
-    let storedAt = 0;
-    if (fs.existsSync(metaPath)) {
-      const meta: FileArtifactMeta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
-      storedAt = meta.createdAt;
-    }
-
-    // We don't store toolName/toolCallId in the ArtifactRecord return
-    // from get() since we'd need to parse the meta. For now, reconstruct.
     const meta = this.readMeta(id);
+
     return {
       id,
       toolName: meta?.toolName ?? "unknown",
       toolCallId: meta?.toolCallId ?? "",
       content,
-      storedAt,
+      storedAt: meta?.createdAt ?? 0,
     };
   }
 
   /** Read just the metadata for an artifact. */
   readMeta(id: string): FileArtifactMeta | undefined {
+    assertSafeArtifactId(id);
     const metaPath = path.join(this.artifactsDir, `${id}.meta.json`);
     if (!fs.existsSync(metaPath)) {
       return undefined;
@@ -93,6 +93,7 @@ export class FileArtifactStore implements ArtifactStore {
 
   /** Check if an artifact exists. */
   has(id: string): boolean {
+    assertSafeArtifactId(id);
     return fs.existsSync(path.join(this.artifactsDir, `${id}.txt`));
   }
 

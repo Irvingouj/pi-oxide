@@ -12,11 +12,9 @@ import { RealAgentHost, RealLlm, type TraceEntry, type ContextProjectionConfig }
 import { LocalSessionStore, type SessionEntryKind } from "./sessionStore.ts";
 import { FileArtifactStore } from "./fileArtifactStore.ts";
 import type { ArtifactStore, ArtifactRecord } from "../context/rustProjection.ts";
-import { MemoryArtifactStore } from "../context/rustProjection.ts";
 import type { ToolRegistry } from "../fakeTools.ts";
 import type { ToolRuntime } from "./toolRuntime.ts";
 import type { AgentOptions } from "../wasmBinding.ts";
-import * as path from "node:path";
 
 /**
  * Trace phases that map to session entry kinds.

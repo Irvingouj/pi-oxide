@@ -143,6 +143,11 @@ export interface LoadedSession {
  */
 export function loadSession(sessionDir: string): LoadedSession {
   const sessionFile = path.join(sessionDir, "session.jsonl");
+
+  if (!fs.existsSync(sessionFile)) {
+    throw new SessionCorruptError(0, `session file not found: ${sessionFile}`);
+  }
+
   const raw = fs.readFileSync(sessionFile, "utf-8");
   const lines = raw.split("\n").filter((l) => l.trim().length > 0);
 

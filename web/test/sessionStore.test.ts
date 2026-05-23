@@ -279,4 +279,22 @@ describe("FileArtifactStore", () => {
       assert.ok(store.has("exists-1"));
     });
   });
+
+  it("rejects unsafe artifact ids", () => {
+    return withTempDir((base) => {
+      const store = new FileArtifactStore(path.join(base, "artifacts"));
+
+      assert.throws(
+        () => store.put({
+          id: "../escape",
+          toolName: "bash",
+          toolCallId: "tc-escape",
+          content: "nope",
+          storedAt: 1,
+        }),
+        /invalid artifact id/,
+      );
+      assert.ok(!fs.existsSync(path.join(base, "escape.txt")));
+    });
+  });
 });

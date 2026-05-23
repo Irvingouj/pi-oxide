@@ -4,17 +4,20 @@
 
 Build a Rust-based coding-agent runtime whose core is type-safe, runtime-neutral, and host-driven.
 
-The first product path is a web-based, JavaScript-driven coding agent:
+The product direction is still a browser-capable coding agent, but the next proving ground is a normal-computer local host. A functional coding agent must first be able to read files, edit files, write files, run commands, and manage context on a real machine. Once that loop is trusted locally, the browser host becomes another runtime implementation of the same protocol.
 
-- Rust owns the synchronous agent state machine, typed wire/domain contracts, and coding-agent invariants.
-- JavaScript owns the web host event loop, model/provider calls, browser storage, UI, and tool execution.
-- The browser host drives Rust by consuming `AgentAction` values and feeding back typed results.
-
-The goal is not to build a desktop app first. Desktop may remain compilable as a scaffold, but it is not a near-term milestone.
+```text
+user prompt
+-> Rust core emits AgentAction
+-> JS host prepares context and calls provider/tools
+-> JS host feeds typed results back into Rust
+-> Rust core updates state and emits events/actions
+-> repeat until Finished or WaitForInput
+```
 
 ## Source Principles
 
-This plan follows the agent-building principles from Anthropic's "Building effective agents":
+This plan follows Anthropic's "Building effective agents":
 
 - Start simple.
 - Prefer composable building blocks over framework complexity.
@@ -22,43 +25,51 @@ This plan follows the agent-building principles from Anthropic's "Building effec
 - Design the agent-computer interface carefully.
 - Add autonomy only when the simpler workflow is proven insufficient.
 
-For this repository, that means the first real system is an augmented LLM plus typed tools in a feedback loop:
+For this repository, that means:
 
-```text
-user prompt
--> Rust core emits AgentAction
--> JS host executes LLM/tool action
--> JS host feeds typed result back into Rust
--> Rust core updates state and emits events/actions
--> repeat until Finished or WaitForInput
-```
+- Rust owns the synchronous agent state machine, typed wire/domain contracts, and coding-agent invariants.
+- JS hosts own runtime behavior: provider calls, filesystem/browser storage, shell/browser capabilities, permissions, context projection, and UI.
+- The Rust core must not assume Tokio, DOM, Node, browser APIs, filesystem, shell, or network.
+
+See also: [AGENT_RUNTIME_MEMO.md](./AGENT_RUNTIME_MEMO.md).
 
 ## Current Baseline
 
 Already present:
 
-- `pi-core`: synchronous Rust agent state machine, no async runtime.
+- `pi-core`: synchronous Rust agent state machine.
 - `pi-bindings`: C ABI with JSON envelope responses.
-- `pi-host-web`: WASM host scaffold.
-- `pi-llm`: protocol/type surface, now sharing model types with `pi-core`.
-- Typed wrappers for important identifiers and JSON domains.
-- Basic tracing in core and bindings.
-- Workspace includes host crates, so web/desktop/mobile scaffolds compile in normal tests.
+- `pi-host-web`: WASM wrapper with agent lifecycle exports.
+- `web/src/agentHost.ts`: JS host loop for fake providers/tools.
+- `web/src/providers/anthropic.ts`: first real provider adapter.
+- `web/src/tools/*`: in-memory pi-compatible tool surface.
+- Typed wrappers for important Rust identifiers and JSON domains.
+- Basic tracing in core/bindings.
 
-Known limitation:
+Completed proof points:
 
-- The project does not yet have a real JS-driven web host loop.
-- The project does not yet execute a complete browser agent run against fake or real providers.
-- Tool interfaces exist only as definitions/results, not as a coding-agent tool set.
+- Rust tests pass.
+- JS fake loop can handle streaming, tool calls, tool errors, follow-ups, and steering.
+- Anthropic conversion handles grouped tool results.
+- In-memory tools support `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`.
+- Real LLM smoke script exists, but only runs when `ANTHROPIC_API_KEY` is set.
+
+Current gap:
+
+- The project does not yet have a functional local-machine coding agent.
+- The project does not yet have real filesystem-backed tools.
+- The project does not yet have real constrained bash.
+- The project does not yet have context projection/tool-result budgeting.
+- The project does not yet have browser UI/storage.
 
 ## Non-Goals
 
-- No desktop-first runner.
-- No TUI.
-- No provider registry before one provider path works.
-- No multi-agent orchestration before a single agent loop is verified.
-- No broad framework abstraction before the action protocol is proven.
-- No runtime-specific behavior inside `pi-core`.
+- No desktop-first app shell.
+- No TUI as a product goal.
+- No provider registry before one provider path works end-to-end.
+- No multi-agent orchestration before the single-agent loop is trusted.
+- No hidden runtime behavior inside `pi-core`.
+- No automatic long-running autonomy before local tool safety and context management are explicit.
 
 ## Architecture Target
 
@@ -69,357 +80,369 @@ Rust crates should provide:
 - `pi-core`: runtime-neutral state machine.
 - `pi-bindings`: stable native ABI.
 - `pi-host-web`: WASM-facing wrapper around core operations.
-- Future Rust coding-agent domain crate if needed, for typed tool definitions and coding-agent-specific policies.
+- Future Rust coding-agent domain crate only if shared typed contracts outgrow `pi-core`.
 
 Rust must not:
 
 - Fetch models from network.
-- Read/write browser files directly.
-- Assume Tokio, DOM, Node, Web Worker, or any browser API in `pi-core`.
-- Accept unparsed stringly data past the binding layer.
+- Read/write files directly as part of `pi-core`.
+- Execute shell commands.
+- Assume browser, Node, Tokio, OS-specific APIs, or UI.
+- Accept unparsed stringly data past the Rust boundary.
 
-### JavaScript Web Host
+### JS Host Runtime
 
-The JS host should provide:
+JS hosts should provide:
 
 - Event loop that executes `AgentAction`.
-- Provider adapter for one initial model API.
+- Provider adapter.
 - Tool executor registry.
-- Browser storage/session adapter.
-- UI event bridge.
-- Tracing/log sink.
+- Permission/safety policy.
+- Context projection before provider calls.
+- Artifact/session storage.
+- Trace/log sink.
 
-JS may call:
+There will be two JS host targets:
 
-- WASM exports from `pi-host-web`.
-- Browser APIs such as File System Access API, IndexedDB, OPFS, fetch, Web Workers, and UI frameworks.
-
-JS must preserve:
-
-- Typed JSON envelope contracts at the Rust boundary.
-- Event order.
-- Action/result correlation by typed IDs.
-- Useful error details.
+- local-machine host first: Node filesystem + shell + local artifacts.
+- browser host later: File System Access API/OPFS/IndexedDB/remote runner as available.
 
 ## Milestone 0: Planning and Guardrails
 
-Goal: make the project direction explicit enough for cheaper coding agents to execute without drifting.
+Goal: make project boundaries explicit.
 
-Scope:
-
-- Keep `CLAUDE.md` aligned with web-first direction.
-- Keep this `ROADMAP.md` as the root planning document.
-- Every future large task should point to a milestone in this file.
+Status: complete.
 
 Verification:
 
 - `AGENTS.md` aliases `CLAUDE.md`.
-- `CLAUDE.md` says web/JS host is first-level support.
+- `CLAUDE.md` documents type safety, runtime-neutral core, web/JS direction, useful errors, tracing, abstraction, and simplicity.
 - `ROADMAP.md` exists at project root.
-
-Status: complete.
 
 ## Milestone 1: Web WASM Binding Contract
 
 Goal: expose the current Rust core through browser-friendly WASM APIs with typed JSON envelopes.
 
+Status: complete.
+
 Scope:
 
-- Replace `WebRunner::hello()` with a minimal agent wrapper.
-- Export functions equivalent to:
-  - create agent from `AgentOptions`
-  - prompt
-  - feed LLM chunk
-  - LLM done
-  - tool done
-  - steer
-  - follow up
-  - state
-  - reset
-- Return the same envelope shape as bindings:
+- Agent lifecycle exports: create, prompt, feed chunk, LLM done, tool done, steer, follow-up, state, reset, destroy.
+- Stable envelope shape:
   - `{ ok: true, data: ... }`
   - `{ ok: false, error: { code, message } }`
-- Keep JS-facing payloads serializable and stable.
-- Add WASM-side errors using concrete Rust error types with `thiserror`.
-
-Non-goals:
-
-- No real provider calls.
-- No real tool execution.
-- No UI.
+- Concrete WASM-side errors with `thiserror`.
 
 Verification:
 
-- Rust unit tests cover successful prompt and parse failure.
-- WASM package builds for `wasm32-unknown-unknown`.
-- A tiny JS smoke script can create an agent and receive `StreamLlm`.
-
-Suggested files:
-
-- `pi-host-web/src/lib.rs`
-- `pi-host-web/Cargo.toml`
-- `pi-core/tests/agent_smoke.rs`
-
-Status: complete.
-
-Build note: WASM build requires rustup-managed `rustc` (not Homebrew). Use:
-```
-PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH" cargo build -p pi-host-web --target wasm32-unknown-unknown --release
-wasm-bindgen --target nodejs --out-dir web/pkg target/wasm32-unknown-unknown/release/pi_host_web.wasm
-cp web/pkg/pi_host_web.js web/pkg/pi_host_web.cjs  # CJS compat for Node ESM
-```
+- Rust unit tests cover success and parse failures.
+- WASM target builds.
 
 ## Milestone 2: JS Host Loop with Fake LLM and Fake Tools
 
-Goal: prove the full browser host contract without external APIs.
+Goal: prove the host-driven Rust loop without external APIs.
+
+Status: complete.
 
 Scope:
 
-- Add a JS/TS host package or example under the repository.
-- Implement `runAgentLoop(agent, host)`:
-  - call Rust prompt
-  - process returned actions
-  - for `StreamLlm`, use fake streaming chunks
-  - for `ExecuteTools`, call fake tool handlers
-  - feed results back into Rust
-  - stop on `Finished` or `WaitForInput`
-- Preserve and display event order.
-- Add deterministic tests for:
-  - no-tool response
-  - one tool call
-  - multiple tool calls
-  - tool error
-  - follow-up
-  - steering
-
-Non-goals:
-
-- No real network.
-- No browser UI polish.
-- No provider-specific formatting.
+- JS loop drives `StreamLlm`, `ExecuteTools`, `Finished`, and `WaitForInput`.
+- Fake LLM emits streaming chunks and final `LlmResult`.
+- Fake tools return deterministic success/error payloads.
+- Trace records host actions, Rust events, and agent actions.
 
 Verification:
 
-- JS tests run from a clean checkout.
-- The fake loop completes at least one tool-using run.
-- Logs show every `AgentAction` and every resulting Rust event.
-
-Suggested files:
-
-- `web/package.json`
-- `web/src/agentHost.ts`
-- `web/src/fakeLlm.ts`
-- `web/src/fakeTools.ts`
-- `web/test/agentHost.test.ts`
+- JS tests cover no-tool response, tool calls, parallel tool calls, tool error, follow-up, steering, LLM error, and trace order.
 
 ## Milestone 3: Coding-Agent Tool Contract
 
-Goal: define the first typed coding-agent tool set for web execution.
+Goal: define and test the first coding-agent tool surface.
+
+Status: complete.
 
 Scope:
 
-- Define tool schemas and result shapes for the minimal coding loop:
-  - `read_file`
-  - `list_files`
-  - `search_files`
-  - `write_file`
-  - `run_command` as a constrained host capability, if the web environment supports it
-- Tool definitions must be model-friendly:
-  - clear names
-  - clear descriptions
-  - examples where useful
-  - explicit boundaries
-  - no hard-to-write formats such as manual patch hunk counts as the first edit tool
-- Arguments and results must be typed before crossing into Rust-facing contracts.
-- Prefer absolute or workspace-root-relative paths, never implicit current-directory semantics.
-
-Non-goals:
-
-- No edit diff tool yet unless `write_file` proves insufficient.
-- No unrestricted shell from browser.
-- No hidden filesystem assumptions in Rust core.
+- In-memory pi-compatible tools:
+  - `read`
+  - `write`
+  - `edit`
+  - `ls`
+  - `grep`
+  - `find`
+  - constrained fake `bash`
+- Tool groups:
+  - `PI_CODING_TOOLS = read, bash, edit, write`
+  - `PI_READ_ONLY_TOOLS = read, grep, find, ls`
+  - `PI_ALL_TOOLS = all seven`
+- Legacy Milestone 3 tools remain for compatibility.
 
 Verification:
 
-- Tool schema tests ensure required fields and path semantics.
-- Fake host can run a loop where the model reads, writes, and gets feedback.
-- Bad tool arguments produce useful typed errors.
+- Schema tests.
+- Path validation tests.
+- Tool behavior tests.
+- Deterministic fake programming smoke test.
+- `grep` supports path as directory or exact file.
 
-Suggested files:
+## Milestone 3.5: Real Provider Adapter
 
-- Rust side if shared definitions are needed:
-  - `pi-core/src/tool.rs`
-  - new `pi-coding-agent` crate only if the contract becomes large enough
-- JS side:
-  - `web/src/tools/*.ts`
-  - `web/test/tools/*.test.ts`
+Goal: connect one real provider path through the JS host.
 
-## Milestone 4: Browser Storage and Session Tree
-
-Goal: persist agent state and coding sessions in the web host.
+Status: complete enough for current stage.
 
 Scope:
 
-- Store sessions in IndexedDB or OPFS through JS.
-- Keep Rust core session structures runtime-neutral.
-- Support:
-  - create session
-  - append event/message entries
-  - load session
-  - resume from current leaf
-  - inspect branch
-- Keep storage failures visible as host errors, not silent UI failures.
+- Provider-neutral request/result types.
+- Anthropic adapter for messages, tools, responses, and errors.
+- Consecutive `tool_result` messages are grouped into one Anthropic user message.
+- Real smoke script is available.
+
+Verification:
+
+- Anthropic conversion tests pass.
+- Network smoke is skipped when `ANTHROPIC_API_KEY` is missing.
+
+## Milestone 3.7: Real LLM Programming Smoke Script
+
+Goal: make the real smoke script use pi-compatible tools and a programming fixture.
+
+Status: complete as code; real network run still requires `ANTHROPIC_API_KEY`.
+
+Scope:
+
+- `web/scripts/real-llm-smoke.ts` uses `PI_CODING_TOOLS`.
+- Fixture contains buggy `src/index.ts`.
+- Prompt asks model to read, fix, and run `npm test`.
+- Script verifies `read`, `edit` or `write`, `bash`, `Finished`, and final source content.
+
+Verification:
+
+- Unit tests pass.
+- Real smoke should be manually run with:
+
+```text
+cd web && ANTHROPIC_API_KEY=... npm run smoke:real-llm
+```
+
+## Milestone 4: Local Machine Host Tools
+
+Goal: implement real host-side coding tools for a normal computer.
+
+This is now the next implementation target.
+
+Scope:
+
+- Add local host tool implementations, initially in JS/TS.
+- Implement real filesystem-backed:
+  - `read`: cwd-confined path resolution, offset/limit, head truncation.
+  - `write`: cwd-confined writes, parent directory creation, serialized per-path mutation.
+  - `edit`: exact replacement edits, useful errors, diff details, serialized per-path mutation.
+  - `bash`: real command execution in cwd, timeout, abort/cancel, stdout/stderr capture, tail truncation.
+- Reuse pi-compatible tool definitions where possible.
+- Keep all runtime behavior outside Rust core.
+
+Safety boundaries:
+
+- Default deny paths outside cwd.
+- Default deny unsafe bash unless permission mode explicitly allows it.
+- Make all denied operations typed tool errors.
+- Trace tool start/end/error with useful metadata.
 
 Non-goals:
 
+- No browser support in this milestone.
+- No UI.
+- No summarizer compaction.
+- No broad permission framework beyond local explicit policy.
+
+Verification:
+
+- Tests use temporary fixture directories.
+- `read/write/edit` operate on real files only inside fixture cwd.
+- `bash` can run deterministic fixture commands.
+- Path traversal and outside-cwd attempts fail.
+- Existing Rust and JS tests remain green.
+
+Suggested files:
+
+- `web/src/local/path.ts`
+- `web/src/local/fileTools.ts`
+- `web/src/local/bashTool.ts`
+- `web/src/local/localToolRegistry.ts`
+- `web/test/localTools.test.ts`
+
+## Milestone 5: Minimal Context Projection
+
+Goal: prepare bounded provider context without mutating Rust's canonical transcript.
+
+Scope:
+
+- Add host-side context preparation before provider calls.
+- Estimate tokens with chars/4 plus real assistant usage where available.
+- Apply deterministic tool-result budgeting:
+  - small tool results remain inline.
+  - large `read` results keep head preview.
+  - large `bash` results keep tail preview.
+  - full content is stored in an artifact store.
+  - replacement decisions remain stable across turns.
+- Preserve tool-call/tool-result pairing.
+- Normalize provider-bound messages enough to avoid Anthropic ordering errors.
+
+Non-goals:
+
+- No LLM summarizer yet.
+- No automatic compaction.
+- No prompt-cache engineering beyond deterministic output.
+- No browser IndexedDB/OPFS store yet.
+
+Verification:
+
+- Small tool results pass through unchanged.
+- Large tool results are replaced with deterministic previews.
+- Full outputs are available through an artifact store.
+- Repeated preparation of the same transcript produces byte-identical replacements.
+- Trimming does not split an assistant tool call from its tool result.
+- Anthropic adapter accepts prepared messages.
+
+Suggested files:
+
+- `web/src/context/tokenEstimate.ts`
+- `web/src/context/artifactStore.ts`
+- `web/src/context/toolResultBudget.ts`
+- `web/src/context/prepareContext.ts`
+- `web/test/contextProjection.test.ts`
+
+## Milestone 6: Real Local Coding-Agent Smoke
+
+Goal: prove a minimal functional coding agent on a normal computer.
+
+Scope:
+
+- Use the local machine host tools from Milestone 4.
+- Use the context projection layer from Milestone 5.
+- Use one real provider path.
+- Run against a temporary local fixture repo.
+
+Fixture:
+
+- `package.json`
+- `src/index.ts` with `add(a, b)` returning `a - b`
+- deterministic test command
+
+Required run:
+
+- model calls `read src/index.ts`
+- model calls `edit` or `write`
+- model calls `bash npm test`
+- run finishes
+
+Verification:
+
+- source file actually contains `return a + b`
+- real bash command reports tests passing
+- trace contains read, edit/write, bash
+- context projection bounded any large outputs
+
+## Milestone 7: Local Session and Artifact Persistence
+
+Goal: persist local agent sessions and artifacts.
+
+Scope:
+
+- Append-only local session file.
+- Session metadata: cwd, model, created time.
+- Entries: messages, tool calls/results, artifacts, model changes, future compaction entries.
+- Reload a session into `AgentOptions.messages`.
+- Store large tool outputs as artifacts.
+
+Non-goals:
+
+- No branch tree unless needed.
 - No cloud sync.
-- No collaboration.
-- No compaction until basic sessions work.
+- No browser storage yet.
 
 Verification:
 
-- Reloading the page can restore a fake agent session.
-- Session data can round-trip through Rust state and JS storage.
-- Corrupt session data reports a useful error.
+- A local run can be resumed.
+- Artifact references remain readable after reload.
+- Corrupt session data returns useful errors.
 
-Suggested files:
+## Milestone 8: Browser Host
 
-- `web/src/storage/sessionStore.ts`
-- `web/test/storage/sessionStore.test.ts`
-- `pi-core/src/session.rs`
-
-## Milestone 5: One Real Provider Path
-
-Goal: connect one real model provider through the JS host.
-
-Preferred initial path:
-
-- Anthropic Messages API from JS host, or an OpenAI-compatible endpoint if easier for local development.
+Goal: move the proven agent loop into a browser-capable host.
 
 Scope:
 
-- Implement one provider adapter.
-- Convert provider streaming events into Rust `LlmChunk` and `LlmResult`.
-- Convert Rust `ToolDefinition` into provider tool format.
-- Preserve provider errors with useful code/message/details.
-- Keep API key handling outside Rust core.
+- Browser workspace abstraction.
+- Browser artifact store via IndexedDB or OPFS.
+- Browser session persistence.
+- Minimal UI showing transcript, actions, tool calls/results, errors, and state.
+- Use File System Access API or a virtual workspace first.
+- Bash is unavailable unless backed by a safe remote/sandbox runner.
 
 Non-goals:
 
-- No provider registry.
-- No all-provider compatibility layer.
-- No model auto-routing.
+- No marketing page.
+- No desktop app.
+- No hidden remote execution.
 
 Verification:
 
-- One real prompt streams text through Rust events.
-- One real prompt can request a fake tool and continue after tool result.
-- Provider error and abort paths produce typed Rust-visible failures.
+- User can load or create a small workspace.
+- Agent can inspect and modify files in the browser workspace.
+- Session can be reloaded.
+- UI reflects Rust actions/events and host tool results.
 
-Suggested files:
+## Milestone 9: Manual Compaction and Long-Running Control
 
-- `web/src/providers/anthropic.ts`
-- `web/src/providers/types.ts`
-- `web/test/providers/*.test.ts`
-
-## Milestone 6: Minimal Web Coding Agent
-
-Goal: run a real web coding-agent loop on a browser-accessible workspace.
+Goal: support longer sessions without opaque behavior.
 
 Scope:
 
-- Build a minimal UI that shows:
-  - transcript
-  - current actions
-  - tool calls and results
-  - errors
-  - session state
-- Use browser storage or a browser workspace capability for files.
-- Implement enough tools for the agent to inspect and modify files.
-- Keep all agent state transitions visible.
+- Manual compaction command/workflow.
+- Structured summary message.
+- Keep recent token budget.
+- Visible compaction entries in session history.
+- Stop conditions:
+  - max turns
+  - max tool calls
+  - max token estimate
+  - user stop
 
 Non-goals:
 
-- No marketing landing page.
-- No desktop parity.
-- No multi-agent mode.
+- No hidden automatic summarization until manual compaction is trusted.
+- No autonomous background mode.
+- No opaque memory system.
 
 Verification:
 
-- User can load a small workspace.
-- User can ask the agent to make a small code change.
-- Agent reads files, writes a change, and reports completion.
-- The run can be replayed from persisted session state.
+- Long fake/local session compacts deterministically.
+- Compaction summary preserves goal, constraints, files touched, decisions, and next steps.
+- Stop conditions produce `WaitForInput` or `Finished`.
 
-Suggested files:
+## Milestone 10: Evaluation Harness
 
-- `web/src/ui/*`
-- `web/src/agentHost.ts`
-- `web/src/tools/*`
-
-## Milestone 7: Evaluation Harness
-
-Goal: make the coding agent objectively measurable.
+Goal: make coding-agent progress measurable.
 
 Scope:
 
-- Add a small suite of local coding tasks.
-- Each task includes:
+- Small local coding tasks.
+- Each task has:
   - initial files
-  - user prompt
+  - prompt
   - expected file changes or black-box checks
-  - optional test command if supported by the host
-- Run tasks against fake provider first, then real provider.
-- Store transcripts and tool traces for inspection.
+  - optional test command
+- Run fake-provider evals in CI.
+- Run real-provider evals manually with API key.
+- Store transcripts and traces.
 
 Non-goals:
 
 - No SWE-bench scale yet.
 - No leaderboard.
 - No auto-optimization loop.
-
-Verification:
-
-- CI can run fake-provider evals.
-- Real-provider evals can run manually with an API key.
-- Failures include enough trace data to debug tool/prompt/model issues.
-
-Suggested files:
-
-- `evals/tasks/*`
-- `evals/run.ts`
-- `evals/README.md`
-
-## Milestone 8: Compaction and Long-Running Control
-
-Goal: support longer coding sessions without losing transparency or control.
-
-Scope:
-
-- Add session compaction as an explicit workflow, not hidden magic.
-- Add stop conditions:
-  - max turns
-  - max tool calls
-  - max token estimate
-  - user stop
-- Add checkpoints where the agent can ask for human input.
-
-Non-goals:
-
-- No autonomous long-running background mode until the basic web agent is trusted.
-- No opaque memory system.
-
-Verification:
-
-- A long fake session compacts deterministically.
-- Compaction entries are visible in the session tree.
-- Stop conditions reliably produce `WaitForInput` or `Finished`.
-
-Suggested files:
-
-- `pi-core/src/session.rs`
-- `web/src/session/compaction.ts`
-- `web/test/session/*.test.ts`
 
 ## Execution Rules for Cheaper Agents
 
@@ -433,16 +456,17 @@ When implementing a milestone:
 6. Return useful errors with concrete codes and messages.
 7. Add tracing at action boundaries and recoverable failures.
 8. Keep changes scoped to the milestone.
-9. Do not build desktop features unless the milestone says so.
+9. Do not build desktop app features unless the milestone says so.
 
 ## Definition of Done for the Next Step
 
-The next step is Milestone 1.
+The next step is Milestone 4.
 
-Milestone 1 is done when:
+Milestone 4 is done when:
 
-- `pi-host-web` exposes a usable WASM wrapper around the Rust agent.
-- JS can create an agent, send a prompt, and receive a typed `StreamLlm` action.
-- Invalid JS input returns a typed error envelope.
-- The implementation builds for the web target.
-- Existing `cargo test --workspace` stays green.
+- real local `read/write/edit/bash` tools exist behind a host registry.
+- tests prove they operate on real temporary files/commands.
+- path traversal and outside-cwd access fail.
+- bash has timeout and bounded output.
+- no runtime-specific assumptions are added to `pi-core`.
+- existing `cargo test --workspace` and `cd web && npm test` stay green.

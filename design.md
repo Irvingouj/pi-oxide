@@ -725,7 +725,8 @@ int main() {
 ### 6.1 设计原则
 
 - **Core 只定义内存数据结构**，不实现持久化
-- **Host 提供 `SessionStorage` trait 实现**：决定是写 JSONL 文件、IndexedDB、SQLite 还是网络后端
+- **Host 提供 storage trait 实现**：决定是写 JSONL 文件、IndexedDB、OPFS、SQLite、原生文件存储还是网络后端
+- **Core 不做 I/O**：不导入 filesystem、IndexedDB、SQLite、网络、Node、browser 或 mobile storage API
 - 序列化格式与原项目 JSONL 兼容，方便数据互通
 
 ### 6.2 内存模型
@@ -784,7 +785,7 @@ impl SessionState {
 }
 ```
 
-### 6.3 Host 持久化接口
+### 6.3 Host Storage 接口
 
 ```rust
 // pi-core/src/session.rs
@@ -800,9 +801,23 @@ pub trait SessionStorage: Send + Sync {
     fn append_compaction(&mut self, summary: String, first_kept: String, tokens: u32, details: Value)
         -> Result<String, SessionError>;
 }
+
+/// Host 实现此 trait 以提供大 artifact 存取。
+pub trait ArtifactStorage: Send + Sync {
+    fn put_artifact(&mut self, artifact: ArtifactRecord) -> Result<ArtifactRef, SessionError>;
+    fn get_artifact(&self, artifact_id: &str) -> Result<Option<ArtifactRecord>, SessionError>;
+}
 ```
 
-**注意**：`SessionStorage` 是同步 trait。如果 Host 的持久化是异步的（如 IndexedDB、网络），Host _runner_ 应在异步任务中完成 I/O，再通过同步回调更新 core 的 `SessionState` 缓存。
+Implementations are runtime-specific:
+
+- Local JS host: JSONL session files + artifact files.
+- Browser host: IndexedDB or OPFS.
+- iOS host: SQLite or native file storage.
+- Android host: SQLite or app storage.
+- Remote/cloud host: service-backed storage.
+
+**注意**：storage trait 是同步 core-facing contract。如果 Host 的持久化是异步的（如 IndexedDB、网络），Host runner 应在异步任务中完成 I/O，再通过同步回调更新 core 的 `SessionState` 缓存。Core 永远不选择也不执行具体 I/O。
 
 ### 6.4 Compaction 流程
 

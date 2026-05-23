@@ -410,6 +410,16 @@ Verification:
 
 Goal: persist local agent sessions and artifacts.
 
+Detailed implementation prompt: [MILESTONE_7_LOCAL_SESSION_PERSISTENCE.md](./MILESTONE_7_LOCAL_SESSION_PERSISTENCE.md).
+
+Storage boundary:
+
+- Rust may define runtime-neutral storage traits/contracts.
+- Rust core must not perform filesystem, IndexedDB, SQLite, or network I/O.
+- Local JS host may implement storage with JSONL files and artifact files.
+- Browser host may later implement the same contracts with IndexedDB or OPFS.
+- iOS/Android may later implement the same contracts with SQLite or native storage.
+
 Scope:
 
 - Append-only local session file.

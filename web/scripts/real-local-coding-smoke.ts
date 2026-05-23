@@ -24,6 +24,8 @@ import { RealAgentHost, RealLlm } from "../src/providers/realLlm.ts";
 import { ToolRuntime, type ToolUpdate } from "../src/local/toolRuntime.ts";
 import { PI_CODING_TOOLS } from "../src/tools/schemas.ts";
 import { MemoryArtifactStore } from "../src/context/rustProjection.ts";
+import { PersistentHost } from "../src/local/persistentHost.ts";
+import { loadSession } from "../src/local/sessionStore.ts";
 
 const apiKey = process.env.ANTHROPIC_API_KEY;
 if (!apiKey) {
@@ -41,9 +43,11 @@ async function main() {
   console.log(`  model:    ${model}`);
   console.log();
 
-  // Create empty project directory
+  // Create empty project directory and session directory
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-oxide-ottawa-"));
+  const sessionDir = path.join(projectDir, ".session");
   console.log(`Project dir: ${projectDir}`);
+  console.log(`Session dir: ${sessionDir}`);
   console.log();
 
   // Set up async tool runtime with streaming
@@ -72,7 +76,17 @@ async function main() {
     },
   );
 
-  const host = new RealAgentHost(llm, { log: [] as string[], execute: () => ({ error: { code: "sync_fallback_unavailable", message: "sync tools not available when using ToolRuntime" } }) }, runtime);
+  const host = new PersistentHost(
+    {
+      sessionDir,
+      sessionId: "smoke-ottawa-001",
+      cwd: projectDir,
+      model,
+    },
+    llm,
+    { log: [] as string[], execute: () => ({ error: { code: "sync_fallback_unavailable", message: "sync tools not available when using ToolRuntime" } }) },
+    runtime,
+  );
 
   const options = {
     system_prompt:
@@ -105,6 +119,7 @@ async function main() {
 
   try {
     const result = await host.run(options, prompt);
+    const innerHost = host.host;
 
     // --- Print trace ---
     console.log("=== Trace ===");
@@ -261,8 +276,50 @@ async function main() {
     console.log(`Tools used: ${toolNames.join(", ")}`);
     console.log(`Tool calls: ${toolNames.length}`);
 
+    // Clean up first so session_end is written
     host.cleanup(result.handle);
     runtime.cleanup();
+
+    // 8. Session file exists and has entries
+    const sessionFile = path.join(sessionDir, "session.jsonl");
+    if (fs.existsSync(sessionFile)) {
+      const sessionContent = fs.readFileSync(sessionFile, "utf-8");
+      const sessionLines = sessionContent.trim().split("\n");
+      console.log(`✅ Session file exists (${sessionLines.length} entries)`);
+
+      // Verify it includes prompt, tool events, session_end
+      const sessionEntries = sessionLines.map((l) => JSON.parse(l) as { kind: string });
+      const sessionKinds = sessionEntries.map((e) => e.kind);
+      if (!sessionKinds.includes("session_start")) { console.error("❌ FAIL: session missing session_start"); failed = true; }
+      if (!sessionKinds.includes("user_prompt")) { console.error("❌ FAIL: session missing user_prompt"); failed = true; }
+      if (!sessionKinds.includes("tool_result")) { console.error("❌ FAIL: session missing tool_result"); failed = true; }
+      if (!sessionKinds.includes("session_end")) { console.error("❌ FAIL: session missing session_end"); failed = true; }
+      if (sessionKinds.includes("session_start") && sessionKinds.includes("session_end")) {
+        console.log(`  Session kinds: ${[...new Set(sessionKinds)].join(", ")}`);
+      }
+    } else {
+      console.error("❌ FAIL: session file was not created");
+      failed = true;
+    }
+
+    // 9. Session can be loaded back
+    try {
+      const loaded = loadSession(sessionDir);
+      console.log(`✅ Session loaded: ${loaded.entries.length} entries, session_id=${loaded.metadata.session_id}`);
+    } catch (err) {
+      console.error(`❌ FAIL: session load failed: ${err}`);
+      failed = true;
+    }
+
+    // 10. Artifacts directory exists
+    const artifactsCheckDir = path.join(sessionDir, "artifacts");
+    if (fs.existsSync(artifactsCheckDir)) {
+      const artifactFiles = fs.readdirSync(artifactsCheckDir);
+      console.log(`✅ Artifacts directory exists (${artifactFiles.length} files)`);
+    } else {
+      console.error("❌ FAIL: artifacts directory was not created");
+      failed = true;
+    }
 
     // Kill any leftover python servers
     try {

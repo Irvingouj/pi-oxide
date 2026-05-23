@@ -3,3 +3,6 @@ node_modules/
 .DS_Store
 .claude/
 rust_out.wasm
+dist/
+test-results/
+pi-core/bindings/

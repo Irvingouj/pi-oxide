@@ -1,0 +1,24 @@
+/**
+ * Browser WASM loader — loads the wasm-bindgen --target web output.
+ *
+ * Provides the same raw API surface as Node's rawBinding.ts,
+ * plus the async init() required by the browser WASM target.
+ */
+
+import init, * as wasm from "/pkg/pi_host_web.js";
+
+let initialized = false;
+
+/** Initialize the WASM module. Must be called before any other function. */
+export async function ensureInit(): Promise<void> {
+  if (!initialized) {
+    await init();
+    initialized = true;
+  }
+}
+
+/** Raw WASM exports — same shape as the Node rawBinding. */
+export const raw = wasm;
+
+/** Drain Rust trace buffer. */
+export const drainTraceLog = wasm.drainTraceLog;

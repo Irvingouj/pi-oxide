@@ -19,11 +19,88 @@ use pi_core::{
     ProjectionInput, project as project_context,
 };
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use tracing::{debug, warn, info, error};
 
 thread_local! {
     static AGENT_SLOTS: RefCell<Vec<Option<Agent>>> = RefCell::new(Vec::new());
+    static TRACING_INIT: std::cell::Cell<bool> = std::cell::Cell::new(false);
 }
+
+fn init_tracing() {
+    TRACING_INIT.with(|init| {
+        if !init.get() {
+            let _ = tracing::subscriber::set_global_default(
+                ConsoleSubscriber
+            );
+            init.set(true);
+        }
+    });
+}
+
+/// A minimal tracing subscriber that stores trace messages in a thread-local
+/// buffer. The JS host can retrieve them via `drainTraceLog()`.
+#[derive(Debug)]
+struct ConsoleSubscriber;
+
+thread_local! {
+    static TRACE_BUF: RefCell<Vec<String>> = RefCell::new(Vec::new());
+}
+
+/// Drain accumulated trace log messages and return them as a JSON array.
+#[wasm_bindgen(js_name = "drainTraceLog")]
+pub fn drain_trace_log() -> String {
+    TRACE_BUF.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        let messages: Vec<&str> = buf.iter().map(|s| s.as_str()).collect();
+        let json = serde_json::to_string(&messages).unwrap_or_else(|_| "[]".to_string());
+        buf.clear();
+        json
+    })
+}
+
+impl tracing::Subscriber for ConsoleSubscriber {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.level() <= &tracing::Level::INFO
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::Id {
+        tracing::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::Id, _follows: &tracing::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let level = *event.metadata().level();
+        let mut fields = String::new();
+        let mut visitor = FieldVisitor(&mut fields);
+        event.record(&mut visitor);
+
+        let msg = format!("[pi-wasm {}] {}", level, fields);
+        TRACE_BUF.with(|buf| {
+            buf.borrow_mut().push(msg);
+        });
+    }
+
+    fn enter(&self, _span: &tracing::Id) {}
+    fn exit(&self, _span: &tracing::Id) {}
+}
+
+struct FieldVisitor<'a>(&'a mut String);
+
+impl tracing::field::Visit for FieldVisitor<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if !self.0.is_empty() {
+            self.0.push_str(" ");
+        }
+        self.0.push_str(field.name());
+        self.0.push_str("=");
+        write!(self.0, "{:?}", value).unwrap();
+    }
+}
+
+use std::fmt::Write;
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -220,96 +297,176 @@ fn with_agent<T>(handle: u32, op: impl FnOnce(&mut Agent) -> T) -> Result<T, Hos
 /// Create a new agent from an `AgentOptions` JSON string.
 /// Returns `{ ok: true, data: { handle } }` or an error envelope.
 #[wasm_bindgen(js_name = "createAgent")]
+
 pub fn create_agent(options_json: &str) -> String {
     console_error_panic_hook::set_once();
+    init_tracing();
 
+    info!("createAgent called");
     match parse_json::<AgentOptions>(options_json, "AgentOptions") {
         Ok(options) => {
-            debug!("creating wasm agent");
+            debug!(tools = options.tools.len(), "parsed AgentOptions, creating agent");
             let agent = Agent::new(options);
             let handle = put_agent(agent);
+            info!(handle, "agent created");
             ok_json(serde_json::json!({ "handle": handle }))
         }
-        Err(err) => error_json(&err),
+        Err(err) => {
+            error!(%err, "failed to parse AgentOptions");
+            error_json(&err)
+        }
     }
 }
 
 /// Start a new turn with a prompt.
 /// `prompt_json` can be a full `AgentMessage` or `{ "text": "..." }`.
 #[wasm_bindgen(js_name = "prompt")]
+
 pub fn prompt(handle: u32, prompt_json: &str) -> String {
     console_error_panic_hook::set_once();
+    info!(handle, "prompt called");
 
     let result = (|| {
         let prompt: AgentMessage =
             parse_json::<PromptRequest>(prompt_json, "PromptRequest")?.into();
-        with_agent(handle, |agent| agent.start_turn(prompt))
+        debug!("parsed prompt, calling start_turn");
+        let result = with_agent(handle, |agent| agent.start_turn(prompt));
+        if let Ok((ref events, ref actions)) = result {
+            debug!(events = events.len(), actions = actions.len(), "start_turn returned");
+            for action in actions {
+                info!(action_type = ?action, "action");
+            }
+        }
+        result
     })();
 
     match result {
-        Ok((events, actions)) => ok_json(StepOutput { events, actions }),
+        Ok((events, actions)) => {
+            let json = ok_json(StepOutput { events, actions });
+            debug!(output_len = json.len(), "prompt returning");
+            json
+        }
         Err(err) => error_json(&err),
     }
 }
 
 /// Feed a streaming LLM chunk.
 #[wasm_bindgen(js_name = "feedLlmChunk")]
+
 pub fn feed_llm_chunk(handle: u32, chunk_json: &str) -> String {
     console_error_panic_hook::set_once();
+    info!(handle, input_len = chunk_json.len(), "feedLlmChunk called");
 
     let result = (|| {
         let chunk: LlmChunk = parse_json(chunk_json, "LlmChunk")?;
-        with_agent(handle, |agent| agent.feed_llm_chunk(chunk))
+        debug!(chunk_kind = ?std::mem::discriminant(&chunk), "parsed LlmChunk");
+        let events = with_agent(handle, |agent| agent.feed_llm_chunk(chunk))?;
+        debug!(events = events.len(), "feed_llm_chunk returned");
+        Ok(events)
     })();
 
     match result {
-        Ok(events) => ok_json(EventsOutput { events }),
-        Err(err) => error_json(&err),
+        Ok(events) => {
+            let json = ok_json(EventsOutput { events });
+            debug!(output_len = json.len(), "feedLlmChunk returning");
+            json
+        }
+        Err(err) => {
+            error!(%err, "feedLlmChunk failed");
+            error_json(&err)
+        }
     }
 }
 
 /// Notify the agent that the LLM stream has finished.
 #[wasm_bindgen(js_name = "onLlmDone")]
+
 pub fn on_llm_done(handle: u32, result_json: &str) -> String {
     console_error_panic_hook::set_once();
+    info!(handle, input_len = result_json.len(), "onLlmDone called");
 
     let result = (|| {
         let result: LlmResult = parse_json(result_json, "LlmResult")?;
-        with_agent(handle, |agent| agent.on_llm_done(result))
+        match &result {
+            LlmResult::Ok(msg) => {
+                debug!(content_blocks = msg.content.len(), stop_reason = ?msg.stop_reason, "parsed LlmResult::Ok");
+                for (i, block) in msg.content.iter().enumerate() {
+                    debug!(block_idx = i, block_type = ?block, "content block");
+                }
+            }
+            LlmResult::Err { error, aborted } => {
+                warn!(?error, aborted, "parsed LlmResult::Err");
+            }
+        }
+        let (events, actions) = with_agent(handle, |agent| agent.on_llm_done(result))?;
+        debug!(events = events.len(), actions = actions.len(), "on_llm_done returned");
+        for action in &actions {
+            info!(action_type = ?action, "action");
+        }
+        Ok((events, actions))
     })();
 
     match result {
-        Ok((events, actions)) => ok_json(StepOutput { events, actions }),
-        Err(err) => error_json(&err),
+        Ok((events, actions)) => {
+            let json = ok_json(StepOutput { events, actions });
+            debug!(output_len = json.len(), "onLlmDone returning");
+            json
+        }
+        Err(err) => {
+            error!(%err, "onLlmDone failed");
+            error_json(&err)
+        }
     }
 }
 
 /// Notify the agent that a tool has finished executing.
 #[wasm_bindgen(js_name = "onToolDone")]
+
 pub fn on_tool_done(handle: u32, tool_call_id: &str, result_json: &str) -> String {
     console_error_panic_hook::set_once();
+    info!(handle, tool_call_id, input_len = result_json.len(), "onToolDone called");
 
     let result = (|| {
         let id = ToolCallId::new(tool_call_id);
         let result: Result<ToolResult, ToolError> =
             parse_json::<ToolDonePayload>(result_json, "ToolDonePayload")?.into();
-        with_agent(handle, |agent| agent.on_tool_done(id, result))
+        match &result {
+            Ok(tool_result) => debug!(content_blocks = tool_result.content.len(), "tool result OK"),
+            Err(e) => warn!(?e, "tool result ERR"),
+        }
+        let (events, actions) = with_agent(handle, |agent| agent.on_tool_done(id, result))?;
+        debug!(events = events.len(), actions = actions.len(), "on_tool_done returned");
+        for action in &actions {
+            info!(action_type = ?action, "action after tool_done");
+        }
+        Ok((events, actions))
     })();
 
     match result {
-        Ok((events, actions)) => ok_json(StepOutput { events, actions }),
-        Err(err) => error_json(&err),
+        Ok((events, actions)) => {
+            let json = ok_json(StepOutput { events, actions });
+            debug!(output_len = json.len(), "onToolDone returning");
+            json
+        }
+        Err(err) => {
+            error!(%err, "onToolDone failed");
+            error_json(&err)
+        }
     }
 }
 
 /// Notify the agent that a tool has started executing.
 #[wasm_bindgen(js_name = "onToolStarted")]
+
 pub fn on_tool_started(handle: u32, tool_call_id: &str) -> String {
     console_error_panic_hook::set_once();
+    info!(handle, tool_call_id, "onToolStarted called");
 
     let result = (|| {
         let id = ToolCallId::new(tool_call_id);
-        Ok(with_agent(handle, |agent| agent.on_tool_started(id))?)
+        let events = with_agent(handle, |agent| agent.on_tool_started(id))?;
+        debug!(events = events.len(), "on_tool_started returned");
+        Ok(events)
     })();
 
     match result {
@@ -442,16 +599,23 @@ pub fn destroy_agent(handle: u32) -> String {
 /// { "ok": true, "data": { "projected_messages": [...], "updated_state": {...}, "report": {...} } }
 /// ```
 #[wasm_bindgen(js_name = "projectContext")]
+
 pub fn project_context_export(input_json: &str) -> String {
     console_error_panic_hook::set_once();
+    info!(input_len = input_json.len(), "projectContext called");
 
     match parse_json::<ProjectionInput>(input_json, "ProjectionInput") {
         Ok(input) => {
-            debug!("projecting context");
+            debug!(msg_count = input.messages.len(), "parsed ProjectionInput, projecting");
             let output = project_context(input);
-            ok_json(output)
+            let json = ok_json(output);
+            debug!(output_len = json.len(), "projectContext returning");
+            json
         }
-        Err(err) => error_json(&err),
+        Err(err) => {
+            error!(%err, "projectContext parse failed");
+            error_json(&err)
+        }
     }
 }
 

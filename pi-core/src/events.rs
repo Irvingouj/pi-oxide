@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::message::{AgentMessage, ToolCall, ToolResultMessage};
 use crate::tool::ToolResult as ToolExecResult;
@@ -9,8 +10,9 @@ use crate::types::{SessionId, ToolArguments, ToolCallId, ToolName};
 // ---------------------------------------------------------------------------
 
 /// Which output stream a tool update chunk came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
 pub enum ToolOutputStream {
     Stdout,
     Stderr,
@@ -18,8 +20,9 @@ pub enum ToolOutputStream {
 }
 
 /// Reason a tool was cancelled.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type", rename_all = "snake_case")]
 pub enum CancelReason {
     UserRequested,
     Timeout,
@@ -28,7 +31,7 @@ pub enum CancelReason {
 }
 
 /// A streaming update from a running tool execution.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct ToolExecutionUpdate {
     pub tool_call_id: ToolCallId,
     pub stream: ToolOutputStream,
@@ -38,7 +41,7 @@ pub struct ToolExecutionUpdate {
 }
 
 /// Reference to a background job started by a tool.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct BackgroundJobRef {
     pub job_id: String,
     pub tool_call_id: ToolCallId,
@@ -50,8 +53,10 @@ pub struct BackgroundJobRef {
 // ---------------------------------------------------------------------------
 
 /// Actions that the core requests the host to perform.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type", rename_all = "snake_case")]
+#[ts(export)]
 pub enum AgentAction {
     StreamLlm {
         context: crate::context::LlmContext,
@@ -74,8 +79,10 @@ pub enum AgentAction {
 }
 
 /// Events emitted by the core to notify the host of state changes.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type", rename_all = "snake_case")]
+#[ts(export)]
 pub enum AgentEvent {
     AgentStart,
     AgentEnd {
@@ -100,6 +107,7 @@ pub enum AgentEvent {
         tool_call_id: ToolCallId,
         tool_name: ToolName,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(type = "object | undefined")]
         args: Option<ToolArguments>,
     },
     ToolExecutionUpdate {
@@ -129,8 +137,9 @@ pub enum AgentEvent {
 }
 
 /// A delta describing how a streaming assistant message changed.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(tag = "kind", rename_all = "snake_case")]
 pub enum ContentDelta {
     TextStart,
     TextDelta {
@@ -147,6 +156,7 @@ pub enum ContentDelta {
     },
     ToolCallDelta {
         tool_call_id: ToolCallId,
+        #[ts(type = "object")]
         delta: serde_json::Value,
     },
     ToolCallEnd {
@@ -155,8 +165,9 @@ pub enum ContentDelta {
 }
 
 /// Controls how queued messages are drained.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
 pub enum QueueMode {
     #[default]
     OneAtATime,
@@ -164,8 +175,9 @@ pub enum QueueMode {
 }
 
 /// Reasoning / thinking level for models that support it.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
 pub enum ThinkingLevel {
     #[default]
     Off,
@@ -177,8 +189,9 @@ pub enum ThinkingLevel {
 }
 
 /// What kind of input the core is waiting for.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
 pub enum WaitMode {
     Steering,
     FollowUp,

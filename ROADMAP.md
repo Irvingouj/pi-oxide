@@ -440,31 +440,42 @@ Verification:
 - Artifact references remain readable after reload.
 - Corrupt session data returns useful errors.
 
-## Milestone 8: Browser Host
+## Milestone 8: Browser Host Native Tools
 
-Goal: move the proven agent loop into a browser-capable host.
+Goal: prove a browser-capable host using browser-native tools, not local-machine coding tools.
+
+Detailed implementation prompt: [MILESTONE_8_BROWSER_HOST_NATIVE_TOOLS.md](./MILESTONE_8_BROWSER_HOST_NATIVE_TOOLS.md).
 
 Scope:
 
-- Browser workspace abstraction.
-- Browser artifact store via IndexedDB or OPFS.
-- Browser session persistence.
-- Minimal UI showing transcript, actions, tool calls/results, errors, and state.
-- Use File System Access API or a virtual workspace first.
-- Bash is unavailable unless backed by a safe remote/sandbox runner.
+- Browser runtime adapter around page APIs.
+- Browser-native tools:
+  - `browser_get_page`
+  - `browser_eval_js`
+  - `browser_query_selector`
+  - `browser_click`
+  - `browser_type`
+  - `browser_console`
+- Fake-DOM or adapter-driven tests without real network.
+- Rust WASM lifecycle remains the same.
+- Rust context projection remains the projection boundary.
 
 Non-goals:
 
+- No local `read/write/edit/bash` clone for browser.
+- No File System Access API or OPFS workspace in this milestone.
+- No browser persistence yet.
 - No marketing page.
 - No desktop app.
 - No hidden remote execution.
+- No bash unless backed by an explicit remote/sandbox runner.
 
 Verification:
 
-- User can load or create a small workspace.
-- Agent can inspect and modify files in the browser workspace.
-- Session can be reloaded.
-- UI reflects Rust actions/events and host tool results.
+- Browser tools can inspect and manipulate a fake/runtime DOM.
+- Fake LLM can drive the Rust agent loop through browser tools.
+- Context projection runs for browser tool results.
+- No browser APIs or assumptions are added to `pi-core`.
 
 ## Milestone 9: Manual Compaction and Long-Running Control
 

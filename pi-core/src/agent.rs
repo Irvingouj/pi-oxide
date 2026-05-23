@@ -1,3 +1,4 @@
+use ts_rs::TS;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -10,7 +11,8 @@ use crate::types::{SessionId, ToolCallId};
 use tracing::{debug, trace, warn};
 
 /// Public agent state.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct AgentState {
     pub system_prompt: String,
     pub model: Model,
@@ -26,7 +28,7 @@ pub struct AgentState {
 }
 
 /// Options for constructing an Agent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct AgentOptions {
     pub system_prompt: String,
     pub model: Model,
@@ -47,7 +49,7 @@ pub struct AgentOptions {
 }
 
 /// Internal phase of the agent state machine.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
     Idle,

@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::context_metadata::{ContextStrategy, ToolResultContext, fallback_strategy};
 use crate::message::{AgentMessage, Content, TextContent};
@@ -20,7 +21,7 @@ use crate::message::{AgentMessage, Content, TextContent};
 // ---------------------------------------------------------------------------
 
 /// Budget parameters for context projection.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct ContextProjectionBudget {
     pub max_tool_result_chars: usize,
     pub max_context_tokens: usize,
@@ -38,7 +39,7 @@ impl Default for ContextProjectionBudget {
 }
 
 /// A single replacement record: what was replaced, how, and where the full content lives.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct ContextReplacement {
     pub tool_call_id: String,
     pub tool_name: String,
@@ -49,13 +50,13 @@ pub struct ContextReplacement {
 }
 
 /// State carried across turns so projection decisions remain stable.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
 pub struct ContextProjectionState {
     pub replacements: BTreeMap<String, ContextReplacement>,
 }
 
 /// Report returned after projection, for host observability and artifact storage.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct ContextProjectionReport {
     pub estimated_tokens: usize,
     pub replacements: Vec<ContextReplacement>,
@@ -63,7 +64,7 @@ pub struct ContextProjectionReport {
 }
 
 /// Input to the projection engine.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct ProjectionInput {
     pub system_prompt: String,
     pub messages: Vec<AgentMessage>,
@@ -72,7 +73,7 @@ pub struct ProjectionInput {
 }
 
 /// Output of the projection engine.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct ProjectionOutput {
     pub projected_messages: Vec<AgentMessage>,
     pub updated_state: ContextProjectionState,

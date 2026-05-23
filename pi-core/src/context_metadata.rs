@@ -4,9 +4,10 @@
 //! based on structured data rather than guessing from raw text.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// What kind of content a tool result contains.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ContentKind {
     FileRead,
@@ -18,7 +19,7 @@ pub enum ContentKind {
 }
 
 /// Projection strategy for a single tool result.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum ContextStrategy {
     #[serde(rename = "keep_full")]
@@ -34,7 +35,7 @@ pub enum ContextStrategy {
 }
 
 /// Typed metadata that a host can attach to tool results for projection.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct ToolResultContext {
     pub content_kind: ContentKind,
     pub strategy: ContextStrategy,

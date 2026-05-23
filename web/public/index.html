@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pi-oxide — Browser Agent</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* --- Header --- */
+  #header {
+    background: #16213e;
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border-bottom: 1px solid #0f3460;
+    flex-shrink: 0;
+  }
+  #header h1 { font-size: 16px; color: #e94560; }
+  #header .status { font-size: 12px; color: #888; }
+  #api-key-input {
+    background: #0f3460;
+    border: 1px solid #533483;
+    color: #e0e0e0;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 13px;
+    width: 280px;
+  }
+  #api-key-input::placeholder { color: #666; }
+  #base-url-input, #model-input {
+    background: #0f3460;
+    border: 1px solid #533483;
+    color: #e0e0e0;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    width: 200px;
+  }
+  #model-input { width: 180px; }
+  #base-url-input::placeholder, #model-input::placeholder { color: #666; }
+
+  /* --- Main layout --- */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* --- Demo Area (left) --- */
+  #demo-area {
+    width: 50%;
+    padding: 24px;
+    overflow-y: auto;
+    border-right: 1px solid #0f3460;
+  }
+  #demo-area h2 { color: #e94560; margin-bottom: 12px; font-size: 18px; }
+
+  .demo-card {
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .demo-card h3 { color: #533483; margin-bottom: 8px; font-size: 14px; }
+
+  #counter-display {
+    font-size: 48px;
+    font-weight: bold;
+    text-align: center;
+    color: #e94560;
+    margin: 12px 0;
+  }
+  #counter-btn {
+    background: #533483;
+    color: white;
+    border: none;
+    padding: 8px 24px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    display: block;
+    margin: 0 auto;
+  }
+  #counter-btn:hover { background: #e94560; }
+
+  .demo-form label { display: block; font-size: 13px; color: #888; margin-top: 8px; }
+  .demo-form input {
+    width: 100%;
+    padding: 6px 10px;
+    margin-top: 4px;
+    background: #0f3460;
+    border: 1px solid #533483;
+    color: #e0e0e0;
+    border-radius: 4px;
+    font-size: 14px;
+  }
+  .demo-form button {
+    margin-top: 12px;
+    background: #533483;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .demo-form button:hover { background: #e94560; }
+
+  #demo-output {
+    background: #0a0a1a;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 8px;
+    font-family: monospace;
+    font-size: 12px;
+    max-height: 120px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    color: #aaa;
+  }
+
+  /* --- Chat Area (right) --- */
+  #chat-area {
+    width: 50%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  #chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+
+  .msg {
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+    max-width: 90%;
+  }
+  .msg-user {
+    background: #0f3460;
+    margin-left: auto;
+    border-bottom-right-radius: 2px;
+  }
+  .msg-assistant {
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-bottom-left-radius: 2px;
+  }
+  .msg-tool {
+    background: #1a0a2e;
+    border: 1px solid #533483;
+    font-size: 12px;
+    font-family: monospace;
+    border-bottom-left-radius: 2px;
+  }
+  .msg-tool .tool-name { color: #e94560; font-weight: bold; }
+  .msg-tool .tool-result { color: #53c285; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+  .msg-error {
+    background: #2e0a0a;
+    border: 1px solid #e94560;
+    color: #e94560;
+  }
+  .msg-loading {
+    background: #16213e;
+    color: #888;
+    font-style: italic;
+  }
+
+  /* --- Input bar --- */
+  #input-bar {
+    padding: 12px 16px;
+    background: #16213e;
+    border-top: 1px solid #0f3460;
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  #user-input {
+    flex: 1;
+    background: #0f3460;
+    border: 1px solid #533483;
+    color: #e0e0e0;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 14px;
+    resize: none;
+  }
+  #user-input::placeholder { color: #666; }
+  #send-btn {
+    background: #e94560;
+    color: white;
+    border: none;
+    padding: 8px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  #send-btn:hover { background: #c73850; }
+  #send-btn:disabled { background: #555; cursor: not-allowed; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>pi-oxide</h1>
+  <span class="status" id="wasm-status">Loading WASM...</span>
+  <input type="password" id="api-key-input" placeholder="API Key (e.g. fpk_...)" />
+  <input type="text" id="base-url-input" placeholder="Base URL (e.g. https://api.fireworks.ai/inference)" value="" />
+  <input type="text" id="model-input" placeholder="Model (e.g. claude-sonnet-4-20250514)" value="" />
+</div>
+
+<div id="main">
+  <!-- Demo area: the page the agent can interact with -->
+  <div id="demo-area">
+    <h2>Demo Page</h2>
+
+    <div class="demo-card">
+      <h3>Counter</h3>
+      <div id="counter-display">0</div>
+      <button id="counter-btn">Click me</button>
+    </div>
+
+    <div class="demo-card">
+      <h3>Contact Form</h3>
+      <div class="demo-form">
+        <label>Name</label>
+        <input type="text" id="demo-name" placeholder="Enter your name" />
+        <label>Email</label>
+        <input type="email" id="demo-email" placeholder="Enter your email" />
+        <button id="demo-submit">Submit</button>
+      </div>
+    </div>
+
+    <div class="demo-card">
+      <h3>Todo List</h3>
+      <ul id="demo-todo">
+        <li>Build browser agent</li>
+        <li>Test with real LLM</li>
+        <li>Ship it</li>
+      </ul>
+      <input type="text" id="todo-input" placeholder="Add a todo..." />
+      <button id="todo-add">Add</button>
+    </div>
+
+    <div class="demo-card">
+      <h3>Console Output</h3>
+      <div id="demo-output">Ready.</div>
+    </div>
+  </div>
+
+  <!-- Chat area -->
+  <div id="chat-area">
+    <div id="chat-messages"></div>
+    <div id="input-bar">
+      <textarea id="user-input" rows="2" placeholder="Ask the agent to inspect or interact with this page..."></textarea>
+      <button id="send-btn" disabled>Send</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { bootstrap } from "../src/browser/app.ts";
+  import { drainTraceLog } from "../src/browser/wasm.ts";
+
+  // Periodically flush Rust tracing to browser console
+  setInterval(() => {
+    try {
+      const msgs = JSON.parse(drainTraceLog());
+      for (const m of msgs) console.log(m);
+    } catch {}
+  }, 200);
+
+  const { sendPrompt } = await bootstrap({
+    chatContainer: document.getElementById("chat-messages"),
+    userInput: document.getElementById("user-input"),
+    sendBtn: document.getElementById("send-btn"),
+    statusEl: document.getElementById("wasm-status"),
+  });
+
+  // Demo area event handlers (kept inline — trivial DOM wiring)
+  let counter = 0;
+  const counterDisplay = document.getElementById("counter-display");
+  document.getElementById("counter-btn").addEventListener("click", () => {
+    counter++;
+    counterDisplay.textContent = counter;
+    console.log("Counter:", counter);
+  });
+
+  document.getElementById("demo-submit").addEventListener("click", () => {
+    const name = document.getElementById("demo-name").value;
+    const email = document.getElementById("demo-email").value;
+    document.getElementById("demo-output").textContent += `\nSubmitted: ${name} (${email})`;
+    console.log("Form submitted:", { name, email });
+  });
+
+  document.getElementById("todo-add").addEventListener("click", () => {
+    const input = document.getElementById("todo-input");
+    const text = input.value.trim();
+    if (!text) return;
+    const li = document.createElement("li");
+    li.textContent = text;
+    document.getElementById("demo-todo").appendChild(li);
+    input.value = "";
+    console.log("Todo added:", text);
+  });
+
+  // Chat input wiring
+  const sendBtn = document.getElementById("send-btn");
+  const userInput = document.getElementById("user-input");
+  sendBtn.addEventListener("click", () => {
+    const text = userInput.value.trim();
+    if (!text) return;
+    userInput.value = "";
+    sendPrompt(text);
+  });
+  userInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendBtn.click();
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+export function __console_log(s) { console.log(s); } export function __console_warn(s) { console.warn(s); } export function __console_error(s) { console.error(s); }

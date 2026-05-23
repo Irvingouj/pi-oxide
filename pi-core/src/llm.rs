@@ -1,10 +1,12 @@
+use ts_rs::TS;
 use serde::{Deserialize, Serialize};
 
 use crate::message::{AssistantMessage, StopReason};
 use crate::types::{ApiName, ModelId, ModelName, ProviderName, ToolCallId};
 
 /// Describes a concrete LLM model and its provider.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct Model {
     pub id: ModelId,
     pub name: ModelName,
@@ -22,7 +24,7 @@ pub struct Model {
 }
 
 /// Capabilities advertised by a model.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS, Default)]
 pub struct ModelCapabilities {
     pub vision: bool,
     pub json_mode: bool,
@@ -31,7 +33,7 @@ pub struct ModelCapabilities {
 }
 
 /// Per-token cost estimate.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS, Default)]
 pub struct ModelCost {
     pub input: f64,
     pub output: f64,
@@ -40,7 +42,7 @@ pub struct ModelCost {
 }
 
 /// Supported LLM providers.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelProvider {
     OpenAi,
@@ -51,6 +53,8 @@ pub enum ModelProvider {
 }
 
 /// A chunk from an LLM streaming response.
+/// Note: Not exported to TS — uses serde(flatten) which ts-rs can't handle,
+/// and this type is only used internally by the host-side streaming pipeline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LlmChunk {
@@ -75,7 +79,7 @@ pub enum LlmChunk {
 }
 
 /// Final result of an LLM stream.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub enum LlmResult {
     Ok(AssistantMessage),
     Err { error: LlmError, aborted: bool },
@@ -104,11 +108,12 @@ impl LlmResult {
 }
 
 /// Error from the LLM provider.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, thiserror::Error)]
 #[error("llm error: {message}")]
 pub struct LlmError {
     pub code: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(type = "object | undefined")]
     pub details: Option<serde_json::Value>,
 }

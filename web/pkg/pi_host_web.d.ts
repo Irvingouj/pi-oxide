@@ -33,6 +33,26 @@ export function onLlmDone(handle: number, result_json: string): string;
 export function onToolDone(handle: number, tool_call_id: string, result_json: string): string;
 
 /**
+ * Project context: run the Rust context projection engine.
+ *
+ * Input JSON must match `ProjectionInput`:
+ * ```json
+ * {
+ *   "system_prompt": "...",
+ *   "messages": [...],
+ *   "budget": { "max_tool_result_chars": 50000, "max_context_tokens": 100000, "default_preview_chars": 2000 },
+ *   "state": { "replacements": {} }
+ * }
+ * ```
+ *
+ * Returns:
+ * ```json
+ * { "ok": true, "data": { "projected_messages": [...], "updated_state": {...}, "report": {...} } }
+ * ```
+ */
+export function projectContext(input_json: string): string;
+
+/**
  * Start a new turn with a prompt.
  * `prompt_json` can be a full `AgentMessage` or `{ "text": "..." }`.
  */

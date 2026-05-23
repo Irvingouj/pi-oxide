@@ -133,6 +133,42 @@ function onToolDone(handle, tool_call_id, result_json) {
 exports.onToolDone = onToolDone;
 
 /**
+ * Project context: run the Rust context projection engine.
+ *
+ * Input JSON must match `ProjectionInput`:
+ * ```json
+ * {
+ *   "system_prompt": "...",
+ *   "messages": [...],
+ *   "budget": { "max_tool_result_chars": 50000, "max_context_tokens": 100000, "default_preview_chars": 2000 },
+ *   "state": { "replacements": {} }
+ * }
+ * ```
+ *
+ * Returns:
+ * ```json
+ * { "ok": true, "data": { "projected_messages": [...], "updated_state": {...}, "report": {...} } }
+ * ```
+ * @param {string} input_json
+ * @returns {string}
+ */
+function projectContext(input_json) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(input_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.projectContext(ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+exports.projectContext = projectContext;
+
+/**
  * Start a new turn with a prompt.
  * `prompt_json` can be a full `AgentMessage` or `{ "text": "..." }`.
  * @param {number} handle

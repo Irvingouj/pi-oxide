@@ -15,6 +15,7 @@ use wasm_bindgen::prelude::*;
 use pi_core::{
     Agent, AgentAction, AgentEvent, AgentMessage, AgentOptions, AgentState, LlmChunk, LlmResult,
     ToolCallId, ToolError, ToolResult,
+    ProjectionInput, project as project_context,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -373,6 +374,36 @@ pub fn destroy_agent(handle: u32) -> String {
     }
 }
 
+/// Project context: run the Rust context projection engine.
+///
+/// Input JSON must match `ProjectionInput`:
+/// ```json
+/// {
+///   "system_prompt": "...",
+///   "messages": [...],
+///   "budget": { "max_tool_result_chars": 50000, "max_context_tokens": 100000, "default_preview_chars": 2000 },
+///   "state": { "replacements": {} }
+/// }
+/// ```
+///
+/// Returns:
+/// ```json
+/// { "ok": true, "data": { "projected_messages": [...], "updated_state": {...}, "report": {...} } }
+/// ```
+#[wasm_bindgen(js_name = "projectContext")]
+pub fn project_context_export(input_json: &str) -> String {
+    console_error_panic_hook::set_once();
+
+    match parse_json::<ProjectionInput>(input_json, "ProjectionInput") {
+        Ok(input) => {
+            debug!("projecting context");
+            let output = project_context(input);
+            ok_json(output)
+        }
+        Err(err) => error_json(&err),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -538,5 +569,62 @@ mod tests {
 
         let parsed: ToolDonePayload = serde_json::from_str(payload).unwrap();
         assert!(Result::<ToolResult, ToolError>::from(parsed).is_ok());
+    }
+
+    // --- projectContext tests ---
+
+    #[test]
+    fn project_context_returns_ok_with_report() {
+        let input = r#"{
+            "system_prompt": "You are helpful.",
+            "messages": [{"role":"user","content":[{"type":"text","text":"hello"}],"timestamp":1}],
+            "budget": {"max_tool_result_chars":50000,"max_context_tokens":100000,"default_preview_chars":2000},
+            "state": {"replacements":{}}
+        }"#;
+
+        let resp = parse_envelope(&project_context_export(input));
+        assert_eq!(resp["ok"], true);
+        assert!(resp["data"]["projected_messages"].is_array());
+        assert!(resp["data"]["updated_state"].is_object());
+        assert!(resp["data"]["report"]["estimated_tokens"].is_number());
+        assert_eq!(resp["data"]["report"]["replacements"].as_array().unwrap().len(), 0);
+        assert_eq!(resp["data"]["report"]["dropped_messages"], 0);
+    }
+
+    #[test]
+    fn project_context_replaces_oversized_tool_result() {
+        let big_text = "A".repeat(5000);
+        let input = serde_json::json!({
+            "system_prompt": "test",
+            "messages": [
+                {"role":"user","content":[{"type":"text","text":"run"}],"timestamp":1},
+                {"role":"assistant","content":[{"type":"tool_call","id":"tc-1","name":"read","arguments":{}}],"api":"test","provider":"test","model":"test","stop_reason":"tool_use","timestamp":1,"usage":{"input":0,"output":0,"cache_read":0,"cache_write":0,"total_tokens":0}},
+                {"role":"tool_result","tool_call_id":"tc-1","tool_name":"read","content":[{"type":"text","text":big_text}],"details":null,"is_error":false,"timestamp":1}
+            ],
+            "budget": {"max_tool_result_chars":1000,"max_context_tokens":100000,"default_preview_chars":200},
+            "state": {"replacements":{}}
+        });
+
+        let resp_str = project_context_export(&serde_json::to_string(&input).unwrap());
+        let resp = parse_envelope(&resp_str);
+        assert_eq!(resp["ok"], true);
+        let report = &resp["data"]["report"];
+        assert_eq!(report["replacements"].as_array().unwrap().len(), 1);
+        assert_eq!(report["replacements"][0]["artifact_id"], "tool-result-tc-1");
+        assert_eq!(report["replacements"][0]["tool_name"], "read");
+
+        // Projected message should contain preview marker
+        let msgs = resp["data"]["projected_messages"].as_array().unwrap();
+        let tool_msg = msgs.iter().find(|m| m["role"] == "tool_result").unwrap();
+        let text = tool_msg["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("<context-artifact"));
+        assert!(text.contains("head"));
+    }
+
+    #[test]
+    fn project_context_returns_error_for_invalid_input() {
+        let resp = parse_envelope(&project_context_export("{bad json}"));
+        assert_eq!(resp["ok"], false);
+        assert_eq!(resp["error"]["code"], "invalid_json");
     }
 }

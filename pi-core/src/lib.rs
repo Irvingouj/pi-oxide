@@ -6,6 +6,8 @@
 
 pub mod agent;
 pub mod context;
+pub mod context_metadata;
+pub mod context_projection;
 pub mod events;
 pub mod llm;
 pub mod message;
@@ -16,6 +18,12 @@ pub mod types;
 
 pub use agent::{Agent, AgentOptions, AgentState, Phase};
 pub use context::{AgentContext, LlmContext};
+pub use context_metadata::{ContentKind, ContextStrategy, ToolResultContext, fallback_strategy};
+pub use context_projection::{
+    ContextProjectionBudget, ContextProjectionReport, ContextProjectionState,
+    ContextReplacement, ProjectionInput, ProjectionOutput, estimate_tokens,
+    estimate_tokens_for_text, project,
+};
 pub use events::{AgentAction, AgentEvent, ContentDelta, QueueMode, ThinkingLevel, WaitMode};
 pub use llm::{LlmChunk, LlmError, LlmResult, Model, ModelCapabilities, ModelCost, ModelProvider};
 pub use message::StopReason;

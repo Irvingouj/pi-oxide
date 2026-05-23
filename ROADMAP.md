@@ -9,7 +9,8 @@ The product direction is still a browser-capable coding agent, but the next prov
 ```text
 user prompt
 -> Rust core emits AgentAction
--> JS host prepares context and calls provider/tools
+-> Rust projection prepares bounded provider context
+-> JS host calls provider/tools and owns runtime I/O
 -> JS host feeds typed results back into Rust
 -> Rust core updates state and emits events/actions
 -> repeat until Finished or WaitForInput
@@ -27,8 +28,8 @@ This plan follows Anthropic's "Building effective agents":
 
 For this repository, that means:
 
-- Rust owns the synchronous agent state machine, typed wire/domain contracts, and coding-agent invariants.
-- JS hosts own runtime behavior: provider calls, filesystem/browser storage, shell/browser capabilities, permissions, context projection, and UI.
+- Rust owns the synchronous agent state machine, typed wire/domain contracts, coding-agent invariants, and portable context-projection policy.
+- JS hosts own runtime behavior: provider calls, filesystem/browser storage, shell/browser capabilities, permissions, artifact persistence, and UI.
 - The Rust core must not assume Tokio, DOM, Node, browser APIs, filesystem, shell, or network.
 
 See also: [AGENT_RUNTIME_MEMO.md](./AGENT_RUNTIME_MEMO.md).
@@ -52,14 +53,14 @@ Completed proof points:
 - JS fake loop can handle streaming, tool calls, tool errors, follow-ups, and steering.
 - Anthropic conversion handles grouped tool results.
 - In-memory tools support `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`.
+- Local host tools support real `read`, `write`, `edit`, and explicit-policy `bash`.
 - Real LLM smoke script exists, but only runs when `ANTHROPIC_API_KEY` is set.
 
 Current gap:
 
 - The project does not yet have a functional local-machine coding agent.
-- The project does not yet have real filesystem-backed tools.
-- The project does not yet have real constrained bash.
-- The project does not yet have context projection/tool-result budgeting.
+- The project has JS-side context projection work in progress, but the target architecture is Rust-side portable context projection.
+- Tool definitions/results do not yet carry enough typed context metadata for smart trimming.
 - The project does not yet have browser UI/storage.
 
 ## Non-Goals
@@ -78,6 +79,7 @@ Current gap:
 Rust crates should provide:
 
 - `pi-core`: runtime-neutral state machine.
+- Runtime-neutral context projection over typed messages and tool-result metadata.
 - `pi-bindings`: stable native ABI.
 - `pi-host-web`: WASM-facing wrapper around core operations.
 - Future Rust coding-agent domain crate only if shared typed contracts outgrow `pi-core`.
@@ -89,6 +91,8 @@ Rust must not:
 - Execute shell commands.
 - Assume browser, Node, Tokio, OS-specific APIs, or UI.
 - Accept unparsed stringly data past the Rust boundary.
+- Store artifacts directly in core.
+- Format messages for a specific LLM provider.
 
 ### JS Host Runtime
 
@@ -98,8 +102,8 @@ JS hosts should provide:
 - Provider adapter.
 - Tool executor registry.
 - Permission/safety policy.
-- Context projection before provider calls.
 - Artifact/session storage.
+- Binding from Rust context projection into provider calls.
 - Trace/log sink.
 
 There will be two JS host targets:
@@ -229,7 +233,7 @@ cd web && ANTHROPIC_API_KEY=... npm run smoke:real-llm
 
 Goal: implement real host-side coding tools for a normal computer.
 
-This is now the next implementation target.
+Status: complete as local JS host tools.
 
 Scope:
 
@@ -272,22 +276,25 @@ Suggested files:
 - `web/src/local/localToolRegistry.ts`
 - `web/test/localTools.test.ts`
 
-## Milestone 5: Minimal Context Projection
+## Milestone 5: Rust Context Projection Engine
 
-Goal: prepare bounded provider context without mutating Rust's canonical transcript.
+Goal: implement portable Rust-side context projection without mutating the canonical transcript.
 
 Scope:
 
-- Add host-side context preparation before provider calls.
-- Estimate tokens with chars/4 plus real assistant usage where available.
-- Apply deterministic tool-result budgeting:
-  - small tool results remain inline.
-  - large `read` results keep head preview.
-  - large `bash` results keep tail preview.
-  - full content is stored in an artifact store.
-  - replacement decisions remain stable across turns.
-- Preserve tool-call/tool-result pairing.
-- Normalize provider-bound messages enough to avoid Anthropic ordering errors.
+- Add typed context metadata to tool definitions and/or tool results.
+- Add a Rust projection engine over `LlmContext` or a provider-neutral request shape.
+- Estimate tokens with a deterministic chars/4 heuristic.
+- Apply deterministic tool-result strategies:
+  - `read` keeps a head preview.
+  - `bash` keeps a tail preview.
+  - `edit` and diffs stay full unless truly oversized.
+  - `grep`/`find`/`ls` keep bounded head previews.
+  - generic text defaults to a conservative head preview.
+- Return a projection report containing replacement IDs, original sizes, preview sizes, and strategy used.
+- Preserve tool-call/tool-result pairing when trimming old history.
+- Expose the projection operation through the WASM binding.
+- Wire JS `RealLlm` through the Rust projection before provider conversion.
 
 Non-goals:
 
@@ -295,22 +302,27 @@ Non-goals:
 - No automatic compaction.
 - No prompt-cache engineering beyond deterministic output.
 - No browser IndexedDB/OPFS store yet.
+- No provider-specific formatting inside Rust.
+- No artifact filesystem/IndexedDB writes inside Rust core.
 
 Verification:
 
 - Small tool results pass through unchanged.
 - Large tool results are replaced with deterministic previews.
-- Full outputs are available through an artifact store.
+- Projection reports enough metadata for the host to store full outputs as artifacts later.
 - Repeated preparation of the same transcript produces byte-identical replacements.
 - Trimming does not split an assistant tool call from its tool result.
+- Rust unit tests cover strategy selection and trimming invariants.
+- WASM tests prove JS can call the Rust projection API.
 - Anthropic adapter accepts prepared messages.
 
 Suggested files:
 
-- `web/src/context/tokenEstimate.ts`
-- `web/src/context/artifactStore.ts`
-- `web/src/context/toolResultBudget.ts`
-- `web/src/context/prepareContext.ts`
+- `pi-core/src/context_projection.rs`
+- `pi-core/src/context_strategy.rs`
+- `pi-core/src/context_metadata.rs`
+- `pi-host-web/src/lib.rs`
+- `web/src/context/rustProjection.ts`
 - `web/test/contextProjection.test.ts`
 
 ## Milestone 6: Real Local Coding-Agent Smoke
@@ -354,7 +366,7 @@ Scope:
 - Session metadata: cwd, model, created time.
 - Entries: messages, tool calls/results, artifacts, model changes, future compaction entries.
 - Reload a session into `AgentOptions.messages`.
-- Store large tool outputs as artifacts.
+- Store large tool outputs as artifacts using IDs emitted by Rust projection reports.
 
 Non-goals:
 
@@ -460,13 +472,14 @@ When implementing a milestone:
 
 ## Definition of Done for the Next Step
 
-The next step is Milestone 4.
+The next step is Milestone 5.
 
-Milestone 4 is done when:
+Milestone 5 is done when:
 
-- real local `read/write/edit/bash` tools exist behind a host registry.
-- tests prove they operate on real temporary files/commands.
-- path traversal and outside-cwd access fail.
-- bash has timeout and bounded output.
-- no runtime-specific assumptions are added to `pi-core`.
+- Rust owns the provider-neutral projection policy.
+- tool-result metadata and strategy types are concrete Rust domain structs.
+- projection can trim `read` by head and `bash` by tail.
+- projection can drop old whole turns without orphaning tool results.
+- WASM exposes projection through typed JSON envelopes.
+- JS `RealLlm` uses the Rust projection path.
 - existing `cargo test --workspace` and `cd web && npm test` stay green.

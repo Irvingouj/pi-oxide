@@ -7,6 +7,7 @@ export const feedLlmChunk: (a: number, b: number, c: number) => [number, number]
 export const followUp: (a: number, b: number, c: number) => [number, number];
 export const onLlmDone: (a: number, b: number, c: number) => [number, number];
 export const onToolDone: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+export const projectContext: (a: number, b: number) => [number, number];
 export const prompt: (a: number, b: number, c: number) => [number, number];
 export const reset: (a: number) => [number, number];
 export const state: (a: number) => [number, number];

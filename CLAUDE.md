@@ -16,25 +16,31 @@ Project and behavioral guidelines for agents working in this repository.
    - Runtime-specific behavior belongs in host crates or bindings.
 
 3. First-level platform support is web.
-   - The next host is a web-based, JavaScript-driven coding agent.
-   - Rust owns the typed agent core and coding-agent domain contracts.
-   - JavaScript owns browser/runtime integration: model calls, storage, UI, and tool execution.
+   - The product direction is a web-based coding agent, but the proving ground is a local-machine host first.
+   - Rust owns the typed agent core, coding-agent domain contracts, and portable context-projection policy.
+   - JavaScript owns runtime integration: model calls, filesystem/browser storage, UI, shell execution, and tool execution.
    - Desktop is not a current milestone. Do not introduce desktop-specific assumptions to justify core APIs.
 
-4. Errors must be useful.
+4. Context management policy belongs in Rust when it is runtime-neutral.
+   - Tool results may be text in/text out, but they must cross Rust as typed messages with typed metadata.
+   - Use concrete context strategies such as keep-full, head, tail, head-tail, and drop-if-old.
+   - Hosts may store artifacts and perform I/O, but the trimming/projection decision should be portable and testable in Rust.
+   - Provider-specific formatting stays outside core.
+
+5. Errors must be useful.
    - Use `thiserror` for concrete error types.
    - Preserve actionable context in errors.
    - Avoid opaque string-only failures once data has crossed into Rust.
 
-5. Add tracing where it helps understanding and diagnosis.
+6. Add tracing where it helps understanding and diagnosis.
    - Trace state transitions, host actions, boundary parsing, and recoverable failures.
    - Do not add noisy logs for obvious local assignments.
 
-6. Abstraction is encouraged when it clarifies the domain.
+7. Abstraction is encouraged when it clarifies the domain.
    - Use abstractions to protect boundaries, encode invariants, and remove real duplication.
    - Avoid abstractions that only make single-use code more indirect.
 
-7. Simplicity and elegance over spaghetti code.
+8. Simplicity and elegance over spaghetti code.
    - Prefer small, coherent modules and explicit data flow.
    - Keep the core state machine readable.
    - If a change makes the control flow hard to reason about, simplify before moving on.

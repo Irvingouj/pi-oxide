@@ -37,11 +37,9 @@ Already done:
 
 Still missing:
 
-- A real local host that executes tools against the actual machine.
-- Real filesystem-backed `read/write/edit`.
-- Real constrained bash execution.
-- Permission/safety boundaries for filesystem and bash.
-- Context management before provider calls.
+- A full real-LLM local coding-agent smoke that uses the real local tools end to end.
+- Rust-owned context management before provider calls.
+- Typed tool-result metadata for smart projection strategies.
 - Persistent sessions/artifacts for tool outputs and compaction.
 
 ## What PI Does
@@ -277,16 +275,17 @@ Safety:
 - allow a simple non-interactive mode for tests
 - log every tool call with args and result summary
 
-### Milestone B: Context Projection Layer
+### Milestone B: Rust Context Projection Layer
 
-Add host-side context preparation before provider calls.
+Add Rust-side context preparation before provider calls.
 
 Initial modules:
 
-- `context/tokenEstimate.ts`
-- `context/toolResultBudget.ts`
-- `context/prepareContext.ts`
-- `context/artifactStore.ts`
+- `pi-core/src/context_projection.rs`
+- `pi-core/src/context_strategy.rs`
+- `pi-core/src/context_metadata.rs`
+- `pi-host-web` projection export
+- JS wrapper only for calling WASM and storing artifacts
 
 Behavior:
 
@@ -294,15 +293,17 @@ Behavior:
 - keep canonical Rust transcript unchanged
 - produce provider projection from `LlmContext`
 - replace oversized tool results with deterministic previews
-- store full content in an artifact store
+- return stable artifact IDs and replacement reports
 - preserve exact replacement decisions across turns
-- merge consecutive tool results/user messages before Anthropic call
+- leave provider-specific message merging to the provider adapter
 
 First artifact store:
 
 - local filesystem for normal-computer host
 - in-memory for tests
 - later IndexedDB/OPFS for browser
+
+The artifact store remains host-owned because it is runtime I/O. The decision to replace, keep, head-trim, tail-trim, or drop belongs in Rust because it is portable agent behavior.
 
 ### Milestone C: Minimal Session Persistence
 
@@ -336,6 +337,9 @@ Rust core should own:
 - state machine phase
 - action/event protocol
 - tool call/result correlation
+- context projection policy
+- typed tool-result metadata
+- deterministic token estimation and replacement reports
 - session/storage traits only if runtime-neutral
 
 JS local host should own:
@@ -344,7 +348,6 @@ JS local host should own:
 - shell
 - permission policy
 - provider calls
-- context projection
 - artifact storage
 - session persistence
 
@@ -362,7 +365,7 @@ We need to choose the next implementation path:
 2. Keep it under `web/src` for speed, but name modules `local*`.
 3. Create a Rust native host instead of JS for local machine.
 
-Recommendation: use JS local host first.
+Recommendation: use JS local host first, but move portable context projection into Rust.
 
 Reason:
 
@@ -371,6 +374,7 @@ Reason:
 - filesystem/bash tooling is straightforward in Node
 - browser host can share most provider/context logic later
 - Rust core stays clean
+- context policy remains portable across local and browser hosts
 
 ## Minimal Acceptance Test
 
@@ -411,7 +415,7 @@ to:
 ```text
 Rust core + JS host architecture
 1. functional local-machine coding agent
-2. context-managed local sessions
+2. Rust-projected, context-managed local sessions
 3. browser host using the same protocol and projection ideas
 ```
 

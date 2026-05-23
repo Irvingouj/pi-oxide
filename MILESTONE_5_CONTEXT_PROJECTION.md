@@ -1,192 +1,176 @@
-# Milestone 5: Minimal Context Projection
+# Milestone 5: Rust Context Projection Engine
 
-Implement this milestone next, after Milestone 4 local tools.
+Implement this milestone next.
 
 ## Read First
 
 - `CLAUDE.md`
 - `ROADMAP.md`
 - `AGENT_RUNTIME_MEMO.md`
+- `CONTEXT_PROJECTION_SPEC.md`
+- `pi-core/src/message.rs`
+- `pi-core/src/context.rs`
+- `pi-core/src/tool.rs`
+- `pi-host-web/src/lib.rs`
 - `web/src/providers/realLlm.ts`
 - `web/src/providers/anthropic.ts`
 - `web/src/providers/types.ts`
-- `web/src/local/*`
-- `web/src/tools/*`
+- future wrapper file, if needed: `web/src/context/rustProjection.ts`
 
 ## Goal
 
-Prepare bounded provider context before LLM calls, without mutating Rust's canonical transcript.
+Move context-management policy into Rust as a runtime-neutral projection engine.
 
-The Rust core should keep the true typed message history. The JS host should create a provider-bound projection each turn:
+The host still owns model calls, files, shell, artifact storage, and provider formatting. Rust owns the deterministic decision about what context is sent to the model.
 
 ```text
-Rust LlmContext
--> prepareContext()
--> provider-ready LlmRequest
--> Anthropic adapter
+canonical Rust LlmContext
+-> Rust project_context()
+-> provider-neutral projected LlmContext + projection report
+-> JS provider adapter
+-> Anthropic request
 ```
 
-This milestone is about context shape and tool-result budgeting. It is not about real local coding smoke yet.
+This milestone is not about LLM summarization. It is about typed metadata, deterministic tool-result budgeting, and safe recent-window trimming.
+
+## Why Rust
+
+Tools are effectively text in/text out for the model, but the text has meaning:
+
+- `read` output should keep the head.
+- `bash` output should keep the tail.
+- `edit` output should preserve the diff.
+- `grep`/`find`/`ls` should keep bounded result previews.
+
+That policy is portable agent behavior, not a browser or Node implementation detail. Therefore it belongs in Rust. The host may store full artifacts later, but Rust should emit stable artifact IDs and replacement reports.
 
 ## Constraints
 
-- Do not change `pi-core`.
+- Keep `pi-core` runtime-neutral.
+- No Tokio, filesystem, shell, browser API, HTTP, or provider assumptions in `pi-core`.
 - Do not add UI.
-- Do not add browser APIs.
 - Do not implement summarizer compaction.
 - Do not run real network smoke unless explicitly asked.
-- Keep runtime-specific storage in JS/TS host code.
-- Keep provider adapter changes minimal.
-- Preserve existing tests.
 - Do not commit.
+- Preserve existing JS context projection tests while migrating the policy boundary.
+- Do not restore the old JS-side projection policy. JS may only add a thin wrapper that calls the Rust/WASM projection API.
 
-## Suggested Files
+## Required Rust Concepts
 
-- `web/src/context/tokenEstimate.ts`
-- `web/src/context/artifactStore.ts`
-- `web/src/context/toolResultBudget.ts`
-- `web/src/context/prepareContext.ts`
-- `web/test/contextProjection.test.ts`
+Add concrete typed strategy/metadata types. Exact names may vary, but the domain should be equivalent to:
 
-Small edits may be needed in:
+```rust
+pub enum ContextStrategy {
+    KeepFull,
+    Head { max_chars: usize },
+    Tail { max_chars: usize },
+    HeadTail { head_chars: usize, tail_chars: usize },
+    DropIfOld,
+}
 
-- `web/src/providers/realLlm.ts`
-- `web/src/providers/types.ts`
+pub enum ContentKind {
+    FileRead,
+    CommandOutput,
+    Diff,
+    SearchResults,
+    DirectoryListing,
+    GenericText,
+}
 
-## Required Concepts
+pub struct ToolResultContext {
+    pub content_kind: ContentKind,
+    pub strategy: ContextStrategy,
+    pub original_chars: usize,
+    pub truncated_by_tool: bool,
+    pub path: Option<String>,
+    pub exit_code: Option<i32>,
+}
 
-### Canonical Transcript
+pub struct ContextProjectionBudget {
+    pub max_tool_result_chars: usize,
+    pub max_context_tokens: usize,
+    pub default_preview_chars: usize,
+}
 
-The input from Rust is canonical:
+pub struct ContextReplacement {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub artifact_id: String,
+    pub original_chars: usize,
+    pub preview_chars: usize,
+    pub strategy: ContextStrategy,
+}
 
-```ts
-{
-  system_prompt: string
-  messages: AgentMessageShape[]
-  tools: ToolDefinition[]
+pub struct ContextProjectionReport {
+    pub estimated_tokens: usize,
+    pub replacements: Vec<ContextReplacement>,
+    pub dropped_messages: usize,
 }
 ```
 
-Do not mutate the input messages in place.
-
-### Provider Projection
-
-`prepareContext()` returns a new provider-bound request with projected messages:
-
-```ts
-export interface PreparedContext {
-  request: LlmRequest
-  estimatedTokens: number
-  replacements: ContextReplacement[]
-}
-```
-
-The `request` should remain compatible with `callAnthropic()`.
-
-### Artifact Store
-
-Add an artifact store interface:
-
-```ts
-export interface ArtifactStore {
-  put(record: ArtifactRecord): string
-  get(id: string): ArtifactRecord | undefined
-}
-```
-
-First implementation:
-
-```ts
-MemoryArtifactStore
-```
-
-Artifacts should store full tool-result text when the provider projection replaces that text with a preview.
-
-Do not add filesystem/IndexedDB persistence in this milestone.
+Important: do not leave this as arbitrary JSON inside core logic. Parse metadata at the Rust boundary into concrete structs.
 
 ## Required Behavior
 
 ### 1. Token Estimate
 
-Add `estimateTokensForMessages(messages)`.
+Add deterministic token estimation in Rust.
 
 Rules:
 
-- Estimate text content as `Math.ceil(chars / 4)`.
-- Include assistant tool call names and serialized arguments.
-- Include tool result text.
-- Include assistant usage if useful, but keep first version simple and deterministic.
+- text chars estimate as `(chars + 3) / 4`
+- assistant tool call names and serialized arguments count toward estimate
+- tool result text counts toward estimate
+- system prompt counts toward estimate in the final projection estimate
 
-Tests should cover:
+### 2. Strategy Selection
 
-- user text
-- assistant text
-- assistant tool call arguments
-- tool result text
+Projection should use typed metadata when present.
 
-### 2. Tool Result Budget
+Fallback by tool name when metadata is missing:
 
-Add a deterministic tool-result budgeting function.
+- `read` -> `Head`
+- `bash` -> `Tail`
+- `edit` -> `KeepFull`
+- `write` -> `KeepFull`
+- `grep` -> `Head`
+- `find` -> `Head`
+- `ls` -> `Head`
+- unknown -> `Head`
 
-Input:
+### 3. Tool Result Budget
 
-```ts
-AgentMessageShape[]
-```
-
-Output:
-
-```ts
-{
-  messages: AgentMessageShape[]
-  replacements: ContextReplacement[]
-}
-```
+Only project tool-result text. Do not mutate the canonical transcript.
 
 Behavior:
 
-- Only inspect `role: "tool_result"` messages.
-- If total text size is under `maxToolResultChars`, keep it unchanged.
-- If too large:
-  - store full text in artifact store
-  - replace content with deterministic preview text
-  - include artifact id/reference in preview text
-  - preserve `tool_call_id`, `tool_name`, `is_error`, `timestamp`, and `details`
+- small tool results stay inline
+- oversized tool results are replaced with deterministic preview text
+- artifact IDs must be stable, e.g. `tool-result-{tool_call_id}`
+- preserve `tool_call_id`, `tool_name`, `is_error`, timestamp, and typed details
+- projection reports what was replaced so the host can store the full content
 
-Preview policy:
-
-- For `tool_name === "bash"`, keep tail preview.
-- For `tool_name === "read"`, keep head preview.
-- For other tools, use head preview.
-- Include a clear marker like:
+Preview marker should be explicit and provider-neutral:
 
 ```text
-<context-artifact id="..." tool="bash">
+<context-artifact id="tool-result-..." tool="bash">
 Tool result was too large and was replaced with a preview.
-Full content is stored in artifact: ...
+Full content should be available from host artifact: tool-result-...
+Strategy: tail
 Preview:
 ...
 </context-artifact>
 ```
 
-Determinism:
+### 4. Replacement State
 
-- Re-running projection on the same messages with the same replacement state must produce byte-identical projected messages.
-- Do not generate random IDs inside projection unless they are stable from `tool_call_id`.
+Projection decisions must be stable across turns.
 
-Recommended artifact id:
+Add a projection state object in Rust or a typed boundary payload equivalent to:
 
-```text
-tool-result-{tool_call_id}
-```
-
-### 3. Replacement State
-
-Add a small state object so projection decisions survive turns:
-
-```ts
-export interface ContextProjectionState {
-  replacements: Map<string, ContextReplacement>
+```rust
+pub struct ContextProjectionState {
+    pub replacements: BTreeMap<String, ContextReplacement>,
 }
 ```
 
@@ -194,84 +178,70 @@ Use `tool_call_id` as the stable key.
 
 Behavior:
 
-- If a tool result was already replaced, reuse the same replacement text.
-- If a tool result was previously kept inline, keep it inline in future prepares.
-- Do not flip decisions across turns.
+- if a tool result was already replaced, reuse the same replacement metadata and preview strategy
+- if a tool result was previously kept inline, do not randomly flip it later under the same budget
+- repeated projection with same input/state must be byte-identical
 
-### 4. Recent Window Trimming
+### 5. Recent Window Trimming
 
-Add simple trimming after tool-result budgeting.
+After tool-result budgeting, trim old history if estimated tokens exceed `max_context_tokens`.
 
-Behavior:
+Rules:
 
-- If estimated tokens are below `maxContextTokens`, keep all projected messages.
-- If above budget, drop oldest messages until under budget.
-- Do not split a tool call from its corresponding tool result.
-- Keep the newest user message if possible.
-- Preserve ordering.
+- drop whole old turns from the front
+- never leave a `tool_result` whose assistant `tool_call` is missing
+- keep newest user message if possible
+- preserve message ordering
+- return dropped count in `ContextProjectionReport`
 
-Simplify if needed:
+First implementation may approximate a turn as:
 
-- First version may drop whole turns from the front.
-- A turn can be approximated as user -> assistant -> following tool_result messages.
-- Never leave a `tool_result` whose assistant `tool_call` is no longer present.
-
-### 5. Provider Normalization Boundary
-
-Keep `convertMessages()` in `anthropic.ts` responsible for Anthropic-specific formatting.
-
-`prepareContext()` should be provider-neutral:
-
-- no Anthropic `tool_use`
-- no Anthropic `tool_result`
-- no provider-specific cache controls
-
-But it may ensure obvious transcript hygiene:
-
-- no empty text-only tool result after replacement
-- no in-place mutation
-
-### 6. Wire Into RealLlm
-
-Update `web/src/providers/realLlm.ts` so `RealLlm` can optionally use context projection before calling the provider.
-
-Suggested shape:
-
-```ts
-const llm = new RealLlm({
-  apiKey,
-  baseUrl,
-  model,
-  contextProjection?: {
-    state,
-    artifacts,
-    budget,
-  }
-})
+```text
+user -> assistant -> following tool_result messages
 ```
 
-If no context projection config is provided, behavior should remain unchanged.
+### 6. WASM Boundary
+
+Expose projection through `pi-host-web` with JSON envelopes.
+
+Suggested export:
+
+```text
+projectContext(inputJson) -> { ok: true, data: { context, state, report } }
+```
+
+Input must parse into typed Rust structs. Errors should use concrete `thiserror` variants and stable codes.
+
+### 7. JS Wiring
+
+Update `web/src/providers/realLlm.ts` so `RealLlm` uses the Rust projection path before provider conversion.
+
+If JS context modules are added, they must be thin wrappers over WASM. Do not reintroduce JS-owned projection policy.
 
 ## Tests
 
-Add `web/test/contextProjection.test.ts`.
-
-Cover:
+Add or update Rust tests for:
 
 - token estimate counts user text
 - token estimate counts assistant tool call arguments
-- small `read` tool result remains unchanged
-- large `read` tool result becomes head preview
-- large `bash` tool result becomes tail preview
-- full replaced result is stored in `MemoryArtifactStore`
-- repeated prepare with same state gives byte-identical projected messages
-- canonical input messages are not mutated
+- token estimate counts tool result text
+- `read` uses head preview
+- `bash` uses tail preview
+- `edit` defaults to keep-full
+- metadata strategy overrides tool-name fallback
+- replacement IDs are deterministic
+- repeated projection with same state is byte-identical
+- canonical input transcript is not mutated
 - trimming drops old messages when over budget
-- trimming does not leave orphan `tool_result`
-- `RealLlm` without projection keeps current behavior
-- `RealLlm` with projection sends projected messages to provider path if this can be tested without network
+- trimming does not leave orphan tool results
+- parse errors return useful typed errors
 
-Do not overfit tests to private implementation details. Test user-visible projection behavior.
+Add or update JS tests for:
+
+- WASM projection export succeeds
+- WASM projection export returns error envelope for invalid input
+- `RealLlm` can call through Rust projection without network
+- existing context projection behavior remains covered at the public boundary
 
 ## Verification
 
@@ -286,8 +256,8 @@ Expected:
 
 - Rust tests pass.
 - JS tests pass.
-- No changes to `pi-core`.
-- Existing local tool tests remain green.
+- `pi-core` remains runtime-neutral.
+- JS provider adapter still owns Anthropic-specific formatting.
 
 ## Report Back
 
@@ -295,7 +265,8 @@ Report:
 
 - changed files
 - test results
-- whether `RealLlm` projection wiring was implemented
-- any TODOs or intentionally deferred behavior
+- exact Rust types added
+- WASM export name and envelope shape
+- whether JS projection modules are now wrappers or still interim compatibility code
 
 Do not commit.

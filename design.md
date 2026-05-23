@@ -1,6 +1,8 @@
 # pi-oxide: Rust Agent-Core Runtime 设计文档
 
-> 一个无异步运行时的 Rust agent-core，通过同步状态机 + Host 驱动事件循环实现跨平台绑定。每个 Host 平台（Desktop / Web / Mobile / Embedded）自行提供 shell、UI、tools。
+> 一个无异步运行时的 Rust agent-core，通过同步状态机 + Host 驱动事件循环实现跨平台绑定。Host 平台自行提供 shell、UI、tools、存储和 provider 调用。当前产品方向是 Web coding agent，但实现顺序是先跑通本机 JS host，再迁移到浏览器 host。
+
+> 当前路线以 [ROADMAP.md](./ROADMAP.md) 为准：不做 desktop-first app shell；Rust core 除状态机外还应拥有 runtime-neutral 的 context projection policy；JS/浏览器 host 只负责运行时 I/O 和 provider 适配。
 
 ---
 
@@ -38,6 +40,9 @@ pi-oxide/
 │   │   ├── message.rs    # Message / Content 类型系统
 │   │   ├── session.rs    # Session 树结构（内存表示）
 │   │   ├── context.rs    # AgentContext / LlmContext
+│   │   ├── context_projection.rs # runtime-neutral context projection
+│   │   ├── context_strategy.rs   # head/tail/keep/drop 策略
+│   │   ├── context_metadata.rs   # typed tool-result metadata
 │   │   └── llm.rs        # LlmProvider trait（同步定义）
 │   └── Cargo.toml        # 零异步依赖
 │
@@ -48,17 +53,14 @@ pi-oxide/
 │   │   └── bridge.rs     # JSON 序列化桥接
 │   └── Cargo.toml        # 依赖 pi-core + serde_json
 │
-├── pi-host-desktop/      # Desktop Host（macOS/Windows/Linux）
+├── web/                  # 当前 JS host 工作区：本机 smoke + 后续浏览器 UI
 │   ├── src/
-│   │   ├── main.rs       # CLI 入口
-│   │   ├── runner.rs     # Tokio async 事件循环，驱动 core
-│   │   ├── env.rs        # DesktopExecutionEnv（tokio::process, fs）
-│   │   ├── tools/        # bash/read/write/edit/find/grep/ls
-│   │   ├── llm.rs        # HTTP 流式请求（reqwest + SSE）
-│   │   └── tui.rs        # Ratatui 渲染适配
-│   └── Cargo.toml        # 依赖 tokio, reqwest, ratatui, crossterm
+│   │   ├── local/        # Node filesystem/bash tools
+│   │   ├── providers/    # Anthropic provider adapter
+│   │   ├── context/      # JS wrapper around Rust projection / compatibility
+│   │   └── tools/        # tool schemas and in-memory tools
 │
-├── pi-host-web/          # WASM Host（浏览器）
+├── pi-host-web/          # WASM binding（Web/JS host）
 │   ├── src/
 │   │   ├── lib.rs        # wasm-bindgen 导出
 │   │   ├── runner.rs     # JS Promise 驱动的事件循环
@@ -292,6 +294,7 @@ pub struct ToolDefinition {
     pub description: String,
     pub parameters: Value, // JSON Schema
     pub execution_mode: ExecutionMode,
+    pub context_strategy: Option<ContextStrategy>,
 }
 
 pub enum ExecutionMode {
@@ -316,82 +319,101 @@ pub struct AgentOptions {
 }
 ```
 
+### 3.6 Context Projection（同步、纯 Rust）
+
+Context projection 是 core/domain 级策略，不是 JS host 的私有逻辑。原因是 tool result 虽然最终以文本形式喂给模型，但不同文本有不同语义：
+
+- `read` 更适合保留 head。
+- `bash` 更适合保留 tail。
+- `edit`/diff 应优先 keep-full。
+- `grep`/`find`/`ls` 应保留有界列表预览。
+
+Core 不存 artifact 文件，也不做 provider-specific formatting。Core 只做 deterministic projection，并返回 report 给 host。
+
+```rust
+pub enum ContextStrategy {
+    KeepFull,
+    Head { max_chars: usize },
+    Tail { max_chars: usize },
+    HeadTail { head_chars: usize, tail_chars: usize },
+    DropIfOld,
+}
+
+pub enum ContentKind {
+    FileRead,
+    CommandOutput,
+    Diff,
+    SearchResults,
+    DirectoryListing,
+    GenericText,
+}
+
+pub struct ToolResultContext {
+    pub content_kind: ContentKind,
+    pub strategy: ContextStrategy,
+    pub original_chars: usize,
+    pub truncated_by_tool: bool,
+    pub path: Option<String>,
+    pub exit_code: Option<i32>,
+}
+
+pub struct ContextProjectionBudget {
+    pub max_tool_result_chars: usize,
+    pub max_context_tokens: usize,
+    pub default_preview_chars: usize,
+}
+
+pub struct ContextProjectionReport {
+    pub estimated_tokens: usize,
+    pub replacements: Vec<ContextReplacement>,
+    pub dropped_messages: usize,
+}
+```
+
+Projection invariants:
+
+- canonical transcript 不被修改。
+- 相同输入 + 相同 state + 相同 budget 得到 byte-identical projection。
+- 不留下 orphan `tool_result`。
+- artifact id 稳定，例如 `tool-result-{tool_call_id}`。
+- host 根据 report 存储完整 artifact。
+
 ---
 
 ## 4. Host 层设计：异步事件循环
 
-### 4.1 Desktop Host（Tokio）
+### 4.1 Local JS Host（Node）
 
-Desktop Host 拥有完整的 tokio runtime，负责把 core 的同步状态机桥接到异步世界。
+当前优先 host 是本机 JS host，不是 desktop app shell。它通过 WASM binding 驱动 Rust core，并用 Node 提供真实文件和 shell 能力。
 
-```rust
-// pi-host-desktop/src/runner.rs
-use pi_core::{Agent, AgentAction, AgentEvent, LlmChunk, ToolResult};
-use tokio;
+```text
+AgentAction::StreamLlm
+-> call WASM projectContext
+-> call Anthropic provider adapter
+-> feed chunks/result into Rust
 
-pub struct DesktopRunner {
-    agent: Agent,
-    event_sink: tokio::sync::mpsc::Sender<AgentEvent>,
-    llm_client: reqwest::Client,
-}
-
-impl DesktopRunner {
-    pub async fn run_prompt(&mut self, text: String) {
-        let prompt = AgentMessage::user(text);
-        let (events, actions) = self.agent.start_turn(prompt);
-        self.emit_all(events).await;
-
-        for action in actions {
-            match action {
-                AgentAction::StreamLlm { context, .. } => {
-                    self.stream_llm(context).await;
-                }
-                AgentAction::ExecuteTools { calls } => {
-                    self.execute_tools(calls).await;
-                }
-                AgentAction::Finished { .. } => return,
-                _ => {}
-            }
-        }
-    }
-
-    async fn stream_llm(&mut self, context: LlmContext) {
-        let mut stream = self.llm_client.post(context).send().await.unwrap()
-            .bytes_stream();
-
-        while let Some(chunk) = stream.next().await {
-            let llm_chunk = parse_sse_chunk(chunk.unwrap());
-            let events = self.agent.feed_llm_chunk(llm_chunk);
-            self.emit_all(events).await;
-        }
-
-        // 流结束
-        let (events, actions) = self.agent.on_llm_done(LlmResult::done());
-        self.emit_all(events).await;
-        self.handle_actions(actions).await;
-    }
-
-    async fn execute_tools(&mut self, calls: Vec<ToolCall>) {
-        let mut futures = vec![];
-        for call in calls {
-            let env = self.env.clone();
-            futures.push(tokio::spawn(async move {
-                let result = execute_tool_on_host(call, env).await;
-                (call.id, result)
-            }));
-        }
-
-        for fut in futures {
-            let (id, result) = fut.await.unwrap();
-            let (events, actions) = self.agent.on_tool_done(id, result);
-            self.emit_all(events).await;
-            self.handle_actions(actions).await;
-        }
-    }
-}
+AgentAction::ExecuteTools
+-> execute local read/write/edit/bash in cwd
+-> attach typed metadata to tool result
+-> feed tool result into Rust
 ```
 
-### 4.2 Web Host（浏览器事件循环）
+Local JS host owns:
+
+- filesystem and shell execution
+- provider HTTP calls
+- permission policy
+- artifact/session persistence
+- trace sinks
+
+Rust owns:
+
+- state transitions
+- typed tool definitions/results
+- context projection policy
+- projection reports
+
+### 4.2 Browser Host（浏览器事件循环）
 
 Web Host 没有 tokio，使用浏览器原生的 `Promise` 和 `fetch()`。
 
@@ -814,30 +836,30 @@ pub trait SessionStorage: Send + Sync {
 - `cbindgen` 生成头文件
 - 内存安全测试（valgrind / address sanitizer）
 
-### Phase 4: Desktop Host（第 4-6 周）
+### Phase 4: Local JS Host（当前路线）
 
-- `pi-host-desktop`：tokio runner
-- `reqwest` + SSE 实现 LLM 流式请求（OpenAI / Anthropic）
-- `tokio::process` 实现 bash tool
-- `tokio::fs` 实现 read / write / edit / ls / find / grep tools
-- `ratatui` + `crossterm` 实现 TUI
-- CLI 参数解析、配置管理
-- 端到端测试：完整 prompt -> LLM -> tool -> 渲染 流程
+- WASM binding 驱动 Rust core
+- Anthropic provider adapter
+- Node `fs` 实现 read / write / edit / ls / find / grep tools
+- Node child process 实现 bash tool
+- Rust context projection API 生成 bounded provider context
+- 端到端测试：prompt -> LLM -> tool -> Rust state -> finished
 
-### Phase 5: Session & Compaction（第 6-7 周）
+### Phase 5: Session & Compaction
 
 - `SessionStorage` trait + JSONL 实现
-- Branch navigation UI
-- Compaction 触发逻辑 + LLM summary 请求
+- host artifact store
+- manual compaction first
+- LLM summary 请求后置
 - 会话持久化测试
 
-### Phase 6: Web Host（按需）
+### Phase 6: Browser Host
 
 - `wasm-bindgen` 导出 `WebRunner`
 - `fetch()` 实现 LLM 请求
 - 浏览器 FileSystem Access API 适配 `ExecutionEnv`
 - 沙箱 tool 实现（无真实 shell）
-- React/Vue 组件对接 `WebRunner`
+- UI 对接 Rust actions/events 和 JS host tools
 
 ---
 
@@ -890,7 +912,7 @@ pub trait SessionStorage: Send + Sync {
 
 **否决原因**：
 - 违反"core 零 I/O"原则
-- 不同 Host 的持久化语义不同：Desktop 用 JSONL 文件，Web 用 IndexedDB，Mobile 用 SQLite
+- 不同 Host 的持久化语义不同：Local JS host 可用 JSONL 文件，Browser host 可用 IndexedDB/OPFS，Mobile host 可用 SQLite
 
 **采用的方案**：Core 定义 `SessionStorage` trait（同步），Host 实现并注入。
 
@@ -905,7 +927,7 @@ pub trait SessionStorage: Send + Sync {
 这种架构强迫所有平台相关能力（shell、文件系统、网络、UI）从构造时注入，而不是编译时依赖。结果是：
 
 1. **Core 可用任意方式测试**：Mock 输入 -> 同步推进 -> 断言输出
-2. **Host 可独立演进**：Desktop Host 用 tokio，Web Host 用浏览器 API，Mobile Host 用原生线程，互不干扰
+2. **Host 可独立演进**：Local JS Host 用 Node，Browser Host 用浏览器 API，Mobile Host 用原生线程，互不干扰
 3. **绑定层极简稳定**：C 侧只需要 8-10 个函数，JSON 线协议天然向后兼容
 4. **分发极度灵活**：单二进制 CLI、WASM 嵌入网页、iOS/Android SDK、嵌入式固件——同一套 core 代码
 

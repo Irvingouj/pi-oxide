@@ -59,6 +59,7 @@ impl AssistantMessage {
 /// A message carrying the result of a tool execution back to the LLM.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResultMessage {
+    #[serde(skip_deserializing, default = "tool_result_role")]
     pub role: String,
     pub tool_call_id: ToolCallId,
     pub tool_name: ToolName,
@@ -67,6 +68,10 @@ pub struct ToolResultMessage {
     pub details: Option<ToolDetails>,
     pub is_error: bool,
     pub timestamp: u64,
+}
+
+fn tool_result_role() -> String {
+    "tool_result".to_string()
 }
 
 /// Union of all message types visible to the core.

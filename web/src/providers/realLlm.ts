@@ -18,6 +18,13 @@ import {
 import type { ToolRegistry } from "../fakeTools.ts";
 import type { LlmRequest } from "./types.ts";
 import { callAnthropic, type AnthropicConfig } from "./anthropic.ts";
+import {
+  callProjectContext,
+  type ArtifactStore,
+  type ContextProjectionBudget,
+  type ContextProjectionState,
+  MemoryArtifactStore,
+} from "../context/rustProjection.ts";
 
 export interface TraceEntry {
   phase: "action" | "event" | "host";
@@ -31,16 +38,69 @@ export interface RealRunResult {
   handle: number;
 }
 
+export interface ContextProjectionConfig {
+  budget: ContextProjectionBudget;
+  state: ContextProjectionState;
+  artifacts: ArtifactStore;
+}
+
 export class RealLlm {
   private config: AnthropicConfig;
+  private contextProjection?: ContextProjectionConfig;
   public readonly log: string[] = [];
 
-  constructor(config: AnthropicConfig) {
+  constructor(config: AnthropicConfig, contextProjection?: ContextProjectionConfig) {
     this.config = config;
+    this.contextProjection = contextProjection;
   }
 
   async call(request: LlmRequest): Promise<{ chunks: object[]; llmResult: object }> {
-    const result = await callAnthropic(request, this.config);
+    let effectiveRequest = request;
+
+    if (this.contextProjection) {
+      const result = callProjectContext(
+        request.system_prompt,
+        request.messages,
+        this.contextProjection.budget,
+        this.contextProjection.state,
+      );
+
+      // Update state for next turn
+      this.contextProjection.state = result.updated_state;
+
+      // Store artifacts for any replacements
+      for (const replacement of result.report.replacements) {
+        // Find the original tool result to get the full content
+        const originalMsg = request.messages.find(
+          (m) => m.role === "tool_result" && m.tool_call_id === replacement.tool_call_id,
+        );
+        if (originalMsg && originalMsg.role === "tool_result") {
+          const text = originalMsg.content
+            .filter((b) => b.type === "text" && b.text !== undefined)
+            .map((b) => b.text!)
+            .join("\n");
+          this.contextProjection.artifacts.put({
+            id: replacement.artifact_id,
+            toolName: replacement.tool_name,
+            toolCallId: replacement.tool_call_id,
+            content: text,
+            storedAt: Date.now(),
+          });
+        }
+      }
+
+      this.log.push(
+        `context_projection: estimated=${result.report.estimated_tokens} replacements=${result.report.replacements.length} dropped=${result.report.dropped_messages}`,
+      );
+
+      effectiveRequest = {
+        system_prompt: request.system_prompt,
+        messages: result.projected_messages,
+        tools: request.tools,
+      };
+    }
+
+    const result = await callAnthropic(effectiveRequest, this.config);
     this.log.push(...result.log);
     return result;
   }

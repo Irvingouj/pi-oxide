@@ -24,7 +24,7 @@ import type {
   StepResult,
   ToolDonePayload,
   ToolExecutionUpdate,
-} from "../../public/pkg/pi_host_web";
+} from "@pi-oxide/pi-host-web";
 
 export type {
   AgentAction,
@@ -90,7 +90,7 @@ export type {
   ToolResultMessage,
   UserMessage,
   WaitMode,
-} from "../../public/pkg/pi_host_web";
+} from "@pi-oxide/pi-host-web";
 
 // --- Error handling ---
 

@@ -3,14 +3,15 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const wasmPath = join(__dirname, "../pkg/pi_host_web_bg.wasm");
+const require = createRequire(import.meta.url);
+const pkgDir = dirname(require.resolve("@pi-oxide/pi-host-web/package.json"));
+const wasmPath = join(pkgDir, "pi_host_web_bg.wasm");
 const wasmBytes = readFileSync(wasmPath);
 
-const pkg = await import("../pkg/pi_host_web.js");
+const pkg = await import("@pi-oxide/pi-host-web");
 pkg.initSync({ module: wasmBytes });
 
 export const raw = pkg;

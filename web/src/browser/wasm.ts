@@ -5,7 +5,7 @@
  * plus the async init() required by the browser WASM target.
  */
 
-import init, * as wasm from "/pkg/pi_host_web.js";
+import init, * as wasm from "@pi-oxide/pi-host-web";
 
 let initialized = false;
 

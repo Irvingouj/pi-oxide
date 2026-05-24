@@ -12,13 +12,23 @@ resolver = "3"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["pi-oxide contributors"]
+authors = ["Irving Ou <irving@pi-oxide.dev>"]
 license = "MIT"
 repository = "https://github.com/pi-oxide/pi-oxide"
+readme = "README.md"
+exclude = [
+    "web/",
+    "pkg/",
+    "node_modules/",
+    "docs/",
+    "test-results/",
+    "*.wasm",
+    ".claude/",
+]
 
 [workspace.dependencies]
-pi-core = { path = "pi-core" }
-pi-llm = { path = "pi-llm" }
+pi-core = { version = "0.1.0", path = "pi-core" }
+pi-llm = { version = "0.1.0", path = "pi-llm" }
 pi-bindings = { path = "pi-bindings" }
 
 serde = { version = "1.0", features = ["derive"] }

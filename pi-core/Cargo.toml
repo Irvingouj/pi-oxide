@@ -6,6 +6,8 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Pure synchronous agent-core state machine. No async, no I/O."
+keywords = ["agent", "llm", "ai", "state-machine"]
+categories = ["development-tools", "data-structures"]
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }

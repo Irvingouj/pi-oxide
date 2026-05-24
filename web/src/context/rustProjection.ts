@@ -80,20 +80,26 @@ export function callProjectContext(
     state,
   };
 
-  const responseJson = raw.projectContext(JSON.stringify(input));
-  const envelope = JSON.parse(responseJson) as {
+  let result: {
     ok: boolean;
     data?: ProjectionResult;
     error?: { code: string; message: string };
   };
-
-  if (!envelope.ok || !envelope.data) {
+  try {
+    result = raw.projectContext(input) as typeof result;
+  } catch (e) {
     throw new Error(
-      `projectContext failed: ${envelope.error?.code ?? "unknown"}: ${envelope.error?.message ?? "no data"}`,
+      `projectContext failed: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
 
-  return envelope.data;
+  if (!result.ok || !result.data) {
+    throw new Error(
+      `projectContext failed: ${result.error?.code ?? "unknown"}: ${result.error?.message ?? "no data"}`,
+    );
+  }
+
+  return result.data;
 }
 
 // --- Artifact store interface ---

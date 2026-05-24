@@ -29,7 +29,10 @@ pub enum ContextStrategy {
     #[serde(rename = "tail")]
     Tail { max_chars: usize },
     #[serde(rename = "head_tail")]
-    HeadTail { head_chars: usize, tail_chars: usize },
+    HeadTail {
+        head_chars: usize,
+        tail_chars: usize,
+    },
     #[serde(rename = "drop_if_old")]
     DropIfOld,
     /// Applied by microcompact: old tool result replaced with a one-line summary.

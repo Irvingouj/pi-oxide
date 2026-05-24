@@ -5,8 +5,7 @@
 use std::path::Path;
 
 use pi_core::{
-    ToolArguments, ToolCall, ToolDefinition, ToolError, ToolName,
-    JsonSchema, ExecutionMode,
+    ExecutionMode, JsonSchema, ToolArguments, ToolCall, ToolDefinition, ToolError, ToolName,
 };
 
 // --- Definitions ---
@@ -76,7 +75,9 @@ pub fn definitions() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: ToolName::new("edit"),
             label: "Edit File".into(),
-            description: "Replace exact text in a file. Finds old_string and replaces with new_string.".into(),
+            description:
+                "Replace exact text in a file. Finds old_string and replaces with new_string."
+                    .into(),
             parameters: JsonSchema::new(serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -108,7 +109,10 @@ pub fn execute(call: &ToolCall) -> Result<pi_core::ToolResult, ToolError> {
         "read" => exec_read(&call.arguments),
         "write" => exec_write(&call.arguments),
         "edit" => exec_edit(&call.arguments),
-        name => Err(ToolError::new("unknown_tool", format!("Unknown tool: {name}"))),
+        name => Err(ToolError::new(
+            "unknown_tool",
+            format!("Unknown tool: {name}"),
+        )),
     }
 }
 
@@ -134,10 +138,15 @@ fn exec_bash(args: &ToolArguments) -> Result<pi_core::ToolResult, ToolError> {
     let text = if output.status.success() {
         stdout.to_string()
     } else {
-        format!("exit code: {}\n{}{}",
+        format!(
+            "exit code: {}\n{}{}",
             output.status.code().unwrap_or(-1),
             stderr,
-            if stdout.is_empty() { String::new() } else { format!("\n{}", stdout) }
+            if stdout.is_empty() {
+                String::new()
+            } else {
+                format!("\n{}", stdout)
+            }
         )
     };
 
@@ -147,7 +156,11 @@ fn exec_bash(args: &ToolArguments) -> Result<pi_core::ToolResult, ToolError> {
 fn exec_read(args: &ToolArguments) -> Result<pi_core::ToolResult, ToolError> {
     let path = get_str(args, "path")?;
     let offset = args.0.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-    let limit = args.0.get("limit").and_then(|v| v.as_u64()).map(|l| l as usize);
+    let limit = args
+        .0
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|l| l as usize);
 
     let content = std::fs::read_to_string(path)
         .map_err(|e| ToolError::new("read_failed", format!("{path}: {e}")))?;
@@ -177,7 +190,10 @@ fn exec_write(args: &ToolArguments) -> Result<pi_core::ToolResult, ToolError> {
     std::fs::write(path, content)
         .map_err(|e| ToolError::new("write_failed", format!("{path}: {e}")))?;
 
-    Ok(pi_core::ToolResult::text(format!("Wrote {} bytes to {path}", content.len())))
+    Ok(pi_core::ToolResult::text(format!(
+        "Wrote {} bytes to {path}",
+        content.len()
+    )))
 }
 
 fn exec_edit(args: &ToolArguments) -> Result<pi_core::ToolResult, ToolError> {
@@ -190,10 +206,18 @@ fn exec_edit(args: &ToolArguments) -> Result<pi_core::ToolResult, ToolError> {
 
     let count = content.matches(old_string).count();
     if count == 0 {
-        return Err(ToolError::new("not_found", format!("old_string not found in {path}")));
+        return Err(ToolError::new(
+            "not_found",
+            format!("old_string not found in {path}"),
+        ));
     }
     if count > 1 {
-        return Err(ToolError::new("ambiguous", format!("old_string found {count} times in {path}. Provide more context to make it unique.")));
+        return Err(ToolError::new(
+            "ambiguous",
+            format!(
+                "old_string found {count} times in {path}. Provide more context to make it unique."
+            ),
+        ));
     }
 
     let new_content = content.replacen(old_string, new_string, 1);
@@ -222,8 +246,16 @@ mod tests {
     fn test_bash_echo() {
         let call = make_call("bash", serde_json::json!({"command": "echo hello world"}));
         let result = execute(&call).unwrap();
-        let text = result.content.iter()
-            .filter_map(|c| if let Content::Text(t) = c { Some(t.text.as_str()) } else { None })
+        let text = result
+            .content
+            .iter()
+            .filter_map(|c| {
+                if let Content::Text(t) = c {
+                    Some(t.text.as_str())
+                } else {
+                    None
+                }
+            })
             .collect::<Vec<_>>()
             .join("");
         assert!(text.contains("hello world"));
@@ -233,8 +265,16 @@ mod tests {
     fn test_bash_failure() {
         let call = make_call("bash", serde_json::json!({"command": "exit 42"}));
         let result = execute(&call).unwrap();
-        let text = result.content.iter()
-            .filter_map(|c| if let Content::Text(t) = c { Some(t.text.as_str()) } else { None })
+        let text = result
+            .content
+            .iter()
+            .filter_map(|c| {
+                if let Content::Text(t) = c {
+                    Some(t.text.as_str())
+                } else {
+                    None
+                }
+            })
             .collect::<Vec<_>>()
             .join("");
         assert!(text.contains("exit code: 42"));
@@ -248,31 +288,53 @@ mod tests {
         let path_str = path.to_str().unwrap();
 
         // Write
-        let write_call = make_call("write", serde_json::json!({
-            "path": path_str,
-            "content": "line 1\nline 2\nline 3\n"
-        }));
+        let write_call = make_call(
+            "write",
+            serde_json::json!({
+                "path": path_str,
+                "content": "line 1\nline 2\nline 3\n"
+            }),
+        );
         execute(&write_call).unwrap();
 
         // Read all
         let read_call = make_call("read", serde_json::json!({"path": path_str}));
         let result = execute(&read_call).unwrap();
-        let text = result.content.iter()
-            .filter_map(|c| if let Content::Text(t) = c { Some(t.text.as_str()) } else { None })
+        let text = result
+            .content
+            .iter()
+            .filter_map(|c| {
+                if let Content::Text(t) = c {
+                    Some(t.text.as_str())
+                } else {
+                    None
+                }
+            })
             .collect::<Vec<_>>()
             .join("");
         assert!(text.contains("line 1"));
         assert!(text.contains("line 3"));
 
         // Read with offset/limit
-        let read_partial = make_call("read", serde_json::json!({
-            "path": path_str,
-            "offset": 1,
-            "limit": 1
-        }));
+        let read_partial = make_call(
+            "read",
+            serde_json::json!({
+                "path": path_str,
+                "offset": 1,
+                "limit": 1
+            }),
+        );
         let result = execute(&read_partial).unwrap();
-        let text = result.content.iter()
-            .filter_map(|c| if let Content::Text(t) = c { Some(t.text.as_str()) } else { None })
+        let text = result
+            .content
+            .iter()
+            .filter_map(|c| {
+                if let Content::Text(t) = c {
+                    Some(t.text.as_str())
+                } else {
+                    None
+                }
+            })
             .collect::<Vec<_>>()
             .join("");
         assert!(text.contains("line 2"));
@@ -290,11 +352,14 @@ mod tests {
         std::fs::write(&path, "hello world\nfoo bar\n").unwrap();
         let path_str = path.to_str().unwrap();
 
-        let edit_call = make_call("edit", serde_json::json!({
-            "path": path_str,
-            "old_string": "hello world",
-            "new_string": "hello rust"
-        }));
+        let edit_call = make_call(
+            "edit",
+            serde_json::json!({
+                "path": path_str,
+                "old_string": "hello world",
+                "new_string": "hello rust"
+            }),
+        );
         execute(&edit_call).unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
@@ -312,11 +377,14 @@ mod tests {
         let path = dir.join("nf.txt");
         std::fs::write(&path, "abc\n").unwrap();
 
-        let call = make_call("edit", serde_json::json!({
-            "path": path.to_str().unwrap(),
-            "old_string": "xyz",
-            "new_string": "123"
-        }));
+        let call = make_call(
+            "edit",
+            serde_json::json!({
+                "path": path.to_str().unwrap(),
+                "old_string": "xyz",
+                "new_string": "123"
+            }),
+        );
         let err = execute(&call).unwrap_err();
         assert_eq!(err.code, "not_found");
 
@@ -330,11 +398,14 @@ mod tests {
         let path = dir.join("amb.txt");
         std::fs::write(&path, "abc abc\n").unwrap();
 
-        let call = make_call("edit", serde_json::json!({
-            "path": path.to_str().unwrap(),
-            "old_string": "abc",
-            "new_string": "xyz"
-        }));
+        let call = make_call(
+            "edit",
+            serde_json::json!({
+                "path": path.to_str().unwrap(),
+                "old_string": "abc",
+                "new_string": "xyz"
+            }),
+        );
         let err = execute(&call).unwrap_err();
         assert_eq!(err.code, "ambiguous");
 

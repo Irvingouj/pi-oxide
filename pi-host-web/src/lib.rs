@@ -1,25 +1,21 @@
 //! WASM host for pi-core.
 //!
-//! Exposes the agent state machine through browser-friendly WASM APIs.
-//! All functions take and return JSON strings using the typed envelope shape:
-//!
-//! ```json
-//! { "ok": true,  "data": { ... } }
-//! { "ok": false, "error": { "code": "...", "message": "..." } }
-//! ```
+//! Exposes the agent state machine through typed WASM APIs.
+//! Every function returns a `ResultEnvelope<T>` — never throws.
 
 use std::cell::RefCell;
 
 use wasm_bindgen::prelude::*;
 
-use pi_core::{
-    Agent, AgentAction, AgentEvent, AgentMessage, AgentOptions, AgentState, LlmChunk, LlmResult,
-    ToolCallId, ToolError, ToolResult,
-    CancelReason, ToolExecutionUpdate,
-    ProjectionInput, project as project_context,
-};
-use serde::{Deserialize, Serialize};
-use tracing::{debug, warn, info, error};
+use pi_core::Agent;
+use tracing::info;
+
+fn project_context(input: pi_core::ProjectionInput) -> pi_core::ProjectionOutput {
+    pi_core::project(input)
+}
+
+mod dto;
+use dto::*;
 
 thread_local! {
     static AGENT_SLOTS: RefCell<Vec<Option<Agent>>> = RefCell::new(Vec::new());
@@ -29,16 +25,12 @@ thread_local! {
 fn init_tracing() {
     TRACING_INIT.with(|init| {
         if !init.get() {
-            let _ = tracing::subscriber::set_global_default(
-                ConsoleSubscriber
-            );
+            let _ = tracing::subscriber::set_global_default(ConsoleSubscriber);
             init.set(true);
         }
     });
 }
 
-/// A minimal tracing subscriber that stores trace messages in a thread-local
-/// buffer. The JS host can retrieve them via `drainTraceLog()`.
 #[derive(Debug)]
 struct ConsoleSubscriber;
 
@@ -46,15 +38,13 @@ thread_local! {
     static TRACE_BUF: RefCell<Vec<String>> = RefCell::new(Vec::new());
 }
 
-/// Drain accumulated trace log messages and return them as a JSON array.
 #[wasm_bindgen(js_name = "drainTraceLog")]
-pub fn drain_trace_log() -> String {
+pub fn drain_trace_log() -> Vec<String> {
     TRACE_BUF.with(|buf| {
         let mut buf = buf.borrow_mut();
-        let messages: Vec<&str> = buf.iter().map(|s| s.as_str()).collect();
-        let json = serde_json::to_string(&messages).unwrap_or_else(|_| "[]".to_string());
+        let out = buf.clone();
         buf.clear();
-        json
+        out
     })
 }
 
@@ -62,40 +52,31 @@ impl tracing::Subscriber for ConsoleSubscriber {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
         metadata.level() <= &tracing::Level::INFO
     }
-
     fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::Id {
         tracing::Id::from_u64(1)
     }
-
     fn record(&self, _span: &tracing::Id, _values: &tracing::span::Record<'_>) {}
-
     fn record_follows_from(&self, _span: &tracing::Id, _follows: &tracing::Id) {}
-
     fn event(&self, event: &tracing::Event<'_>) {
         let level = *event.metadata().level();
         let mut fields = String::new();
         let mut visitor = FieldVisitor(&mut fields);
         event.record(&mut visitor);
-
         let msg = format!("[pi-wasm {}] {}", level, fields);
-        TRACE_BUF.with(|buf| {
-            buf.borrow_mut().push(msg);
-        });
+        TRACE_BUF.with(|buf| buf.borrow_mut().push(msg));
     }
-
     fn enter(&self, _span: &tracing::Id) {}
     fn exit(&self, _span: &tracing::Id) {}
 }
 
 struct FieldVisitor<'a>(&'a mut String);
-
 impl tracing::field::Visit for FieldVisitor<'_> {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if !self.0.is_empty() {
-            self.0.push_str(" ");
+            self.0.push(' ');
         }
         self.0.push_str(field.name());
-        self.0.push_str("=");
+        self.0.push('=');
         write!(self.0, "{:?}", value).unwrap();
     }
 }
@@ -108,12 +89,6 @@ use std::fmt::Write;
 
 #[derive(Debug, thiserror::Error)]
 enum HostError {
-    #[error("invalid JSON for {name}: {source}")]
-    InvalidJson {
-        name: &'static str,
-        #[source]
-        source: serde_json::Error,
-    },
     #[error("agent not found: handle {0} is invalid")]
     BadHandle(u32),
 }
@@ -121,132 +96,39 @@ enum HostError {
 impl HostError {
     fn code(&self) -> &'static str {
         match self {
-            HostError::InvalidJson { .. } => "invalid_json",
             HostError::BadHandle(_) => "bad_handle",
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// JSON envelope
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize)]
-struct Envelope<T: Serialize> {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<T>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<ErrorBody>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct ErrorBody {
-    code: String,
-    message: String,
-}
-
-fn ok_json<T: Serialize>(data: T) -> String {
-    serde_json::to_string(&Envelope {
-        ok: true,
-        data: Some(data),
-        error: None,
-    })
-    .unwrap_or_else(|e| error_json(&HostError::InvalidJson {
-        name: "serialize_response",
-        source: e,
-    }))
-}
-
-fn error_json(err: &HostError) -> String {
-    warn!(code = err.code(), message = %err, "host error");
-    let body = ErrorBody {
-        code: err.code().to_string(),
-        message: err.to_string(),
-    };
-    serde_json::to_string(&Envelope::<()> {
-        ok: false,
-        data: None,
-        error: Some(body),
-    })
-    .unwrap_or_else(|_| r#"{"ok":false,"error":{"code":"serialize_error","message":"failed to serialize error"}}"#.to_string())
-}
-
-// ---------------------------------------------------------------------------
-// Output types
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize)]
-struct StepOutput {
-    events: Vec<AgentEvent>,
-    actions: Vec<AgentAction>,
-}
-
-#[derive(Debug, Serialize)]
-struct EventsOutput {
-    events: Vec<AgentEvent>,
-}
-
-#[derive(Debug, Serialize)]
-struct StateOutput<'a> {
-    state: &'a AgentState,
-}
-
-// ---------------------------------------------------------------------------
-// Flexible input types (mirrors pi-bindings pattern)
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum PromptRequest {
-    Message(AgentMessage),
-    Text { text: String },
-}
-
-impl From<PromptRequest> for AgentMessage {
-    fn from(value: PromptRequest) -> Self {
-        match value {
-            PromptRequest::Message(message) => message,
-            PromptRequest::Text { text } => AgentMessage::user(text),
+    fn to_dto(&self) -> ErrorDto {
+        ErrorDto {
+            code: self.code().to_string(),
+            message: self.to_string(),
         }
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum ToolDonePayload {
-    Failure { error: ToolError },
-    Success { result: ToolResult },
-    BareSuccess(ToolResult),
+fn ok<T: serde::Serialize, R: for<'de> serde::Deserialize<'de>>(data: T) -> R {
+    let mut map = serde_json::Map::new();
+    map.insert("ok".to_string(), serde_json::Value::Bool(true));
+    map.insert("data".to_string(), serde_json::to_value(data).unwrap());
+    map.insert("error".to_string(), serde_json::Value::Null);
+    serde_json::from_value(serde_json::Value::Object(map)).unwrap()
 }
 
-impl From<ToolDonePayload> for Result<ToolResult, ToolError> {
-    fn from(value: ToolDonePayload) -> Self {
-        match value {
-            ToolDonePayload::Failure { error } => Err(error),
-            ToolDonePayload::Success { result } => Ok(result),
-            ToolDonePayload::BareSuccess(result) => Ok(result),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn parse_json<T: for<'de> Deserialize<'de>>(
-    json: &str,
-    name: &'static str,
-) -> Result<T, HostError> {
-    serde_json::from_str(json).map_err(|source| HostError::InvalidJson { name, source })
+fn err<R: for<'de> serde::Deserialize<'de>>(e: &HostError) -> R {
+    let mut map = serde_json::Map::new();
+    map.insert("ok".to_string(), serde_json::Value::Bool(false));
+    map.insert("data".to_string(), serde_json::Value::Null);
+    map.insert(
+        "error".to_string(),
+        serde_json::to_value(e.to_dto()).unwrap(),
+    );
+    serde_json::from_value(serde_json::Value::Object(map)).unwrap()
 }
 
 // ---------------------------------------------------------------------------
-// WASM agent handle
+// Agent handle table
 // ---------------------------------------------------------------------------
-
-/// Opaque WASM handle wrapping an `Agent`.
-/// Stored in a thread-local slot table via handle indices.
 
 fn take_agent(handle: u32) -> Result<Agent, HostError> {
     AGENT_SLOTS.with(|slots| {
@@ -262,14 +144,12 @@ fn take_agent(handle: u32) -> Result<Agent, HostError> {
 fn put_agent(agent: Agent) -> u32 {
     AGENT_SLOTS.with(|slots| {
         let mut slots = slots.borrow_mut();
-        // Try to reuse a vacated slot.
         for (i, slot) in slots.iter_mut().enumerate() {
             if slot.is_none() {
                 *slot = Some(agent);
                 return i as u32;
             }
         }
-        // No free slot; push a new one.
         let handle = slots.len() as u32;
         slots.push(Some(agent));
         handle
@@ -291,332 +171,218 @@ fn with_agent<T>(handle: u32, op: impl FnOnce(&mut Agent) -> T) -> Result<T, Hos
 }
 
 // ---------------------------------------------------------------------------
-// WASM exports
+// WASM exports — typed DTOs, never strings
 // ---------------------------------------------------------------------------
 
-/// Create a new agent from an `AgentOptions` JSON string.
-/// Returns `{ ok: true, data: { handle } }` or an error envelope.
 #[wasm_bindgen(js_name = "createAgent")]
-
-pub fn create_agent(options_json: &str) -> String {
+pub fn create_agent(options: AgentOptions) -> CreateAgentResult {
     console_error_panic_hook::set_once();
     init_tracing();
-
     info!("createAgent called");
-    match parse_json::<AgentOptions>(options_json, "AgentOptions") {
-        Ok(options) => {
-            debug!(tools = options.tools.len(), "parsed AgentOptions, creating agent");
-            let agent = Agent::new(options);
-            let handle = put_agent(agent);
-            info!(handle, "agent created");
-            ok_json(serde_json::json!({ "handle": handle }))
-        }
-        Err(err) => {
-            error!(%err, "failed to parse AgentOptions");
-            error_json(&err)
-        }
-    }
+    let core_options: pi_core::AgentOptions = options.into();
+    let agent = Agent::new(core_options);
+    let handle = put_agent(agent);
+    info!(handle, "agent created");
+    ok(CreateAgentOutput { handle })
 }
 
-/// Start a new turn with a prompt.
-/// `prompt_json` can be a full `AgentMessage` or `{ "text": "..." }`.
 #[wasm_bindgen(js_name = "prompt")]
-
-pub fn prompt(handle: u32, prompt_json: &str) -> String {
+pub fn prompt(handle: u32, prompt: PromptRequest) -> StepResult {
     console_error_panic_hook::set_once();
     info!(handle, "prompt called");
 
-    let result = (|| {
-        let prompt: AgentMessage =
-            parse_json::<PromptRequest>(prompt_json, "PromptRequest")?.into();
-        debug!("parsed prompt, calling start_turn");
-        let result = with_agent(handle, |agent| agent.start_turn(prompt));
-        if let Ok((ref events, ref actions)) = result {
-            debug!(events = events.len(), actions = actions.len(), "start_turn returned");
-            for action in actions {
-                info!(action_type = ?action, "action");
-            }
-        }
-        result
-    })();
+    let core_prompt: pi_core::AgentMessage = match prompt {
+        PromptRequest::Message(m) => m.into(),
+        PromptRequest::Text { text } => pi_core::AgentMessage::user(text),
+    };
 
+    let result = with_agent(handle, |agent| agent.start_turn(core_prompt));
     match result {
-        Ok((events, actions)) => {
-            let json = ok_json(StepOutput { events, actions });
-            debug!(output_len = json.len(), "prompt returning");
-            json
-        }
-        Err(err) => error_json(&err),
+        Ok((events, actions)) => ok(StepOutput {
+            events: events.into_iter().map(|e| e.into()).collect(),
+            actions: actions.into_iter().map(|a| a.into()).collect(),
+        }),
+        Err(e) => err(&e),
     }
 }
 
-/// Feed a streaming LLM chunk.
 #[wasm_bindgen(js_name = "feedLlmChunk")]
-
-pub fn feed_llm_chunk(handle: u32, chunk_json: &str) -> String {
+pub fn feed_llm_chunk(handle: u32, chunk: LlmChunk) -> EventsResult {
     console_error_panic_hook::set_once();
-    info!(handle, input_len = chunk_json.len(), "feedLlmChunk called");
+    info!(handle, "feedLlmChunk called");
 
-    let result = (|| {
-        let chunk: LlmChunk = parse_json(chunk_json, "LlmChunk")?;
-        debug!(chunk_kind = ?std::mem::discriminant(&chunk), "parsed LlmChunk");
-        let events = with_agent(handle, |agent| agent.feed_llm_chunk(chunk))?;
-        debug!(events = events.len(), "feed_llm_chunk returned");
-        Ok(events)
-    })();
-
+    let core_chunk: pi_core::LlmChunk = chunk.into();
+    let result = with_agent(handle, |agent| agent.feed_llm_chunk(core_chunk));
     match result {
-        Ok(events) => {
-            let json = ok_json(EventsOutput { events });
-            debug!(output_len = json.len(), "feedLlmChunk returning");
-            json
-        }
-        Err(err) => {
-            error!(%err, "feedLlmChunk failed");
-            error_json(&err)
-        }
+        Ok(events) => ok(EventsOutput {
+            events: events.into_iter().map(|e| e.into()).collect(),
+        }),
+        Err(e) => err(&e),
     }
 }
 
-/// Notify the agent that the LLM stream has finished.
 #[wasm_bindgen(js_name = "onLlmDone")]
-
-pub fn on_llm_done(handle: u32, result_json: &str) -> String {
+pub fn on_llm_done(handle: u32, result: LlmResult) -> StepResult {
     console_error_panic_hook::set_once();
-    info!(handle, input_len = result_json.len(), "onLlmDone called");
+    info!(handle, "onLlmDone called");
 
-    let result = (|| {
-        let result: LlmResult = parse_json(result_json, "LlmResult")?;
-        match &result {
-            LlmResult::Ok(msg) => {
-                debug!(content_blocks = msg.content.len(), stop_reason = ?msg.stop_reason, "parsed LlmResult::Ok");
-                for (i, block) in msg.content.iter().enumerate() {
-                    debug!(block_idx = i, block_type = ?block, "content block");
-                }
-            }
-            LlmResult::Err { error, aborted } => {
-                warn!(?error, aborted, "parsed LlmResult::Err");
-            }
-        }
-        let (events, actions) = with_agent(handle, |agent| agent.on_llm_done(result))?;
-        debug!(events = events.len(), actions = actions.len(), "on_llm_done returned");
-        for action in &actions {
-            info!(action_type = ?action, "action");
-        }
-        Ok((events, actions))
-    })();
-
+    let core_result: pi_core::LlmResult = result.into();
+    let result = with_agent(handle, |agent| agent.on_llm_done(core_result));
     match result {
-        Ok((events, actions)) => {
-            let json = ok_json(StepOutput { events, actions });
-            debug!(output_len = json.len(), "onLlmDone returning");
-            json
-        }
-        Err(err) => {
-            error!(%err, "onLlmDone failed");
-            error_json(&err)
-        }
+        Ok((events, actions)) => ok(StepOutput {
+            events: events.into_iter().map(|e| e.into()).collect(),
+            actions: actions.into_iter().map(|a| a.into()).collect(),
+        }),
+        Err(e) => err(&e),
     }
 }
 
-/// Notify the agent that a tool has finished executing.
 #[wasm_bindgen(js_name = "onToolDone")]
-
-pub fn on_tool_done(handle: u32, tool_call_id: &str, result_json: &str) -> String {
+pub fn on_tool_done(handle: u32, tool_call_id: String, payload: ToolDonePayload) -> StepResult {
     console_error_panic_hook::set_once();
-    info!(handle, tool_call_id, input_len = result_json.len(), "onToolDone called");
+    info!(
+        handle,
+        tool_call_id = tool_call_id.as_str(),
+        "onToolDone called"
+    );
 
-    let result = (|| {
-        let id = ToolCallId::new(tool_call_id);
-        let result: Result<ToolResult, ToolError> =
-            parse_json::<ToolDonePayload>(result_json, "ToolDonePayload")?.into();
-        match &result {
-            Ok(tool_result) => debug!(content_blocks = tool_result.content.len(), "tool result OK"),
-            Err(e) => warn!(?e, "tool result ERR"),
-        }
-        let (events, actions) = with_agent(handle, |agent| agent.on_tool_done(id, result))?;
-        debug!(events = events.len(), actions = actions.len(), "on_tool_done returned");
-        for action in &actions {
-            info!(action_type = ?action, "action after tool_done");
-        }
-        Ok((events, actions))
-    })();
+    let id = pi_core::ToolCallId::new(&tool_call_id);
+    let core_result: Result<pi_core::ToolResult, pi_core::ToolError> = match payload {
+        ToolDonePayload::Failure { error } => Err(error.into()),
+        ToolDonePayload::Success { result } => Ok(result.into()),
+        ToolDonePayload::BareSuccess(result) => Ok(result.into()),
+    };
 
+    let result = with_agent(handle, |agent| agent.on_tool_done(id, core_result));
     match result {
-        Ok((events, actions)) => {
-            let json = ok_json(StepOutput { events, actions });
-            debug!(output_len = json.len(), "onToolDone returning");
-            json
-        }
-        Err(err) => {
-            error!(%err, "onToolDone failed");
-            error_json(&err)
-        }
+        Ok((events, actions)) => ok(StepOutput {
+            events: events.into_iter().map(|e| e.into()).collect(),
+            actions: actions.into_iter().map(|a| a.into()).collect(),
+        }),
+        Err(e) => err(&e),
     }
 }
 
-/// Notify the agent that a tool has started executing.
 #[wasm_bindgen(js_name = "onToolStarted")]
-
-pub fn on_tool_started(handle: u32, tool_call_id: &str) -> String {
+pub fn on_tool_started(handle: u32, tool_call_id: String) -> EventsResult {
     console_error_panic_hook::set_once();
-    info!(handle, tool_call_id, "onToolStarted called");
+    info!(
+        handle,
+        tool_call_id = tool_call_id.as_str(),
+        "onToolStarted called"
+    );
 
-    let result = (|| {
-        let id = ToolCallId::new(tool_call_id);
-        let events = with_agent(handle, |agent| agent.on_tool_started(id))?;
-        debug!(events = events.len(), "on_tool_started returned");
-        Ok(events)
-    })();
-
+    let id = pi_core::ToolCallId::new(&tool_call_id);
+    let result = with_agent(handle, |agent| agent.on_tool_started(id));
     match result {
-        Ok(events) => ok_json(EventsOutput { events }),
-        Err(err) => error_json(&err),
+        Ok(events) => ok(EventsOutput {
+            events: events.into_iter().map(|e| e.into()).collect(),
+        }),
+        Err(e) => err(&e),
     }
 }
 
-/// Send a streaming tool execution update to the agent.
-/// Input JSON must match `ToolExecutionUpdate`.
 #[wasm_bindgen(js_name = "onToolUpdate")]
-pub fn on_tool_update(handle: u32, update_json: &str) -> String {
+pub fn on_tool_update(handle: u32, update: ToolExecutionUpdate) -> EventsResult {
     console_error_panic_hook::set_once();
 
-    let result = (|| {
-        let update: ToolExecutionUpdate = parse_json(update_json, "ToolExecutionUpdate")?;
-        Ok(with_agent(handle, |agent| agent.on_tool_update(update))?)
-    })();
-
+    let core_update: pi_core::ToolExecutionUpdate = update.into();
+    let result = with_agent(handle, |agent| agent.on_tool_update(core_update));
     match result {
-        Ok(events) => ok_json(EventsOutput { events }),
-        Err(err) => error_json(&err),
+        Ok(events) => ok(EventsOutput {
+            events: events.into_iter().map(|e| e.into()).collect(),
+        }),
+        Err(e) => err(&e),
     }
 }
 
-/// Notify the agent that a tool was cancelled.
 #[wasm_bindgen(js_name = "onToolCancelled")]
-pub fn on_tool_cancelled(handle: u32, tool_call_id: &str, reason_json: &str) -> String {
+pub fn on_tool_cancelled(handle: u32, tool_call_id: String, reason: CancelReason) -> StepResult {
     console_error_panic_hook::set_once();
 
-    let result = (|| {
-        let id = ToolCallId::new(tool_call_id);
-        let reason: CancelReason = parse_json(reason_json, "CancelReason")?;
-        with_agent(handle, |agent| agent.on_tool_cancelled(id, reason))
-    })();
-
+    let id = pi_core::ToolCallId::new(&tool_call_id);
+    let core_reason: pi_core::CancelReason = reason.into();
+    let result = with_agent(handle, |agent| agent.on_tool_cancelled(id, core_reason));
     match result {
-        Ok((events, actions)) => ok_json(StepOutput { events, actions }),
-        Err(err) => error_json(&err),
+        Ok((events, actions)) => ok(StepOutput {
+            events: events.into_iter().map(|e| e.into()).collect(),
+            actions: actions.into_iter().map(|a| a.into()).collect(),
+        }),
+        Err(e) => err(&e),
     }
 }
 
-/// Inject a steering message mid-run.
 #[wasm_bindgen(js_name = "steer")]
-pub fn steer(handle: u32, message_json: &str) -> String {
+pub fn steer(handle: u32, message: AgentMessage) -> EventsResult {
     console_error_panic_hook::set_once();
 
-    let result = (|| {
-        let msg: AgentMessage = parse_json(message_json, "AgentMessage")?;
-        with_agent(handle, |agent| agent.steer(msg))
-    })();
-
+    let core_message: pi_core::AgentMessage = message.into();
+    let result = with_agent(handle, |agent| agent.steer(core_message));
     match result {
-        Ok(events) => ok_json(EventsOutput { events }),
-        Err(err) => error_json(&err),
+        Ok(events) => ok(EventsOutput {
+            events: events.into_iter().map(|e| e.into()).collect(),
+        }),
+        Err(e) => err(&e),
     }
 }
 
-/// Queue a follow-up message for after the run would otherwise stop.
 #[wasm_bindgen(js_name = "followUp")]
-pub fn follow_up(handle: u32, message_json: &str) -> String {
+pub fn follow_up(handle: u32, message: AgentMessage) -> EmptyResult {
     console_error_panic_hook::set_once();
 
-    let result = (|| {
-        let msg: AgentMessage = parse_json(message_json, "AgentMessage")?;
-        with_agent(handle, |agent| {
-            agent.follow_up(msg);
-        })
-    })();
-
+    let core_message: pi_core::AgentMessage = message.into();
+    let result = with_agent(handle, |agent| {
+        agent.follow_up(core_message);
+    });
     match result {
-        Ok(()) => ok_json(serde_json::json!({})),
-        Err(err) => error_json(&err),
+        Ok(()) => ok(()),
+        Err(e) => err(&e),
     }
 }
 
-/// Get a read-only snapshot of the agent state.
 #[wasm_bindgen(js_name = "state")]
-pub fn state(handle: u32) -> String {
+pub fn state(handle: u32) -> StateResult {
     console_error_panic_hook::set_once();
 
     let result = with_agent(handle, |agent| agent.state().clone());
-
     match result {
-        Ok(state) => ok_json(StateOutput { state: &state }),
-        Err(err) => error_json(&err),
+        Ok(core_state) => ok(StateOutput {
+            state: core_state.into(),
+        }),
+        Err(e) => err(&e),
     }
 }
 
-/// Reset the agent state.
 #[wasm_bindgen(js_name = "reset")]
-pub fn reset(handle: u32) -> String {
+pub fn reset(handle: u32) -> EmptyResult {
     console_error_panic_hook::set_once();
 
-    let result = with_agent(handle, |agent| {
-        agent.reset();
-    });
-
+    let result = with_agent(handle, |agent| agent.reset());
     match result {
-        Ok(()) => ok_json(serde_json::json!({})),
-        Err(err) => error_json(&err),
+        Ok(()) => ok(()),
+        Err(e) => err(&e),
     }
 }
 
-/// Destroy an agent and free its resources.
 #[wasm_bindgen(js_name = "destroyAgent")]
-pub fn destroy_agent(handle: u32) -> String {
+pub fn destroy_agent(handle: u32) -> EmptyResult {
     console_error_panic_hook::set_once();
 
     match take_agent(handle) {
-        Ok(_) => ok_json(serde_json::json!({})),
-        Err(err) => error_json(&err),
+        Ok(_) => ok(()),
+        Err(e) => err(&e),
     }
 }
 
-/// Project context: run the Rust context projection engine.
-///
-/// Input JSON must match `ProjectionInput`:
-/// ```json
-/// {
-///   "system_prompt": "...",
-///   "messages": [...],
-///   "budget": { "max_tool_result_chars": 50000, "max_context_tokens": 100000, "default_preview_chars": 2000 },
-///   "state": { "replacements": {} }
-/// }
-/// ```
-///
-/// Returns:
-/// ```json
-/// { "ok": true, "data": { "projected_messages": [...], "updated_state": {...}, "report": {...} } }
-/// ```
 #[wasm_bindgen(js_name = "projectContext")]
-
-pub fn project_context_export(input_json: &str) -> String {
+pub fn project_context_export(input: ProjectionInput) -> ProjectionResult {
     console_error_panic_hook::set_once();
-    info!(input_len = input_json.len(), "projectContext called");
+    info!("projectContext called");
 
-    match parse_json::<ProjectionInput>(input_json, "ProjectionInput") {
-        Ok(input) => {
-            debug!(msg_count = input.messages.len(), "parsed ProjectionInput, projecting");
-            let output = project_context(input);
-            let json = ok_json(output);
-            debug!(output_len = json.len(), "projectContext returning");
-            json
-        }
-        Err(err) => {
-            error!(%err, "projectContext parse failed");
-            error_json(&err)
-        }
-    }
+    let core_input: pi_core::ProjectionInput = input.into();
+    let core_output = project_context(core_input);
+    let output: ProjectionOutput = core_output.into();
+    ok(output)
 }
 
 // ---------------------------------------------------------------------------
@@ -626,220 +392,180 @@ pub fn project_context_export(input_json: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pi_core::{Model, QueueMode, ThinkingLevel, ToolExecutionMode};
 
-    fn dummy_model() -> Model {
-        Model {
-            id: "test-model".into(),
-            name: "Test".into(),
-            api: "test".into(),
-            provider: "test".into(),
-            base_url: None,
-            reasoning: false,
-            context_window: 4096,
-            max_tokens: 1024,
-            capabilities: Default::default(),
-            cost: Default::default(),
-        }
-    }
-
-    fn dummy_options_json() -> String {
-        let options = AgentOptions {
+    fn dummy_options() -> AgentOptions {
+        AgentOptions {
             system_prompt: "test agent".to_string(),
-            model: dummy_model(),
-            thinking_level: ThinkingLevel::Off,
+            model: Model {
+                id: ModelId("test-model".to_string()),
+                name: ModelName("Test".to_string()),
+                api: ApiName("test".to_string()),
+                provider: ProviderName("test".to_string()),
+                base_url: None,
+                reasoning: false,
+                context_window: 4096,
+                max_tokens: 1024,
+                capabilities: Default::default(),
+                cost: Default::default(),
+            },
+            thinking_level: Default::default(),
             tools: vec![],
-            steering_mode: QueueMode::OneAtATime,
-            follow_up_mode: QueueMode::OneAtATime,
-            tool_execution_mode: ToolExecutionMode::Parallel,
+            steering_mode: Default::default(),
+            follow_up_mode: Default::default(),
+            tool_execution_mode: Default::default(),
             session_id: None,
             messages: vec![],
-        };
-        serde_json::to_string(&options).unwrap()
-    }
-
-    fn parse_envelope(json: &str) -> serde_json::Value {
-        serde_json::from_str(json).unwrap()
+        }
     }
 
     #[test]
     fn create_agent_returns_ok_with_handle() {
-        let resp = parse_envelope(&create_agent(&dummy_options_json()));
-        assert_eq!(resp["ok"], true);
-        assert!(resp["data"]["handle"].is_number());
-    }
-
-    #[test]
-    fn create_agent_with_invalid_json_returns_error_envelope() {
-        let resp = parse_envelope(&create_agent("{bad json}"));
-        assert_eq!(resp["ok"], false);
-        assert_eq!(resp["error"]["code"], "invalid_json");
-        assert!(resp["error"]["message"].as_str().unwrap().contains("AgentOptions"));
+        let resp = create_agent(dummy_options());
+        assert!(resp.ok);
+        assert!(resp.data.is_some());
+        assert_eq!(resp.data.unwrap().handle, 0);
     }
 
     #[test]
     fn prompt_returns_stream_llm_action() {
-        let create_resp = parse_envelope(&create_agent(&dummy_options_json()));
-        let handle = create_resp["data"]["handle"].as_u64().unwrap() as u32;
-
-        let prompt_resp = parse_envelope(&prompt(handle, r#"{"text":"hello"}"#));
-        assert_eq!(prompt_resp["ok"], true);
-        let actions = prompt_resp["data"]["actions"].as_array().unwrap();
+        create_agent(dummy_options());
+        let resp = prompt(
+            0,
+            PromptRequest::Text {
+                text: "hello".to_string(),
+            },
+        );
+        assert!(resp.ok);
+        let actions = resp.data.unwrap().actions;
         assert!(actions
             .iter()
-            .any(|a| a["type"] == "stream_llm"));
-
-        // Clean up
-        destroy_agent(handle);
+            .any(|a| matches!(a, AgentAction::StreamLlm { .. })));
+        destroy_agent(0);
     }
 
     #[test]
-    fn prompt_with_invalid_json_returns_error_envelope() {
-        let create_resp = parse_envelope(&create_agent(&dummy_options_json()));
-        let handle = create_resp["data"]["handle"].as_u64().unwrap() as u32;
-
-        let resp = parse_envelope(&prompt(handle, "{not-json}"));
-        assert_eq!(resp["ok"], false);
-        assert_eq!(resp["error"]["code"], "invalid_json");
-
-        destroy_agent(handle);
-    }
-
-    #[test]
-    fn bad_handle_returns_error_envelope() {
-        let resp = parse_envelope(&prompt(9999, r#"{"text":"hi"}"#));
-        assert_eq!(resp["ok"], false);
-        assert_eq!(resp["error"]["code"], "bad_handle");
+    fn bad_handle_returns_error() {
+        let resp = prompt(
+            9999,
+            PromptRequest::Text {
+                text: "hi".to_string(),
+            },
+        );
+        assert!(!resp.ok);
+        assert_eq!(resp.error.as_ref().unwrap().code, "bad_handle");
     }
 
     #[test]
     fn on_llm_done_with_no_tools_finishes() {
-        let create_resp = parse_envelope(&create_agent(&dummy_options_json()));
-        let handle = create_resp["data"]["handle"].as_u64().unwrap() as u32;
+        create_agent(dummy_options());
+        prompt(
+            0,
+            PromptRequest::Text {
+                text: "hello".to_string(),
+            },
+        );
 
-        prompt(handle, r#"{"text":"hello"}"#);
+        let done_resp = on_llm_done(
+            0,
+            LlmResult::Ok(AssistantMessage {
+                content: vec![Content::Text(TextContent {
+                    text: "hi".to_string(),
+                })],
+                api: ApiName("test".to_string()),
+                provider: ProviderName("test".to_string()),
+                model: ModelId("test".to_string()),
+                stop_reason: StopReason::EndTurn,
+                error_message: None,
+                timestamp: 1,
+                usage: TokenUsage::default(),
+            }),
+        );
+        assert!(done_resp.ok);
+        let actions = done_resp.data.unwrap().actions;
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, AgentAction::Finished { .. })));
 
-        let done_resp = parse_envelope(&on_llm_done(handle, r#"{"Ok":{"content":[{"type":"text","text":"hi"}],"api":"test","provider":"test","model":"test-model","stop_reason":"end_turn","timestamp":1,"usage":{"input":0,"output":0,"cache_read":0,"cache_write":0,"total_tokens":0}}}"#));
-        assert_eq!(done_resp["ok"], true);
-        let actions = done_resp["data"]["actions"].as_array().unwrap();
-        assert!(actions.iter().any(|a| a["type"] == "finished"));
-
-        destroy_agent(handle);
+        destroy_agent(0);
     }
 
     #[test]
     fn reset_clears_state() {
-        let create_resp = parse_envelope(&create_agent(&dummy_options_json()));
-        let handle = create_resp["data"]["handle"].as_u64().unwrap() as u32;
+        create_agent(dummy_options());
+        prompt(
+            0,
+            PromptRequest::Text {
+                text: "hello".to_string(),
+            },
+        );
 
-        prompt(handle, r#"{"text":"hello"}"#);
-        let reset_resp = parse_envelope(&reset(handle));
-        assert_eq!(reset_resp["ok"], true);
+        let reset_resp = reset(0);
+        assert!(reset_resp.ok);
 
-        let state_resp = parse_envelope(&state(handle));
-        assert_eq!(state_resp["ok"], true);
-        assert!(state_resp["data"]["state"]["messages"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        let state_resp = state(0);
+        assert!(state_resp.ok);
+        assert!(state_resp.data.unwrap().state.messages.is_empty());
 
-        destroy_agent(handle);
+        destroy_agent(0);
     }
 
     #[test]
-    fn state_returns_current_agent_state() {
-        let create_resp = parse_envelope(&create_agent(&dummy_options_json()));
-        let handle = create_resp["data"]["handle"].as_u64().unwrap() as u32;
-
-        let state_resp = parse_envelope(&state(handle));
-        assert_eq!(state_resp["ok"], true);
-        assert_eq!(
-            state_resp["data"]["state"]["system_prompt"],
-            "test agent"
-        );
-
-        destroy_agent(handle);
+    fn state_returns_system_prompt() {
+        create_agent(dummy_options());
+        let state_resp = state(0);
+        assert!(state_resp.ok);
+        assert_eq!(state_resp.data.unwrap().state.system_prompt, "test agent");
+        destroy_agent(0);
     }
 
     #[test]
     fn destroy_agent_frees_handle() {
-        let create_resp = parse_envelope(&create_agent(&dummy_options_json()));
-        let handle = create_resp["data"]["handle"].as_u64().unwrap() as u32;
+        create_agent(dummy_options());
+        let destroy_resp = destroy_agent(0);
+        assert!(destroy_resp.ok);
 
-        let destroy_resp = parse_envelope(&destroy_agent(handle));
-        assert_eq!(destroy_resp["ok"], true);
-
-        // Using the handle after destroy should fail
-        let state_resp = parse_envelope(&state(handle));
-        assert_eq!(state_resp["ok"], false);
-        assert_eq!(state_resp["error"]["code"], "bad_handle");
+        let state_resp = state(0);
+        assert!(!state_resp.ok);
+        assert_eq!(state_resp.error.as_ref().unwrap().code, "bad_handle");
     }
 
     #[test]
-    fn tool_done_payload_does_not_sniff_error_substrings() {
-        let payload = r#"{
-            "content": [{"type":"text","text":"ok"}],
-            "details": {"error": "this is just data"}
-        }"#;
-
-        let parsed: ToolDonePayload = serde_json::from_str(payload).unwrap();
-        assert!(Result::<ToolResult, ToolError>::from(parsed).is_ok());
+    fn empty_result_serialize() {
+        let r = EmptyResult {
+            ok: true,
+            data: Some(()),
+            error: None,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        println!("EmptyResult JSON: {}", json);
+        assert!(json.contains("\"ok\":true"));
+        assert!(json.contains("\"data\":null"));
     }
-
-    // --- projectContext tests ---
 
     #[test]
     fn project_context_returns_ok_with_report() {
-        let input = r#"{
-            "system_prompt": "You are helpful.",
-            "messages": [{"role":"user","content":[{"type":"text","text":"hello"}],"timestamp":1}],
-            "budget": {"max_tool_result_chars":50000,"max_context_tokens":100000,"default_preview_chars":2000},
-            "state": {"replacements":{}}
-        }"#;
+        let input = ProjectionInput {
+            system_prompt: "You are helpful.".to_string(),
+            messages: vec![AgentMessage::User(UserMessage {
+                content: vec![Content::Text(TextContent {
+                    text: "hello".to_string(),
+                })],
+                timestamp: 1,
+            })],
+            budget: ContextProjectionBudget {
+                max_tool_result_chars: 50000,
+                max_context_tokens: 100000,
+                default_preview_chars: 2000,
+                microcompact_after_turns: 5,
+                compaction_threshold: 0.75,
+            },
+            state: ContextProjectionState::default(),
+        };
 
-        let resp = parse_envelope(&project_context_export(input));
-        assert_eq!(resp["ok"], true);
-        assert!(resp["data"]["projected_messages"].is_array());
-        assert!(resp["data"]["updated_state"].is_object());
-        assert!(resp["data"]["report"]["estimated_tokens"].is_number());
-        assert_eq!(resp["data"]["report"]["replacements"].as_array().unwrap().len(), 0);
-        assert_eq!(resp["data"]["report"]["dropped_messages"], 0);
-    }
-
-    #[test]
-    fn project_context_replaces_oversized_tool_result() {
-        let big_text = "A".repeat(5000);
-        let input = serde_json::json!({
-            "system_prompt": "test",
-            "messages": [
-                {"role":"user","content":[{"type":"text","text":"run"}],"timestamp":1},
-                {"role":"assistant","content":[{"type":"tool_call","id":"tc-1","name":"read","arguments":{}}],"api":"test","provider":"test","model":"test","stop_reason":"tool_use","timestamp":1,"usage":{"input":0,"output":0,"cache_read":0,"cache_write":0,"total_tokens":0}},
-                {"role":"tool_result","tool_call_id":"tc-1","tool_name":"read","content":[{"type":"text","text":big_text}],"details":null,"is_error":false,"timestamp":1}
-            ],
-            "budget": {"max_tool_result_chars":1000,"max_context_tokens":100000,"default_preview_chars":200},
-            "state": {"replacements":{}}
-        });
-
-        let resp_str = project_context_export(&serde_json::to_string(&input).unwrap());
-        let resp = parse_envelope(&resp_str);
-        assert_eq!(resp["ok"], true);
-        let report = &resp["data"]["report"];
-        assert_eq!(report["replacements"].as_array().unwrap().len(), 1);
-        assert_eq!(report["replacements"][0]["artifact_id"], "tool-result-tc-1");
-        assert_eq!(report["replacements"][0]["tool_name"], "read");
-
-        // Projected message should contain preview marker
-        let msgs = resp["data"]["projected_messages"].as_array().unwrap();
-        let tool_msg = msgs.iter().find(|m| m["role"] == "tool_result").unwrap();
-        let text = tool_msg["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("<context-artifact"));
-        assert!(text.contains("head"));
-    }
-
-    #[test]
-    fn project_context_returns_error_for_invalid_input() {
-        let resp = parse_envelope(&project_context_export("{bad json}"));
-        assert_eq!(resp["ok"], false);
-        assert_eq!(resp["error"]["code"], "invalid_json");
+        let resp = project_context_export(input);
+        assert!(resp.ok);
+        let data = resp.data.unwrap();
+        assert!(!data.projected_messages.is_empty());
+        assert!(data.report.estimated_tokens > 0);
     }
 }

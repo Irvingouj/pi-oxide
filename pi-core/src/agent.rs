@@ -1,9 +1,12 @@
-use ts_rs::TS;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use ts_rs::TS;
 
 use crate::context::LlmContext;
-use crate::events::{AgentAction, AgentEvent, CancelReason, ContentDelta, QueueMode, ThinkingLevel, ToolExecutionUpdate, WaitMode};
+use crate::events::{
+    AgentAction, AgentEvent, CancelReason, ContentDelta, QueueMode, ThinkingLevel,
+    ToolExecutionUpdate, WaitMode,
+};
 use crate::llm::{LlmChunk, LlmResult, Model};
 use crate::message::{AgentMessage, Content, StopReason, ToolCall, ToolResultMessage};
 use crate::tool::{ToolDefinition, ToolError, ToolExecutionMode, ToolResult};
@@ -506,10 +509,16 @@ impl Agent {
             return vec![];
         }
         if !self.pending_tool_calls.contains_key(&tool_call_id) {
-            trace!(tool_call_id = tool_call_id.as_str(), "on_tool_started for unknown tool");
+            trace!(
+                tool_call_id = tool_call_id.as_str(),
+                "on_tool_started for unknown tool"
+            );
             return vec![];
         }
-        trace!(tool_call_id = tool_call_id.as_str(), "tool execution started");
+        trace!(
+            tool_call_id = tool_call_id.as_str(),
+            "tool execution started"
+        );
         vec![AgentEvent::ToolExecutionUpdate {
             tool_call_id,
             stream: crate::events::ToolOutputStream::Status,
@@ -559,7 +568,10 @@ impl Agent {
         let tool_call = match self.pending_tool_calls.remove(&tool_call_id) {
             Some(tc) => tc,
             None => {
-                warn!(tool_call_id = tool_call_id.as_str(), "on_tool_cancelled for unknown tool");
+                warn!(
+                    tool_call_id = tool_call_id.as_str(),
+                    "on_tool_cancelled for unknown tool"
+                );
                 return (vec![], vec![]);
             }
         };
@@ -572,7 +584,10 @@ impl Agent {
             CancelReason::Timeout => "cancelled due to timeout".to_string(),
             CancelReason::AgentAborted => "cancelled due to agent abort".to_string(),
             CancelReason::DependencyFailed { cause_tool_call_id } => {
-                format!("cancelled because dependency {} failed", cause_tool_call_id.as_str())
+                format!(
+                    "cancelled because dependency {} failed",
+                    cause_tool_call_id.as_str()
+                )
             }
         };
 
@@ -605,12 +620,10 @@ impl Agent {
         ];
 
         let agent_msg = AgentMessage::ToolResult(result_msg);
-        self.completed_tool_results.push(
-            match &agent_msg {
-                AgentMessage::ToolResult(m) => m.clone(),
-                _ => unreachable!(),
-            },
-        );
+        self.completed_tool_results.push(match &agent_msg {
+            AgentMessage::ToolResult(m) => m.clone(),
+            _ => unreachable!(),
+        });
         self.completed_tool_terminations.push(false);
         self.state.messages.push(agent_msg.clone());
         events.push(AgentEvent::MessageStart {

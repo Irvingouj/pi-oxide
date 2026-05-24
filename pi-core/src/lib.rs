@@ -18,13 +18,16 @@ pub mod types;
 
 pub use agent::{Agent, AgentOptions, AgentState, Phase};
 pub use context::{AgentContext, LlmContext};
-pub use context_metadata::{ContentKind, ContextStrategy, ToolResultContext, fallback_strategy};
+pub use context_metadata::{fallback_strategy, ContentKind, ContextStrategy, ToolResultContext};
 pub use context_projection::{
-    ApiUsageSnapshot, ContextProjectionBudget, ContextProjectionReport, ContextProjectionState,
-    ContextReplacement, ProjectionInput, ProjectionOutput, estimate_tokens,
-    estimate_tokens_for_text, project,
+    estimate_tokens, estimate_tokens_for_text, project, ApiUsageSnapshot, ContextProjectionBudget,
+    ContextProjectionReport, ContextProjectionState, ContextReplacement, ProjectionInput,
+    ProjectionOutput,
 };
-pub use events::{AgentAction, AgentEvent, BackgroundJobRef, CancelReason, ContentDelta, QueueMode, ThinkingLevel, ToolExecutionUpdate, ToolOutputStream, WaitMode};
+pub use events::{
+    AgentAction, AgentEvent, BackgroundJobRef, CancelReason, ContentDelta, QueueMode,
+    ThinkingLevel, ToolExecutionUpdate, ToolOutputStream, WaitMode,
+};
 pub use llm::{LlmChunk, LlmError, LlmResult, Model, ModelCapabilities, ModelCost, ModelProvider};
 pub use message::StopReason;
 pub use message::{

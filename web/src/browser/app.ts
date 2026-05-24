@@ -13,7 +13,7 @@ import {
   onLlmDone,
   onToolDone,
   onToolStarted,
-  projectContextTyped,
+  projectContext,
   type StepOutput,
   type AgentAction,
 } from "./wasmBinding.ts";
@@ -36,7 +36,7 @@ const projectionBudget = {
 
 function runProjection(systemPrompt: string, messages: unknown[]): unknown[] {
   try {
-    const result = projectContextTyped({
+    const result = projectContext({
       system_prompt: systemPrompt,
       messages,
       budget: projectionBudget,

@@ -1,6 +1,17 @@
 /**
- * Loader bridge: loads the CJS WASM package in an ESM context.
+ * Loader bridge: loads the ESM WASM package in Node and initializes it synchronously.
  */
-import { createRequire } from "node:module";
-const require = createRequire(import.meta.url);
-export const raw = require("../pkg/pi_host_web.cjs");
+
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const wasmPath = join(__dirname, "../pkg/pi_host_web_bg.wasm");
+const wasmBytes = readFileSync(wasmPath);
+
+const pkg = await import("../pkg/pi_host_web.js");
+pkg.initSync({ module: wasmBytes });
+
+export const raw = pkg;
+export const drainTraceLog = pkg.drainTraceLog;

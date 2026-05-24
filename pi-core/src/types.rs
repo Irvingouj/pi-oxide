@@ -1,6 +1,6 @@
-use ts_rs::TS;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use ts_rs::TS;
 
 macro_rules! string_newtype {
     ($name:ident) => {

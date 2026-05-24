@@ -48,15 +48,18 @@ impl LlmStream {
     }
 
     pub fn tool_calls(&self) -> Vec<CollectedToolCall> {
-        self.tool_calls.iter().map(|tc| {
-            let input: serde_json::Value = serde_json::from_str(&tc.input_json)
-                .unwrap_or(serde_json::Value::Object(Default::default()));
-            CollectedToolCall {
-                id: tc.id.clone(),
-                name: tc.name.clone(),
-                input,
-            }
-        }).collect()
+        self.tool_calls
+            .iter()
+            .map(|tc| {
+                let input: serde_json::Value = serde_json::from_str(&tc.input_json)
+                    .unwrap_or(serde_json::Value::Object(Default::default()));
+                CollectedToolCall {
+                    id: tc.id.clone(),
+                    name: tc.name.clone(),
+                    input,
+                }
+            })
+            .collect()
     }
 }
 
@@ -90,7 +93,8 @@ impl LlmClient {
         let url = format!("{}/v1/messages", self.base_url);
         let body = self.build_body(system_prompt, messages, tools);
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
@@ -122,13 +126,16 @@ impl LlmClient {
         tools: &[pi_core::ToolDefinition],
     ) -> serde_json::Value {
         let api_messages = convert_messages(messages);
-        let api_tools: Vec<serde_json::Value> = tools.iter().map(|t| {
-            serde_json::json!({
-                "name": t.name.as_str(),
-                "description": t.description,
-                "input_schema": t.parameters.0,
+        let api_tools: Vec<serde_json::Value> = tools
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name.as_str(),
+                    "description": t.description,
+                    "input_schema": t.parameters.0,
+                })
             })
-        }).collect();
+            .collect();
 
         let mut body = serde_json::json!({
             "model": self.model,
@@ -210,8 +217,11 @@ impl LlmStream {
         match event_type {
             "message_start" => {
                 if let Ok(msg) = serde_json::from_str::<serde_json::Value>(data) {
-                    if let Some(input) = msg.get("message").and_then(|m| m.get("usage"))
-                        .and_then(|u| u.get("input_tokens")).and_then(|v| v.as_u64())
+                    if let Some(input) = msg
+                        .get("message")
+                        .and_then(|m| m.get("usage"))
+                        .and_then(|u| u.get("input_tokens"))
+                        .and_then(|v| v.as_u64())
                     {
                         self.usage_input = Some(input as u32);
                     }
@@ -222,8 +232,16 @@ impl LlmStream {
                 if let Ok(block) = serde_json::from_str::<serde_json::Value>(data) {
                     if let Some(cb) = block.get("content_block") {
                         if cb.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
-                            let id = cb.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            let name = cb.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let id = cb
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let name = cb
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             self.tool_calls.push(PartialToolCall {
                                 id,
                                 name,
@@ -239,12 +257,19 @@ impl LlmStream {
                     if let Some(d) = delta.get("delta") {
                         match d.get("type").and_then(|v| v.as_str()).unwrap_or("") {
                             "text_delta" => {
-                                let text = d.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let text = d
+                                    .get("text")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
                                 return Some(pi_core::LlmChunk::TextDelta { text });
                             }
                             "input_json_delta" => {
-                                let json_str = d.get("partial_json")
-                                    .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let json_str = d
+                                    .get("partial_json")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
                                 if let Some(tc) = self.tool_calls.last_mut() {
                                     tc.input_json.push_str(&json_str);
                                 }
@@ -258,12 +283,15 @@ impl LlmStream {
             "content_block_stop" => None,
             "message_delta" => {
                 if let Ok(delta) = serde_json::from_str::<serde_json::Value>(data) {
-                    if let Some(output) = delta.get("usage")
-                        .and_then(|u| u.get("output_tokens")).and_then(|v| v.as_u64())
+                    if let Some(output) = delta
+                        .get("usage")
+                        .and_then(|u| u.get("output_tokens"))
+                        .and_then(|v| v.as_u64())
                     {
                         self.usage_output = Some(output as u32);
                     }
-                    if let Some(stop) = delta.get("delta")
+                    if let Some(stop) = delta
+                        .get("delta")
                         .and_then(|d| d.get("stop_reason"))
                         .and_then(|v| v.as_str())
                     {
@@ -278,7 +306,8 @@ impl LlmStream {
             }
             "error" => {
                 let msg = match serde_json::from_str::<serde_json::Value>(data) {
-                    Ok(v) => v.get("error")
+                    Ok(v) => v
+                        .get("error")
                         .and_then(|e| e.get("message"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown API error")
@@ -301,7 +330,9 @@ fn convert_messages(messages: &[pi_core::AgentMessage]) -> Vec<serde_json::Value
     for msg in messages {
         match msg {
             pi_core::AgentMessage::User(user_msg) => {
-                let text = user_msg.content.iter()
+                let text = user_msg
+                    .content
+                    .iter()
                     .filter_map(|c| match c {
                         pi_core::Content::Text(t) => Some(t.text.as_str()),
                         _ => None,
@@ -317,20 +348,22 @@ fn convert_messages(messages: &[pi_core::AgentMessage]) -> Vec<serde_json::Value
                 }
             }
             pi_core::AgentMessage::Assistant(asst_msg) => {
-                let blocks: Vec<serde_json::Value> = asst_msg.content.iter()
+                let blocks: Vec<serde_json::Value> = asst_msg
+                    .content
+                    .iter()
                     .filter_map(|c| match c {
                         pi_core::Content::Text(t) => {
-                            if t.text.is_empty() { return None; }
+                            if t.text.is_empty() {
+                                return None;
+                            }
                             Some(serde_json::json!({ "type": "text", "text": t.text }))
                         }
-                        pi_core::Content::ToolCall(tc) => {
-                            Some(serde_json::json!({
-                                "type": "tool_use",
-                                "id": tc.id.as_str(),
-                                "name": tc.name.as_str(),
-                                "input": tc.arguments.0,
-                            }))
-                        }
+                        pi_core::Content::ToolCall(tc) => Some(serde_json::json!({
+                            "type": "tool_use",
+                            "id": tc.id.as_str(),
+                            "name": tc.name.as_str(),
+                            "input": tc.arguments.0,
+                        })),
                         _ => None,
                     })
                     .collect();
@@ -341,7 +374,9 @@ fn convert_messages(messages: &[pi_core::AgentMessage]) -> Vec<serde_json::Value
                 }));
             }
             pi_core::AgentMessage::ToolResult(tr_msg) => {
-                let text = tr_msg.content.iter()
+                let text = tr_msg
+                    .content
+                    .iter()
                     .filter_map(|c| match c {
                         pi_core::Content::Text(t) => Some(t.text.as_str()),
                         _ => None,
@@ -371,7 +406,11 @@ mod tests {
 
     #[test]
     fn test_llm_client_construction() {
-        let client = LlmClient::new("test-key", "https://api.anthropic.com", "claude-sonnet-4-20250514");
+        let client = LlmClient::new(
+            "test-key",
+            "https://api.anthropic.com",
+            "claude-sonnet-4-20250514",
+        );
         assert_eq!(client.model_id(), "claude-sonnet-4-20250514");
     }
 

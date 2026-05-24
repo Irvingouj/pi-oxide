@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::context_metadata::{ContextStrategy, ToolResultContext, fallback_strategy};
+use crate::context_metadata::{fallback_strategy, ContextStrategy, ToolResultContext};
 use crate::message::{AgentMessage, Content, TextContent};
 
 // ---------------------------------------------------------------------------
@@ -35,8 +35,12 @@ pub struct ContextProjectionBudget {
     pub compaction_threshold: f32,
 }
 
-fn default_microcompact_after_turns() -> u32 { 5 }
-fn default_compaction_threshold() -> f32 { 0.75 }
+fn default_microcompact_after_turns() -> u32 {
+    5
+}
+fn default_compaction_threshold() -> f32 {
+    0.75
+}
 
 impl Default for ContextProjectionBudget {
     fn default() -> Self {
@@ -319,7 +323,8 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
                 // Check prior state
                 if let Some(prior) = updated_state.replacements.get(&tool_call_id_str) {
                     // Reuse prior replacement
-                    let preview = apply_strategy(&text, &prior.strategy, input.budget.default_preview_chars);
+                    let preview =
+                        apply_strategy(&text, &prior.strategy, input.budget.default_preview_chars);
                     let marker = build_preview_text(
                         &prior.artifact_id,
                         &tool_name_str,
@@ -404,7 +409,8 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
     let turn_boundaries = find_turn_boundaries(&projected);
     let total_turns = turn_boundaries.len().saturating_sub(1);
     if total_turns > input.budget.microcompact_after_turns as usize {
-        let cutoff_turn = total_turns.saturating_sub(input.budget.microcompact_after_turns as usize);
+        let cutoff_turn =
+            total_turns.saturating_sub(input.budget.microcompact_after_turns as usize);
         for turn_idx in 0..cutoff_turn {
             let start = turn_boundaries[turn_idx];
             let end = turn_boundaries[turn_idx + 1];
@@ -472,7 +478,8 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
     };
 
     // Recalculate after trimming
-    let final_tokens = calibrated_estimate(count_message_chars(&trimmed), &input.state) + sys_tokens;
+    let final_tokens =
+        calibrated_estimate(count_message_chars(&trimmed), &input.state) + sys_tokens;
 
     // Cache breakpoints: suggest placing one at the second-to-last turn boundary
     let cache_breakpoints = compute_cache_breakpoints(&trimmed);
@@ -588,8 +595,8 @@ fn compute_cache_breakpoints(messages: &[AgentMessage]) -> Vec<usize> {
 mod tests {
     use super::*;
     use crate::message::{AssistantMessage, ToolResultMessage, UserMessage};
-    use crate::types::{ToolArguments, ToolCallId, ToolDetails, ToolName};
     use crate::message::{Content, ToolCall as ToolCallContent};
+    use crate::types::{ToolArguments, ToolCallId, ToolDetails, ToolName};
 
     fn user_msg(text: &str) -> AgentMessage {
         AgentMessage::User(UserMessage::new_text(text))
@@ -677,7 +684,9 @@ mod tests {
         let msgs = vec![assistant_tool_call("tc-1", "bash", r#"{"command":"ls"}"#)];
         let tokens = estimate_tokens(&msgs);
         // Name "bash" (4) + serialized args
-        let args_str = serde_json::to_string(&ToolArguments::new(serde_json::json!({"command":"ls"}))).unwrap();
+        let args_str =
+            serde_json::to_string(&ToolArguments::new(serde_json::json!({"command":"ls"})))
+                .unwrap();
         let expected = (4 + args_str.len() + 3) / 4;
         assert_eq!(tokens, expected);
     }
@@ -767,7 +776,9 @@ mod tests {
             "truncated_by_tool": false,
             "path": "src/lib.rs"
         });
-        let msgs = vec![tool_result_msg_with_details("tc-meta", "read", &big, details)];
+        let msgs = vec![tool_result_msg_with_details(
+            "tc-meta", "read", &big, details,
+        )];
 
         let output = project(ProjectionInput {
             system_prompt: "test".into(),
@@ -805,7 +816,12 @@ mod tests {
                 "path": "src/lib.rs"
             }
         });
-        let msgs = vec![tool_result_msg_with_details("tc-nested", "read", &big, details)];
+        let msgs = vec![tool_result_msg_with_details(
+            "tc-nested",
+            "read",
+            &big,
+            details,
+        )];
 
         let output = project(ProjectionInput {
             system_prompt: "test".into(),
@@ -911,7 +927,10 @@ mod tests {
         let mut msgs = Vec::new();
         for i in 0..20 {
             msgs.push(user_msg(&format!("turn {i}: {}", "A".repeat(200))));
-            msgs.push(assistant_text(&format!("response {i}: {}", "B".repeat(200))));
+            msgs.push(assistant_text(&format!(
+                "response {i}: {}",
+                "B".repeat(200)
+            )));
         }
 
         let budget = ContextProjectionBudget {
@@ -949,7 +968,11 @@ mod tests {
                 "bash",
                 r#"{"command":"echo"}"#,
             ));
-            msgs.push(tool_result_msg(&format!("tc-{i}"), "bash", &"Y".repeat(200)));
+            msgs.push(tool_result_msg(
+                &format!("tc-{i}"),
+                "bash",
+                &"Y".repeat(200),
+            ));
         }
 
         let budget = ContextProjectionBudget {
@@ -1046,7 +1069,10 @@ mod tests {
 
         // Should signal compaction (over 50% threshold) but not trim (under 100% limit)
         assert!(output.report.needs_compaction, "should signal compaction");
-        assert_eq!(output.report.dropped_messages, 0, "should not drop messages");
+        assert_eq!(
+            output.report.dropped_messages, 0,
+            "should not drop messages"
+        );
     }
 
     #[test]
@@ -1054,7 +1080,10 @@ mod tests {
         let mut msgs = Vec::new();
         for i in 0..20 {
             msgs.push(user_msg(&format!("turn {i}: {}", "A".repeat(200))));
-            msgs.push(assistant_text(&format!("response {i}: {}", "B".repeat(200))));
+            msgs.push(assistant_text(&format!(
+                "response {i}: {}",
+                "B".repeat(200)
+            )));
         }
 
         let budget = ContextProjectionBudget {
@@ -1102,10 +1131,7 @@ mod tests {
 
     #[test]
     fn no_cache_breakpoint_with_few_turns() {
-        let msgs = vec![
-            user_msg("turn 0"),
-            assistant_text("response 0"),
-        ];
+        let msgs = vec![user_msg("turn 0"), assistant_text("response 0")];
 
         let output = project(ProjectionInput {
             system_prompt: "test".into(),
@@ -1123,8 +1149,16 @@ mod tests {
         let mut msgs = Vec::new();
         for i in 0..8 {
             msgs.push(user_msg(&format!("turn {i}")));
-            msgs.push(assistant_tool_call(&format!("tc-{i}"), "bash", r#"{"command":"ls"}"#));
-            msgs.push(tool_result_msg(&format!("tc-{i}"), "bash", &format!("output {i}: {}", "X".repeat(300))));
+            msgs.push(assistant_tool_call(
+                &format!("tc-{i}"),
+                "bash",
+                r#"{"command":"ls"}"#,
+            ));
+            msgs.push(tool_result_msg(
+                &format!("tc-{i}"),
+                "bash",
+                &format!("output {i}: {}", "X".repeat(300)),
+            ));
         }
 
         // Microcompact after 3 turns (so turns 0..5 get compacted)
@@ -1141,21 +1175,38 @@ mod tests {
         });
 
         // First 5 turns' tool results should be microcompacted
-        let microcompacted_ids: Vec<&str> = output.report.replacements
+        let microcompacted_ids: Vec<&str> = output
+            .report
+            .replacements
             .iter()
             .filter(|r| matches!(r.strategy, ContextStrategy::Microcompacted))
             .map(|r| r.tool_call_id.as_str())
             .collect();
-        assert!(microcompacted_ids.contains(&"tc-0"), "tc-0 should be microcompacted");
-        assert!(microcompacted_ids.contains(&"tc-4"), "tc-4 should be microcompacted");
+        assert!(
+            microcompacted_ids.contains(&"tc-0"),
+            "tc-0 should be microcompacted"
+        );
+        assert!(
+            microcompacted_ids.contains(&"tc-4"),
+            "tc-4 should be microcompacted"
+        );
         // Last 3 turns should NOT be microcompacted
-        assert!(!microcompacted_ids.contains(&"tc-5"), "tc-5 should not be microcompacted");
-        assert!(!microcompacted_ids.contains(&"tc-7"), "tc-7 should not be microcompacted");
+        assert!(
+            !microcompacted_ids.contains(&"tc-5"),
+            "tc-5 should not be microcompacted"
+        );
+        assert!(
+            !microcompacted_ids.contains(&"tc-7"),
+            "tc-7 should not be microcompacted"
+        );
 
         // Verify the compacted text contains the summary marker
         if let AgentMessage::ToolResult(tr) = &output.projected_messages[2] {
             let text = extract_text(&tr.content);
-            assert!(text.contains("<tool-summary"), "expected microcompact summary, got: {text}");
+            assert!(
+                text.contains("<tool-summary"),
+                "expected microcompact summary, got: {text}"
+            );
         } else {
             panic!("expected tool result at index 2");
         }
@@ -1213,7 +1264,10 @@ mod tests {
         });
 
         // tc-big should be replaced by Phase 1 (artifact budgeting), NOT microcompacted
-        let tc_big_replacement = output.report.replacements.iter()
+        let tc_big_replacement = output
+            .report
+            .replacements
+            .iter()
             .find(|r| r.tool_call_id == "tc-big")
             .unwrap();
         assert!(
@@ -1223,11 +1277,17 @@ mod tests {
         );
 
         // tc-small should be microcompacted (it was in an old turn and not replaced by Phase 1)
-        let tc_small_replacement = output.report.replacements.iter()
+        let tc_small_replacement = output
+            .report
+            .replacements
+            .iter()
             .find(|r| r.tool_call_id == "tc-small")
             .unwrap();
         assert!(
-            matches!(tc_small_replacement.strategy, ContextStrategy::Microcompacted),
+            matches!(
+                tc_small_replacement.strategy,
+                ContextStrategy::Microcompacted
+            ),
             "tc-small should be microcompacted, got {:?}",
             tc_small_replacement.strategy,
         );

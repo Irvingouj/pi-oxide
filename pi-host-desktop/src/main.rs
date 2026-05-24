@@ -22,7 +22,9 @@ struct Cli {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
-    let base_url = cli.base_url.unwrap_or_else(|| "https://api.anthropic.com".into());
+    let base_url = cli
+        .base_url
+        .unwrap_or_else(|| "https://api.anthropic.com".into());
 
     let mut terminal = ratatui::init();
     let app = app::App::new(&cli.system, &cli.model, &api_key, &base_url);

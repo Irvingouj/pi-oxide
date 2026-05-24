@@ -1,331 +1,175 @@
 /* @ts-self-types="./pi_host_web.d.ts" */
 
 /**
- * Create a new agent from an `AgentOptions` JSON string.
- * Returns `{ ok: true, data: { handle } }` or an error envelope.
- * @param {string} options_json
- * @returns {string}
+ * @param {AgentOptions} options
+ * @returns {CreateAgentResult}
  */
-export function createAgent(options_json) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ptr0 = passStringToWasm0(options_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.createAgent(ptr0, len0);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
+export function createAgent(options) {
+    const ret = wasm.createAgent(options);
+    return ret;
 }
 
 /**
- * Destroy an agent and free its resources.
  * @param {number} handle
- * @returns {string}
+ * @returns {EmptyResult}
  */
 export function destroyAgent(handle) {
-    let deferred1_0;
-    let deferred1_1;
-    try {
-        const ret = wasm.destroyAgent(handle);
-        deferred1_0 = ret[0];
-        deferred1_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-    }
+    const ret = wasm.destroyAgent(handle);
+    return ret;
 }
 
 /**
- * Drain accumulated trace log messages and return them as a JSON array.
- * @returns {string}
+ * @returns {string[]}
  */
 export function drainTraceLog() {
-    let deferred1_0;
-    let deferred1_1;
-    try {
-        const ret = wasm.drainTraceLog();
-        deferred1_0 = ret[0];
-        deferred1_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-    }
+    const ret = wasm.drainTraceLog();
+    var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+    return v1;
 }
 
 /**
- * Feed a streaming LLM chunk.
  * @param {number} handle
- * @param {string} chunk_json
- * @returns {string}
+ * @param {LlmChunk} chunk
+ * @returns {EventsResult}
  */
-export function feedLlmChunk(handle, chunk_json) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ptr0 = passStringToWasm0(chunk_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.feedLlmChunk(handle, ptr0, len0);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
+export function feedLlmChunk(handle, chunk) {
+    const ret = wasm.feedLlmChunk(handle, chunk);
+    return ret;
 }
 
 /**
- * Queue a follow-up message for after the run would otherwise stop.
  * @param {number} handle
- * @param {string} message_json
- * @returns {string}
+ * @param {AgentMessage} message
+ * @returns {EmptyResult}
  */
-export function followUp(handle, message_json) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ptr0 = passStringToWasm0(message_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.followUp(handle, ptr0, len0);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
+export function followUp(handle, message) {
+    const ret = wasm.followUp(handle, message);
+    return ret;
 }
 
 /**
- * Notify the agent that the LLM stream has finished.
  * @param {number} handle
- * @param {string} result_json
- * @returns {string}
+ * @param {LlmResult} result
+ * @returns {StepResult}
  */
-export function onLlmDone(handle, result_json) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ptr0 = passStringToWasm0(result_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.onLlmDone(handle, ptr0, len0);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
+export function onLlmDone(handle, result) {
+    const ret = wasm.onLlmDone(handle, result);
+    return ret;
 }
 
 /**
- * Notify the agent that a tool was cancelled.
  * @param {number} handle
  * @param {string} tool_call_id
- * @param {string} reason_json
- * @returns {string}
+ * @param {CancelReason} reason
+ * @returns {StepResult}
  */
-export function onToolCancelled(handle, tool_call_id, reason_json) {
-    let deferred3_0;
-    let deferred3_1;
-    try {
-        const ptr0 = passStringToWasm0(tool_call_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(reason_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.onToolCancelled(handle, ptr0, len0, ptr1, len1);
-        deferred3_0 = ret[0];
-        deferred3_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
-    }
+export function onToolCancelled(handle, tool_call_id, reason) {
+    const ptr0 = passStringToWasm0(tool_call_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.onToolCancelled(handle, ptr0, len0, reason);
+    return ret;
 }
 
 /**
- * Notify the agent that a tool has finished executing.
  * @param {number} handle
  * @param {string} tool_call_id
- * @param {string} result_json
- * @returns {string}
+ * @param {ToolDonePayload} payload
+ * @returns {StepResult}
  */
-export function onToolDone(handle, tool_call_id, result_json) {
-    let deferred3_0;
-    let deferred3_1;
-    try {
-        const ptr0 = passStringToWasm0(tool_call_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(result_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.onToolDone(handle, ptr0, len0, ptr1, len1);
-        deferred3_0 = ret[0];
-        deferred3_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
-    }
+export function onToolDone(handle, tool_call_id, payload) {
+    const ptr0 = passStringToWasm0(tool_call_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.onToolDone(handle, ptr0, len0, payload);
+    return ret;
 }
 
 /**
- * Notify the agent that a tool has started executing.
  * @param {number} handle
  * @param {string} tool_call_id
- * @returns {string}
+ * @returns {EventsResult}
  */
 export function onToolStarted(handle, tool_call_id) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ptr0 = passStringToWasm0(tool_call_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.onToolStarted(handle, ptr0, len0);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
+    const ptr0 = passStringToWasm0(tool_call_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.onToolStarted(handle, ptr0, len0);
+    return ret;
 }
 
 /**
- * Send a streaming tool execution update to the agent.
- * Input JSON must match `ToolExecutionUpdate`.
  * @param {number} handle
- * @param {string} update_json
- * @returns {string}
+ * @param {ToolExecutionUpdate} update
+ * @returns {EventsResult}
  */
-export function onToolUpdate(handle, update_json) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ptr0 = passStringToWasm0(update_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.onToolUpdate(handle, ptr0, len0);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
+export function onToolUpdate(handle, update) {
+    const ret = wasm.onToolUpdate(handle, update);
+    return ret;
 }
 
 /**
- * Project context: run the Rust context projection engine.
- *
- * Input JSON must match `ProjectionInput`:
- * ```json
- * {
- *   "system_prompt": "...",
- *   "messages": [...],
- *   "budget": { "max_tool_result_chars": 50000, "max_context_tokens": 100000, "default_preview_chars": 2000 },
- *   "state": { "replacements": {} }
- * }
- * ```
- *
- * Returns:
- * ```json
- * { "ok": true, "data": { "projected_messages": [...], "updated_state": {...}, "report": {...} } }
- * ```
- * @param {string} input_json
- * @returns {string}
+ * @param {ProjectionInput} input
+ * @returns {ProjectionResult}
  */
-export function projectContext(input_json) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ptr0 = passStringToWasm0(input_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.projectContext(ptr0, len0);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
+export function projectContext(input) {
+    const ret = wasm.projectContext(input);
+    return ret;
 }
 
 /**
- * Start a new turn with a prompt.
- * `prompt_json` can be a full `AgentMessage` or `{ "text": "..." }`.
  * @param {number} handle
- * @param {string} prompt_json
- * @returns {string}
+ * @param {PromptRequest} prompt
+ * @returns {StepResult}
  */
-export function prompt(handle, prompt_json) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ptr0 = passStringToWasm0(prompt_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.prompt(handle, ptr0, len0);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
+export function prompt(handle, prompt) {
+    const ret = wasm.prompt(handle, prompt);
+    return ret;
 }
 
 /**
- * Reset the agent state.
  * @param {number} handle
- * @returns {string}
+ * @returns {EmptyResult}
  */
 export function reset(handle) {
-    let deferred1_0;
-    let deferred1_1;
-    try {
-        const ret = wasm.reset(handle);
-        deferred1_0 = ret[0];
-        deferred1_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-    }
+    const ret = wasm.reset(handle);
+    return ret;
 }
 
 /**
- * Get a read-only snapshot of the agent state.
  * @param {number} handle
- * @returns {string}
+ * @returns {StateResult}
  */
 export function state(handle) {
-    let deferred1_0;
-    let deferred1_1;
-    try {
-        const ret = wasm.state(handle);
-        deferred1_0 = ret[0];
-        deferred1_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-    }
+    const ret = wasm.state(handle);
+    return ret;
 }
 
 /**
- * Inject a steering message mid-run.
  * @param {number} handle
- * @param {string} message_json
- * @returns {string}
+ * @param {AgentMessage} message
+ * @returns {EventsResult}
  */
-export function steer(handle, message_json) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ptr0 = passStringToWasm0(message_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.steer(handle, ptr0, len0);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
+export function steer(handle, message) {
+    const ret = wasm.steer(handle, message);
+    return ret;
 }
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
+        __wbg___wbindgen_is_undefined_67b456be8673d3d7: function(arg0) {
+            const ret = arg0 === undefined;
+            return ret;
+        },
+        __wbg___wbindgen_string_get_72bdf95d3ae505b1: function(arg0, arg1) {
+            const obj = arg1;
+            const ret = typeof(obj) === 'string' ? obj : undefined;
+            var ptr1 = isLikeNone(ret) ? 0 : passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            var len1 = WASM_VECTOR_LEN;
+            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
+        __wbg___wbindgen_throw_1506f2235d1bdba0: function(arg0, arg1) {
+            throw new Error(getStringFromWasm0(arg0, arg1));
+        },
         __wbg_error_a6fa202b58aa1cd3: function(arg0, arg1) {
             let deferred0_0;
             let deferred0_1;
@@ -341,12 +185,25 @@ function __wbg_get_imports() {
             const ret = new Error();
             return ret;
         },
+        __wbg_parse_03863847d06c4e89: function() { return handleError(function (arg0, arg1) {
+            const ret = JSON.parse(getStringFromWasm0(arg0, arg1));
+            return ret;
+        }, arguments); },
         __wbg_stack_3b0d974bbf31e44f: function(arg0, arg1) {
             const ret = arg1.stack;
             const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
             getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
             getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
+        __wbg_stringify_8286df6dcc591521: function() { return handleError(function (arg0) {
+            const ret = JSON.stringify(arg0);
+            return ret;
+        }, arguments); },
+        __wbindgen_cast_0000000000000001: function(arg0, arg1) {
+            // Cast intrinsic for `Ref(String) -> Externref`.
+            const ret = getStringFromWasm0(arg0, arg1);
+            return ret;
         },
         __wbindgen_init_externref_table: function() {
             const table = wasm.__wbindgen_externrefs;
@@ -362,6 +219,23 @@ function __wbg_get_imports() {
         __proto__: null,
         "./pi_host_web_bg.js": import0,
     };
+}
+
+function addToExternrefTable0(obj) {
+    const idx = wasm.__externref_table_alloc();
+    wasm.__wbindgen_externrefs.set(idx, obj);
+    return idx;
+}
+
+function getArrayJsValueFromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    const mem = getDataViewMemory0();
+    const result = [];
+    for (let i = ptr; i < ptr + 4 * len; i += 4) {
+        result.push(wasm.__wbindgen_externrefs.get(mem.getUint32(i, true)));
+    }
+    wasm.__externref_drop_slice(ptr, len);
+    return result;
 }
 
 let cachedDataViewMemory0 = null;
@@ -382,6 +256,19 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+function handleError(f, args) {
+    try {
+        return f.apply(this, args);
+    } catch (e) {
+        const idx = addToExternrefTable0(e);
+        wasm.__wbindgen_exn_store(idx);
+    }
+}
+
+function isLikeNone(x) {
+    return x === undefined || x === null;
 }
 
 function passStringToWasm0(arg, malloc, realloc) {

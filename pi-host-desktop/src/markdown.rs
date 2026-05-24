@@ -51,7 +51,9 @@ pub fn render(input: &str, _width: u16) -> Text<'static> {
                 let prefix = "#".repeat(level as usize) + " ";
                 current_spans.push(Span::styled(
                     prefix,
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
             pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Heading(_)) => {
@@ -113,11 +115,7 @@ fn flush_spans(spans: &mut Vec<Span<'static>>, lines: &mut Vec<Line<'static>>) {
     }
 }
 
-fn render_code_block(
-    _lang: &str,
-    code_lines: &[String],
-    lines: &mut Vec<Line<'static>>,
-) {
+fn render_code_block(_lang: &str, code_lines: &[String], lines: &mut Vec<Line<'static>>) {
     let code_text = code_lines.join("\n");
     let trimmed = code_text.trim();
 
@@ -168,9 +166,10 @@ mod tests {
         let text = render("Use `cargo build` to compile", 80);
         assert!(text.lines.len() > 0);
         // Should contain yellow-styled code span
-        let has_yellow = text.lines.iter().any(|l| {
-            l.spans.iter().any(|s| s.style.fg == Some(Color::Yellow))
-        });
+        let has_yellow = text
+            .lines
+            .iter()
+            .any(|l| l.spans.iter().any(|s| s.style.fg == Some(Color::Yellow)));
         assert!(has_yellow);
     }
 
@@ -178,7 +177,9 @@ mod tests {
     fn test_render_list() {
         let text = render("- item 1\n- item 2\n- item 3", 80);
         // Should have bullet markers
-        let bullet_count = text.lines.iter()
+        let bullet_count = text
+            .lines
+            .iter()
             .filter(|l| l.spans.iter().any(|s| s.content.contains("•")))
             .count();
         assert_eq!(bullet_count, 3);

@@ -1,122 +1,391 @@
 /* tslint:disable */
 /* eslint-disable */
+export interface AgentContext {
+    system_prompt: string;
+    messages: AgentMessage[];
+    tools: ToolDefinition[];
+}
 
-/**
- * Create a new agent from an `AgentOptions` JSON string.
- * Returns `{ ok: true, data: { handle } }` or an error envelope.
- */
-export function createAgent(options_json: string): string;
+export interface AgentOptions {
+    system_prompt: string;
+    model: Model;
+    thinking_level?: ThinkingLevel;
+    tools?: ToolDefinition[];
+    steering_mode?: QueueMode;
+    follow_up_mode?: QueueMode;
+    tool_execution_mode?: ToolExecutionMode;
+    session_id?: SessionId;
+    messages?: AgentMessage[];
+}
 
-/**
- * Destroy an agent and free its resources.
- */
-export function destroyAgent(handle: number): string;
+export interface AgentState {
+    system_prompt: string;
+    model: Model;
+    thinking_level: ThinkingLevel;
+    tools: ToolDefinition[];
+    messages: AgentMessage[];
+    is_streaming: boolean;
+    streaming_message?: AgentMessage;
+    pending_tool_calls: string[];
+    error_message?: string;
+}
 
-/**
- * Drain accumulated trace log messages and return them as a JSON array.
- */
-export function drainTraceLog(): string;
+export interface ApiUsageSnapshot {
+    estimated_tokens: number;
+    actual_input_tokens: number;
+}
 
-/**
- * Feed a streaming LLM chunk.
- */
-export function feedLlmChunk(handle: number, chunk_json: string): string;
+export interface AssistantMessage {
+    content: Content[];
+    api: ApiName;
+    provider: ProviderName;
+    model: ModelId;
+    stop_reason: StopReason;
+    error_message?: string;
+    timestamp: number;
+    usage: TokenUsage;
+}
 
-/**
- * Queue a follow-up message for after the run would otherwise stop.
- */
-export function followUp(handle: number, message_json: string): string;
+export interface BackgroundJobRef {
+    job_id: string;
+    tool_call_id: ToolCallId;
+    command_label: string;
+}
 
-/**
- * Notify the agent that the LLM stream has finished.
- */
-export function onLlmDone(handle: number, result_json: string): string;
+export interface ContextProjectionBudget {
+    max_tool_result_chars: number;
+    max_context_tokens: number;
+    default_preview_chars: number;
+    microcompact_after_turns?: number;
+    compaction_threshold?: number;
+}
 
-/**
- * Notify the agent that a tool was cancelled.
- */
-export function onToolCancelled(handle: number, tool_call_id: string, reason_json: string): string;
+export interface ContextProjectionReport {
+    estimated_tokens: number;
+    replacements: ContextReplacement[];
+    dropped_messages: number;
+    needs_compaction?: boolean;
+    cache_breakpoints?: number[];
+}
 
-/**
- * Notify the agent that a tool has finished executing.
- */
-export function onToolDone(handle: number, tool_call_id: string, result_json: string): string;
+export interface ContextProjectionState {
+    replacements: Record<string, ContextReplacement>;
+    last_api_usage?: ApiUsageSnapshot | null;
+    turns_since_compaction?: number;
+}
 
-/**
- * Notify the agent that a tool has started executing.
- */
-export function onToolStarted(handle: number, tool_call_id: string): string;
+export interface ContextReplacement {
+    tool_call_id: string;
+    tool_name: string;
+    artifact_id: string;
+    original_chars: number;
+    preview_chars: number;
+    strategy: ContextStrategy;
+}
 
-/**
- * Send a streaming tool execution update to the agent.
- * Input JSON must match `ToolExecutionUpdate`.
- */
-export function onToolUpdate(handle: number, update_json: string): string;
+export interface CreateAgentOutput {
+    handle: number;
+}
 
-/**
- * Project context: run the Rust context projection engine.
- *
- * Input JSON must match `ProjectionInput`:
- * ```json
- * {
- *   "system_prompt": "...",
- *   "messages": [...],
- *   "budget": { "max_tool_result_chars": 50000, "max_context_tokens": 100000, "default_preview_chars": 2000 },
- *   "state": { "replacements": {} }
- * }
- * ```
- *
- * Returns:
- * ```json
- * { "ok": true, "data": { "projected_messages": [...], "updated_state": {...}, "report": {...} } }
- * ```
- */
-export function projectContext(input_json: string): string;
+export interface CreateAgentResult {
+    ok: boolean;
+    data?: CreateAgentOutput;
+    error?: ErrorDto;
+}
 
-/**
- * Start a new turn with a prompt.
- * `prompt_json` can be a full `AgentMessage` or `{ "text": "..." }`.
- */
-export function prompt(handle: number, prompt_json: string): string;
+export interface EmptyResult {
+    ok: boolean;
+    data?: null;
+    error?: ErrorDto;
+}
 
-/**
- * Reset the agent state.
- */
-export function reset(handle: number): string;
+export interface ErrorDto {
+    code: string;
+    message: string;
+}
 
-/**
- * Get a read-only snapshot of the agent state.
- */
-export function state(handle: number): string;
+export interface EventsOutput {
+    events: AgentEvent[];
+}
 
-/**
- * Inject a steering message mid-run.
- */
-export function steer(handle: number, message_json: string): string;
+export interface EventsResult {
+    ok: boolean;
+    data?: EventsOutput;
+    error?: ErrorDto;
+}
+
+export interface ImageContent {
+    media_type: string;
+    data: string;
+}
+
+export interface LlmContext {
+    system_prompt: string;
+    messages: AgentMessage[];
+    tools: ToolDefinition[];
+}
+
+export interface LlmError {
+    code: string;
+    message: string;
+    details?: Value;
+}
+
+export interface Model {
+    id: ModelId;
+    name: ModelName;
+    api: ApiName;
+    provider: ProviderName;
+    base_url?: string;
+    reasoning: boolean;
+    context_window: number;
+    max_tokens: number;
+    capabilities?: ModelCapabilities;
+    cost?: ModelCost;
+}
+
+export interface ModelCapabilities {
+    vision: boolean;
+    json_mode: boolean;
+    function_calling: boolean;
+    streaming: boolean;
+}
+
+export interface ModelCost {
+    input: number;
+    output: number;
+    cache_read: number;
+    cache_write: number;
+}
+
+export interface ProjectionInput {
+    system_prompt: string;
+    messages: AgentMessage[];
+    budget: ContextProjectionBudget;
+    state: ContextProjectionState;
+}
+
+export interface ProjectionOutput {
+    projected_messages: AgentMessage[];
+    updated_state: ContextProjectionState;
+    report: ContextProjectionReport;
+}
+
+export interface ProjectionResult {
+    ok: boolean;
+    data?: ProjectionOutput;
+    error?: ErrorDto;
+}
+
+export interface StateOutput {
+    state: AgentState;
+}
+
+export interface StateResult {
+    ok: boolean;
+    data?: StateOutput;
+    error?: ErrorDto;
+}
+
+export interface StepOutput {
+    events: AgentEvent[];
+    actions: AgentAction[];
+}
+
+export interface StepResult {
+    ok: boolean;
+    data?: StepOutput;
+    error?: ErrorDto;
+}
+
+export interface TextContent {
+    text: string;
+}
+
+export interface TokenUsage {
+    input: number;
+    output: number;
+    cache_read: number;
+    cache_write: number;
+    total_tokens: number;
+}
+
+export interface ToolCall {
+    id: ToolCallId;
+    name: ToolName;
+    arguments: ToolArguments;
+}
+
+export interface ToolDefinition {
+    name: ToolName;
+    label: string;
+    description: string;
+    parameters: JsonSchema;
+    execution_mode?: ExecutionMode;
+}
+
+export interface ToolError {
+    code: string;
+    message: string;
+    details?: ToolDetails;
+}
+
+export interface ToolExecutionUpdate {
+    tool_call_id: ToolCallId;
+    stream: ToolOutputStream;
+    chunk: string;
+    sequence: number;
+    timestamp: number;
+}
+
+export interface ToolResult {
+    content: Content[];
+    details?: ToolDetails;
+    terminate?: boolean;
+}
+
+export interface ToolResultContext {
+    content_kind: ContentKind;
+    strategy: ContextStrategy;
+    original_chars: number;
+    truncated_by_tool: boolean;
+    path?: string;
+    exit_code?: number;
+}
+
+export interface ToolResultMessage {
+    tool_call_id: ToolCallId;
+    tool_name: ToolName;
+    content: Content[];
+    details?: ToolDetails;
+    is_error: boolean;
+    timestamp: number;
+}
+
+export interface UserMessage {
+    content: Content[];
+    timestamp: number;
+}
+
+export type AgentAction = { type: "stream_llm"; context: LlmContext; session_id?: SessionId } | { type: "execute_tools"; calls: ToolCall[] } | { type: "cancel_tools"; tool_call_ids: ToolCallId[]; reason: CancelReason } | { type: "wait_for_input"; mode: WaitMode } | { type: "finished"; messages: AgentMessage[] };
+
+export type AgentEvent = { type: "agent_start" } | { type: "agent_end"; messages: AgentMessage[] } | { type: "turn_start" } | { type: "turn_end"; message: AgentMessage; tool_results: ToolResultMessage[] } | { type: "message_start"; message: AgentMessage } | { type: "message_update"; message: AgentMessage; delta: ContentDelta } | { type: "message_end"; message: AgentMessage } | { type: "tool_execution_start"; tool_call_id: ToolCallId; tool_name: ToolName; args?: ToolArguments } | { type: "tool_execution_update"; tool_call_id: ToolCallId; stream: ToolOutputStream; chunk: string; sequence: number; timestamp: number } | { type: "tool_execution_end"; tool_call_id: ToolCallId; result: ToolResult; is_error: boolean } | { type: "tool_execution_cancelled"; tool_call_id: ToolCallId; reason: CancelReason } | { type: "queue_update"; steer: AgentMessage[]; follow_up: AgentMessage[] } | { type: "save_point"; had_pending_writes: boolean } | { type: "settled" };
+
+export type AgentMessage = ({ role: "user" } & UserMessage) | ({ role: "assistant" } & AssistantMessage) | ({ role: "tool_result" } & ToolResultMessage);
+
+export type ApiName = string;
+
+export type CancelReason = { type: "user_requested" } | { type: "timeout" } | { type: "agent_aborted" } | { type: "dependency_failed"; cause_tool_call_id: ToolCallId };
+
+export type Content = ({ type: "text" } & TextContent) | ({ type: "image" } & ImageContent) | ({ type: "tool_call" } & ToolCall);
+
+export type ContentDelta = { kind: "text_start" } | { kind: "text_delta"; text: string } | { kind: "text_end" } | { kind: "thinking_start" } | { kind: "thinking_delta"; text: string } | { kind: "thinking_end" } | { kind: "tool_call_start"; tool_call: ToolCall } | { kind: "tool_call_delta"; tool_call_id: ToolCallId; delta: Value } | { kind: "tool_call_end"; tool_call_id: ToolCallId };
+
+export type ContentKind = "file_read" | "command_output" | "diff" | "search_results" | "directory_listing" | "generic_text";
+
+export type ContextStrategy = { type: "keep_full" } | { type: "head"; max_chars: number } | { type: "tail"; max_chars: number } | { type: "head_tail"; head_chars: number; tail_chars: number } | { type: "drop_if_old" } | { type: "microcompacted" };
+
+export type ExecutionMode = "parallel" | "sequential";
+
+export type JsonSchema = Value;
+
+export type LlmChunk = ({ kind: "start" } & {} & AssistantMessage) | { kind: "text_delta"; text: string } | { kind: "thinking_delta"; text: string } | { kind: "tool_call_delta"; tool_call_id: ToolCallId; delta: Value } | { kind: "done" } | { kind: "error"; message: string };
+
+export type LlmResult = { Ok: AssistantMessage } | { Err: { error: LlmError; aborted: boolean } };
+
+export type ModelId = string;
+
+export type ModelName = string;
+
+export type ModelProvider = "open_ai" | "anthropic" | "google" | "ollama" | "custom";
+
+export type Phase = "idle" | "streaming" | "executing_tools" | "wait_for_input";
+
+export type PromptRequest = AgentMessage | { text: string };
+
+export type ProviderName = string;
+
+export type QueueMode = "one_at_a_time" | "all";
+
+export type SessionId = string;
+
+export type StopReason = "end_turn" | "max_tokens" | "tool_use" | "aborted" | "error";
+
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export type ToolArguments = Value;
+
+export type ToolCallId = string;
+
+export type ToolDetails = Value;
+
+export type ToolDonePayload = { error: ToolError } | { result: ToolResult } | ToolResult;
+
+export type ToolExecutionMode = "parallel" | "sequential";
+
+export type ToolName = string;
+
+export type ToolOutputStream = "stdout" | "stderr" | "status";
+
+export type WaitMode = "steering" | "follow_up" | "any";
+
+
+export function createAgent(options: AgentOptions): CreateAgentResult;
+
+export function destroyAgent(handle: number): EmptyResult;
+
+export function drainTraceLog(): string[];
+
+export function feedLlmChunk(handle: number, chunk: LlmChunk): EventsResult;
+
+export function followUp(handle: number, message: AgentMessage): EmptyResult;
+
+export function onLlmDone(handle: number, result: LlmResult): StepResult;
+
+export function onToolCancelled(handle: number, tool_call_id: string, reason: CancelReason): StepResult;
+
+export function onToolDone(handle: number, tool_call_id: string, payload: ToolDonePayload): StepResult;
+
+export function onToolStarted(handle: number, tool_call_id: string): EventsResult;
+
+export function onToolUpdate(handle: number, update: ToolExecutionUpdate): EventsResult;
+
+export function projectContext(input: ProjectionInput): ProjectionResult;
+
+export function prompt(handle: number, prompt: PromptRequest): StepResult;
+
+export function reset(handle: number): EmptyResult;
+
+export function state(handle: number): StateResult;
+
+export function steer(handle: number, message: AgentMessage): EventsResult;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly createAgent: (a: number, b: number) => [number, number];
-    readonly destroyAgent: (a: number) => [number, number];
+    readonly createAgent: (a: any) => any;
+    readonly destroyAgent: (a: number) => any;
     readonly drainTraceLog: () => [number, number];
-    readonly feedLlmChunk: (a: number, b: number, c: number) => [number, number];
-    readonly followUp: (a: number, b: number, c: number) => [number, number];
-    readonly onLlmDone: (a: number, b: number, c: number) => [number, number];
-    readonly onToolCancelled: (a: number, b: number, c: number, d: number, e: number) => [number, number];
-    readonly onToolDone: (a: number, b: number, c: number, d: number, e: number) => [number, number];
-    readonly onToolStarted: (a: number, b: number, c: number) => [number, number];
-    readonly onToolUpdate: (a: number, b: number, c: number) => [number, number];
-    readonly projectContext: (a: number, b: number) => [number, number];
-    readonly prompt: (a: number, b: number, c: number) => [number, number];
-    readonly reset: (a: number) => [number, number];
-    readonly state: (a: number) => [number, number];
-    readonly steer: (a: number, b: number, c: number) => [number, number];
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
+    readonly feedLlmChunk: (a: number, b: any) => any;
+    readonly followUp: (a: number, b: any) => any;
+    readonly onLlmDone: (a: number, b: any) => any;
+    readonly onToolCancelled: (a: number, b: number, c: number, d: any) => any;
+    readonly onToolDone: (a: number, b: number, c: number, d: any) => any;
+    readonly onToolStarted: (a: number, b: number, c: number) => any;
+    readonly onToolUpdate: (a: number, b: any) => any;
+    readonly projectContext: (a: any) => any;
+    readonly prompt: (a: number, b: any) => any;
+    readonly reset: (a: number) => any;
+    readonly state: (a: number) => any;
+    readonly steer: (a: number, b: any) => any;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
+    readonly __externref_drop_slice: (a: number, b: number) => void;
     readonly __wbindgen_start: () => void;
 }
 

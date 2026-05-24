@@ -1,5 +1,5 @@
-use ts_rs::TS;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::types::{JsonSchema, ToolDetails, ToolName};
 

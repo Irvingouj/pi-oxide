@@ -4,13 +4,14 @@ use crossterm::event::{KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+};
 use ratatui::Frame;
 
 use pi_core::{
-    Agent, AgentAction, AgentMessage, Content, ContextProjectionBudget,
+    project, Agent, AgentAction, AgentMessage, Content, ContextProjectionBudget,
     ContextProjectionState, LlmChunk, LlmContext, LlmResult, Model, ProjectionInput, ToolCall,
-    project,
 };
 
 use crate::llm::LlmClient;
@@ -25,8 +26,16 @@ use crate::tools;
 enum ChatEntry {
     User(String),
     Assistant(Text<'static>),
-    ToolStart { name: String, args_summary: String },
-    ToolResult { name: String, output: String, #[allow(dead_code)] is_error: bool },
+    ToolStart {
+        name: String,
+        args_summary: String,
+    },
+    ToolResult {
+        name: String,
+        output: String,
+        #[allow(dead_code)]
+        is_error: bool,
+    },
     System(String),
 }
 
@@ -82,9 +91,13 @@ impl App {
 
         let llm_client = LlmClient::new(api_key, base_url, model_id);
 
-        let mut init_entries = vec![ChatEntry::System("Ready. Type a message and press Enter.".into())];
+        let mut init_entries = vec![ChatEntry::System(
+            "Ready. Type a message and press Enter.".into(),
+        )];
         if api_key.is_empty() {
-            init_entries.push(ChatEntry::System("Warning: ANTHROPIC_API_KEY not set. LLM calls will fail.".into()));
+            init_entries.push(ChatEntry::System(
+                "Warning: ANTHROPIC_API_KEY not set. LLM calls will fail.".into(),
+            ));
         }
 
         Self {
@@ -109,7 +122,10 @@ impl App {
     // Main event loop
     // -----------------------------------------------------------------------
 
-    pub fn run(mut self, terminal: &mut ratatui::DefaultTerminal) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn run(
+        mut self,
+        terminal: &mut ratatui::DefaultTerminal,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         loop {
             terminal.draw(|f| self.render(f))?;
 
@@ -157,7 +173,9 @@ impl App {
             }
             KeyCode::Left => {
                 if self.cursor_pos > 0 {
-                    self.cursor_pos = self.input.char_indices()
+                    self.cursor_pos = self
+                        .input
+                        .char_indices()
                         .take_while(|(i, _)| *i < self.cursor_pos)
                         .last()
                         .map(|(i, _)| i)
@@ -229,7 +247,11 @@ impl App {
         self.entries.push(ChatEntry::Assistant(Text::raw("...")));
         self.streaming_text.clear();
 
-        match self.llm_client.stream_sync(&context.system_prompt, &projected_messages, &context.tools) {
+        match self.llm_client.stream_sync(
+            &context.system_prompt,
+            &projected_messages,
+            &context.tools,
+        ) {
             Ok(mut stream) => {
                 let mut full_text = String::new();
                 let mut tool_calls = Vec::new();
@@ -246,13 +268,17 @@ impl App {
                                 *self.entries.last_mut().unwrap() = ChatEntry::Assistant(rendered);
                             }
                         }
-                        LlmChunk::ToolCallDelta { tool_call_id, delta } => {
+                        LlmChunk::ToolCallDelta {
+                            tool_call_id,
+                            delta,
+                        } => {
                             // Accumulate tool call deltas — we'll process them on Done
                             tool_calls.push((tool_call_id, delta));
                         }
                         LlmChunk::Done => break,
                         LlmChunk::Error { message } => {
-                            self.entries.push(ChatEntry::System(format!("LLM Error: {message}")));
+                            self.entries
+                                .push(ChatEntry::System(format!("LLM Error: {message}")));
                             break;
                         }
                         _ => {}
@@ -273,16 +299,22 @@ impl App {
                 stop_reason = stop.to_string();
 
                 // Build the final assistant message for core
-                let tool_use_blocks: Vec<Content> = stream.tool_calls().into_iter().map(|tc| {
-                    Content::ToolCall(pi_core::ToolCall {
-                        id: pi_core::ToolCallId::new(&tc.id),
-                        name: pi_core::ToolName::new(&tc.name),
-                        arguments: pi_core::ToolArguments::new(tc.input),
+                let tool_use_blocks: Vec<Content> = stream
+                    .tool_calls()
+                    .into_iter()
+                    .map(|tc| {
+                        Content::ToolCall(pi_core::ToolCall {
+                            id: pi_core::ToolCallId::new(&tc.id),
+                            name: pi_core::ToolName::new(&tc.name),
+                            arguments: pi_core::ToolArguments::new(tc.input),
+                        })
                     })
-                }).collect();
+                    .collect();
 
                 let text_block = if full_text.is_empty() && tool_use_blocks.is_empty() {
-                    vec![Content::Text(pi_core::TextContent { text: String::new() })]
+                    vec![Content::Text(pi_core::TextContent {
+                        text: String::new(),
+                    })]
                 } else if full_text.is_empty() {
                     vec![]
                 } else {
@@ -346,13 +378,25 @@ impl App {
 
             match result {
                 Ok(tool_result) => {
-                    let output_text = tool_result.content.iter()
-                        .filter_map(|c| if let Content::Text(t) = c { Some(t.text.as_str()) } else { None })
+                    let output_text = tool_result
+                        .content
+                        .iter()
+                        .filter_map(|c| {
+                            if let Content::Text(t) = c {
+                                Some(t.text.as_str())
+                            } else {
+                                None
+                            }
+                        })
                         .collect::<Vec<_>>()
                         .join("\n");
 
                     let display = if output_text.len() > 500 {
-                        format!("{}...\n({} chars total)", &output_text[..500], output_text.len())
+                        format!(
+                            "{}...\n({} chars total)",
+                            &output_text[..500],
+                            output_text.len()
+                        )
                     } else {
                         output_text
                     };
@@ -363,10 +407,8 @@ impl App {
                         is_error: false,
                     });
 
-                    let (_events, actions) = self.agent.on_tool_done(
-                        call.id.clone(),
-                        Ok(tool_result),
-                    );
+                    let (_events, actions) =
+                        self.agent.on_tool_done(call.id.clone(), Ok(tool_result));
                     self.handle_actions(actions);
                 }
                 Err(err) => {
@@ -376,10 +418,7 @@ impl App {
                         is_error: true,
                     });
 
-                    let (_events, actions) = self.agent.on_tool_done(
-                        call.id.clone(),
-                        Err(err),
-                    );
+                    let (_events, actions) = self.agent.on_tool_done(call.id.clone(), Err(err));
                     self.handle_actions(actions);
                 }
             }
@@ -395,7 +434,8 @@ impl App {
             Constraint::Fill(1),
             Constraint::Length(3),
             Constraint::Length(1),
-        ]).areas(frame.area());
+        ])
+        .areas(frame.area());
 
         self.render_chat(frame, chat_area);
         self.render_input(frame, input_area);
@@ -409,11 +449,19 @@ impl App {
             match entry {
                 ChatEntry::User(text) => {
                     lines.push(Line::from(vec![
-                        Span::styled("You", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "You",
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                         Span::raw(": "),
                     ]));
                     for line in text.lines() {
-                        lines.push(Line::from(Span::styled(line.to_string(), Style::default().fg(Color::White))));
+                        lines.push(Line::from(Span::styled(
+                            line.to_string(),
+                            Style::default().fg(Color::White),
+                        )));
                     }
                     lines.push(Line::raw(""));
                 }
@@ -426,11 +474,23 @@ impl App {
                 ChatEntry::ToolStart { name, args_summary } => {
                     lines.push(Line::from(vec![
                         Span::styled(" ┌─ ", Style::default().fg(Color::Yellow)),
-                        Span::styled(name.as_str(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!(" {args_summary}"), Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            name.as_str(),
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!(" {args_summary}"),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                     ]));
                 }
-                ChatEntry::ToolResult { name: _, output, is_error } => {
+                ChatEntry::ToolResult {
+                    name: _,
+                    output,
+                    is_error,
+                } => {
                     let color = if *is_error { Color::Red } else { Color::Green };
                     let border = if *is_error { " ┃ " } else { " │ " };
                     for line in output.lines() {
@@ -457,7 +517,10 @@ impl App {
 
         // Streaming indicator
         if self.running && self.streaming_text.is_empty() {
-            lines.push(Line::styled("  ● Thinking...", Style::default().fg(Color::DarkGray)));
+            lines.push(Line::styled(
+                "  ● Thinking...",
+                Style::default().fg(Color::DarkGray),
+            ));
         }
 
         let total_lines = lines.len() as u16;
@@ -483,11 +546,10 @@ impl App {
 
         // Scrollbar
         if total_lines > visible {
-            let mut scrollbar_state = ScrollbarState::new(total_lines as usize)
-                .position(scroll as usize);
+            let mut scrollbar_state =
+                ScrollbarState::new(total_lines as usize).position(scroll as usize);
             frame.render_stateful_widget(
-                Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                    .thumb_symbol("█"),
+                Scrollbar::new(ScrollbarOrientation::VerticalRight).thumb_symbol("█"),
                 area,
                 &mut scrollbar_state,
             );
@@ -503,11 +565,20 @@ impl App {
 
         let input = Paragraph::new(self.input.as_str())
             .style(style)
-            .block(Block::new()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(if self.running { Color::DarkGray } else { Color::Cyan }))
-                .title(if self.running { " thinking... " } else { " > " })
-                .title_style(Style::default().fg(if self.running { Color::Yellow } else { Color::Cyan }))
+            .block(
+                Block::new()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(if self.running {
+                        Color::DarkGray
+                    } else {
+                        Color::Cyan
+                    }))
+                    .title(if self.running { " thinking... " } else { " > " })
+                    .title_style(Style::default().fg(if self.running {
+                        Color::Yellow
+                    } else {
+                        Color::Cyan
+                    })),
             )
             .wrap(Wrap { trim: false });
 
@@ -523,9 +594,10 @@ impl App {
 
     fn render_status(&self, frame: &mut Frame, area: Rect) {
         let model_name = self.llm_client.model_id();
-        let parts = vec![
-            Span::styled(format!(" {model_name}"), Style::default().fg(Color::DarkGray)),
-        ];
+        let parts = vec![Span::styled(
+            format!(" {model_name}"),
+            Style::default().fg(Color::DarkGray),
+        )];
 
         let mut spans = parts;
 
@@ -536,25 +608,39 @@ impl App {
             } else {
                 0
             };
-            let ctx_color = if ctx_pct > 90 { Color::Red } else if ctx_pct > 70 { Color::Yellow } else { Color::Green };
+            let ctx_color = if ctx_pct > 90 {
+                Color::Red
+            } else if ctx_pct > 70 {
+                Color::Yellow
+            } else {
+                Color::Green
+            };
             let bar_full = ctx_pct / 10;
             let bar_empty = 10 - bar_full;
             let bar = "█".repeat(bar_full as usize) + &"░".repeat(bar_empty as usize);
 
             spans.push(Span::raw(" │ "));
-            spans.push(Span::styled(format!("in:{:.1}k", input as f64 / 1000.0), Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                format!("in:{:.1}k", input as f64 / 1000.0),
+                Style::default().fg(Color::DarkGray),
+            ));
             spans.push(Span::raw(" "));
-            spans.push(Span::styled(format!("out:{:.1}k", output as f64 / 1000.0), Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                format!("out:{:.1}k", output as f64 / 1000.0),
+                Style::default().fg(Color::DarkGray),
+            ));
             spans.push(Span::raw(" "));
-            spans.push(Span::styled(format!("ctx:{ctx_pct}% {bar}"), Style::default().fg(ctx_color)));
+            spans.push(Span::styled(
+                format!("ctx:{ctx_pct}% {bar}"),
+                Style::default().fg(ctx_color),
+            ));
         }
 
         if self.running {
             spans.push(Span::styled(" ●", Style::default().fg(Color::Yellow)));
         }
 
-        let status = Paragraph::new(Line::from(spans))
-            .style(Style::default().bg(Color::DarkGray));
+        let status = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::DarkGray));
         frame.render_widget(status, area);
     }
 }

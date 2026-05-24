@@ -6,6 +6,7 @@
  */
 
 import { getApiBaseUrl, getApiKey, getModel } from "./config.ts";
+import { isOverflowError } from "../context/overflow.ts";
 
 // --- Message conversion ---
 

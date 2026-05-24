@@ -12,10 +12,17 @@ import type { ToolDefinition } from "../tools/schemas.ts";
 
 // --- Types mirroring Rust structs ---
 
+export interface ApiUsageSnapshot {
+  estimated_tokens: number;
+  actual_input_tokens: number;
+}
+
 export interface ContextProjectionBudget {
   max_tool_result_chars: number;
   max_context_tokens: number;
   default_preview_chars: number;
+  microcompact_after_turns?: number;
+  compaction_threshold?: number;
 }
 
 export interface ContextReplacement {
@@ -34,12 +41,16 @@ export interface ContextReplacement {
 
 export interface ContextProjectionState {
   replacements: Record<string, ContextReplacement>;
+  last_api_usage?: ApiUsageSnapshot | null;
+  turns_since_compaction?: number;
 }
 
 export interface ContextProjectionReport {
   estimated_tokens: number;
   replacements: ContextReplacement[];
   dropped_messages: number;
+  needs_compaction: boolean;
+  cache_breakpoints: number[];
 }
 
 export interface ProjectionResult {

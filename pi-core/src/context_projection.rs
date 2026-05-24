@@ -4,9 +4,10 @@
 //! transcript for one model call. Does not mutate the canonical transcript.
 //!
 //! Pipeline:
-//! 1. Estimate tokens (deterministic chars/4 heuristic)
-//! 2. Apply tool-result budgeting (replace oversized results with previews)
-//! 3. Trim old history if over budget (drop whole turns, no orphan tool_results)
+//! 1. Apply tool-result budgeting (replace oversized results with previews)
+//! 2. Microcompact old tool results (shrink to one-line summaries)
+//! 3. Estimate tokens (chars/4, calibrated against API usage when available)
+//! 4. Trim or signal compaction (soft threshold signals host, hard limit trims)
 
 use std::collections::BTreeMap;
 
@@ -26,7 +27,16 @@ pub struct ContextProjectionBudget {
     pub max_tool_result_chars: usize,
     pub max_context_tokens: usize,
     pub default_preview_chars: usize,
+    /// Turns older than this have their tool results microcompacted.
+    #[serde(default = "default_microcompact_after_turns")]
+    pub microcompact_after_turns: u32,
+    /// Fraction of max_context_tokens that triggers compaction signal (0.0–1.0).
+    #[serde(default = "default_compaction_threshold")]
+    pub compaction_threshold: f32,
 }
+
+fn default_microcompact_after_turns() -> u32 { 5 }
+fn default_compaction_threshold() -> f32 { 0.75 }
 
 impl Default for ContextProjectionBudget {
     fn default() -> Self {
@@ -34,8 +44,19 @@ impl Default for ContextProjectionBudget {
             max_tool_result_chars: 50_000,
             max_context_tokens: 100_000,
             default_preview_chars: 2000,
+            microcompact_after_turns: default_microcompact_after_turns(),
+            compaction_threshold: default_compaction_threshold(),
         }
     }
+}
+
+/// Snapshot of actual API token usage, fed back from the host for calibration.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+pub struct ApiUsageSnapshot {
+    /// Token count estimated by our heuristic at the time of the API call.
+    pub estimated_tokens: usize,
+    /// Actual input tokens reported by the API.
+    pub actual_input_tokens: usize,
 }
 
 /// A single replacement record: what was replaced, how, and where the full content lives.
@@ -53,6 +74,12 @@ pub struct ContextReplacement {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
 pub struct ContextProjectionState {
     pub replacements: BTreeMap<String, ContextReplacement>,
+    /// Last API usage, used to calibrate token estimation.
+    #[serde(default)]
+    pub last_api_usage: Option<ApiUsageSnapshot>,
+    /// Turns since last compaction. Incremented by host after each turn.
+    #[serde(default)]
+    pub turns_since_compaction: u32,
 }
 
 /// Report returned after projection, for host observability and artifact storage.
@@ -61,6 +88,12 @@ pub struct ContextProjectionReport {
     pub estimated_tokens: usize,
     pub replacements: Vec<ContextReplacement>,
     pub dropped_messages: usize,
+    /// Host should compact (LLM summarization) before the next turn.
+    #[serde(default)]
+    pub needs_compaction: bool,
+    /// Suggested cache breakpoint positions (message indices).
+    #[serde(default)]
+    pub cache_breakpoints: Vec<usize>,
 }
 
 /// Input to the projection engine.
@@ -93,6 +126,18 @@ pub fn estimate_tokens(messages: &[AgentMessage]) -> usize {
 /// Estimate tokens for a string.
 pub fn estimate_tokens_for_text(text: &str) -> usize {
     (text.chars().count() + 3) / 4
+}
+
+/// Calibrated token estimate using actual API usage when available.
+fn calibrated_estimate(chars: usize, state: &ContextProjectionState) -> usize {
+    let raw = (chars + 3) / 4;
+    if let Some(ref api) = state.last_api_usage {
+        if api.estimated_tokens > 0 {
+            let ratio = api.actual_input_tokens as f64 / api.estimated_tokens as f64;
+            return (raw as f64 * ratio).round() as usize;
+        }
+    }
+    raw
 }
 
 fn count_message_chars(messages: &[AgentMessage]) -> usize {
@@ -213,6 +258,10 @@ fn apply_strategy(text: &str, strategy: &ContextStrategy, _default_preview_chars
             }
         }
         ContextStrategy::DropIfOld => text.to_string(), // handled at trimming level
+        ContextStrategy::Microcompacted => {
+            // Microcompact produces a one-line summary; actual replacement done in project()
+            text.to_string()
+        }
     }
 }
 
@@ -242,6 +291,7 @@ fn strategy_name(strategy: &ContextStrategy) -> &'static str {
         ContextStrategy::Tail { .. } => "tail",
         ContextStrategy::HeadTail { .. } => "head_tail",
         ContextStrategy::DropIfOld => "drop_if_old",
+        ContextStrategy::Microcompacted => "microcompacted",
     }
 }
 
@@ -350,25 +400,89 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
         }
     }
 
-    // Step 2: Estimate tokens (messages only, system prompt added separately)
-    let msg_tokens = estimate_tokens(&projected);
-    let sys_tokens = estimate_tokens_for_text(&input.system_prompt);
+    // Step 2: Microcompact — shrink old tool results to one-line summaries
+    let turn_boundaries = find_turn_boundaries(&projected);
+    let total_turns = turn_boundaries.len().saturating_sub(1);
+    if total_turns > input.budget.microcompact_after_turns as usize {
+        let cutoff_turn = total_turns.saturating_sub(input.budget.microcompact_after_turns as usize);
+        for turn_idx in 0..cutoff_turn {
+            let start = turn_boundaries[turn_idx];
+            let end = turn_boundaries[turn_idx + 1];
+            for i in start..end {
+                if let AgentMessage::ToolResult(tr) = &projected[i] {
+                    let tcid = tr.tool_call_id.as_str().to_string();
+                    // Skip if already replaced by artifact budgeting or prior microcompact
+                    if updated_state.replacements.contains_key(&tcid) {
+                        continue;
+                    }
+                    let text = extract_text(&tr.content);
+                    let char_count_val = char_count(&text);
+                    let summary = format!(
+                        "<tool-summary tool=\"{}\" call=\"{}\">Result: {} chars</tool-summary>",
+                        tr.tool_name.as_str(),
+                        tcid,
+                        char_count_val,
+                    );
+                    let replacement = ContextReplacement {
+                        tool_call_id: tcid.clone(),
+                        tool_name: tr.tool_name.as_str().to_string(),
+                        artifact_id: format!("microcompact-{tcid}"),
+                        original_chars: char_count_val,
+                        preview_chars: char_count(&summary),
+                        strategy: ContextStrategy::Microcompacted,
+                    };
+                    updated_state.replacements.insert(tcid, replacement.clone());
+                    replacements.push(replacement);
+
+                    projected[i] = AgentMessage::ToolResult(crate::message::ToolResultMessage {
+                        role: "tool_result".to_string(),
+                        tool_call_id: tr.tool_call_id.clone(),
+                        tool_name: tr.tool_name.clone(),
+                        content: vec![Content::Text(TextContent { text: summary })],
+                        details: tr.details.clone(),
+                        is_error: tr.is_error,
+                        timestamp: tr.timestamp,
+                    });
+                }
+            }
+        }
+    }
+
+    // Step 3: Estimate tokens with calibration
+    let msg_chars = count_message_chars(&projected);
+    let sys_chars = input.system_prompt.chars().count();
+    let msg_tokens = calibrated_estimate(msg_chars, &input.state);
+    let sys_tokens = calibrated_estimate(sys_chars, &input.state);
     let total_tokens = msg_tokens + sys_tokens;
 
-    // Step 3: Trim old history if over budget
-    let (trimmed, dropped_count) = if total_tokens > input.budget.max_context_tokens {
+    // Step 4: Trim or signal compaction
+    let usage_pct = total_tokens as f32 / input.budget.max_context_tokens as f32;
+    let needs_compaction;
+    let (trimmed, dropped_count) = if usage_pct > 1.0 {
+        // Hard limit: must trim (safety net) + signal compaction
+        needs_compaction = true;
         trim_to_budget(&projected, input.budget.max_context_tokens, sys_tokens)
+    } else if usage_pct > input.budget.compaction_threshold {
+        // Soft threshold: signal compaction, don't trim yet
+        needs_compaction = true;
+        (projected, 0)
     } else {
+        needs_compaction = false;
         (projected, 0)
     };
 
     // Recalculate after trimming
-    let final_tokens = estimate_tokens(&trimmed) + sys_tokens;
+    let final_tokens = calibrated_estimate(count_message_chars(&trimmed), &input.state) + sys_tokens;
+
+    // Cache breakpoints: suggest placing one at the second-to-last turn boundary
+    let cache_breakpoints = compute_cache_breakpoints(&trimmed);
 
     let report = ContextProjectionReport {
         estimated_tokens: final_tokens,
         replacements,
         dropped_messages: dropped_count,
+        needs_compaction,
+        cache_breakpoints,
     };
 
     ProjectionOutput {
@@ -454,6 +568,18 @@ fn find_turn_boundaries(messages: &[AgentMessage]) -> Vec<usize> {
     boundaries
 }
 
+/// Suggest cache breakpoint positions for Anthropic prompt caching.
+/// Places a breakpoint at the second-to-last turn boundary so the prefix stays cached.
+fn compute_cache_breakpoints(messages: &[AgentMessage]) -> Vec<usize> {
+    let boundaries = find_turn_boundaries(messages);
+    // Need at least 3 boundaries (2 turns) to have a meaningful prefix
+    if boundaries.len() >= 3 {
+        vec![boundaries[boundaries.len() - 2]]
+    } else {
+        vec![]
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -533,6 +659,8 @@ mod tests {
             max_tool_result_chars: 1000,
             max_context_tokens: 100_000,
             default_preview_chars: 200,
+            microcompact_after_turns: 5,
+            compaction_threshold: 0.75,
         }
     }
 
@@ -790,6 +918,8 @@ mod tests {
             max_tool_result_chars: 50_000,
             max_context_tokens: 500,
             default_preview_chars: 200,
+            microcompact_after_turns: 5,
+            compaction_threshold: 0.75,
         };
 
         let output = project(ProjectionInput {
@@ -826,6 +956,8 @@ mod tests {
             max_tool_result_chars: 50_000,
             max_context_tokens: 500,
             default_preview_chars: 200,
+            microcompact_after_turns: 5,
+            compaction_threshold: 0.75,
         };
 
         let output = project(ProjectionInput {
@@ -884,6 +1016,220 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&output1.projected_messages).unwrap(),
             serde_json::to_string(&output2.projected_messages).unwrap(),
+        );
+    }
+
+    #[test]
+    fn soft_threshold_signals_compaction_without_trimming() {
+        let mut msgs = Vec::new();
+        // 10 turns * 2 msgs * 60 chars = 1200 chars = ~300 tokens
+        // Budget 400 tokens, threshold 50% = 200 tokens -> over threshold but under limit
+        for i in 0..10 {
+            msgs.push(user_msg(&format!("turn {i}: {}", "A".repeat(50))));
+            msgs.push(assistant_text(&format!("response {i}: {}", "B".repeat(50))));
+        }
+
+        let budget = ContextProjectionBudget {
+            max_tool_result_chars: 50_000,
+            max_context_tokens: 400,
+            default_preview_chars: 200,
+            microcompact_after_turns: 100, // don't microcompact for this test
+            compaction_threshold: 0.5,     // 50% threshold -> 200 tokens
+        };
+
+        let output = project(ProjectionInput {
+            system_prompt: "test".into(),
+            messages: msgs.clone(),
+            budget,
+            state: ContextProjectionState::default(),
+        });
+
+        // Should signal compaction (over 50% threshold) but not trim (under 100% limit)
+        assert!(output.report.needs_compaction, "should signal compaction");
+        assert_eq!(output.report.dropped_messages, 0, "should not drop messages");
+    }
+
+    #[test]
+    fn hard_limit_trims_and_signals_compaction() {
+        let mut msgs = Vec::new();
+        for i in 0..20 {
+            msgs.push(user_msg(&format!("turn {i}: {}", "A".repeat(200))));
+            msgs.push(assistant_text(&format!("response {i}: {}", "B".repeat(200))));
+        }
+
+        let budget = ContextProjectionBudget {
+            max_tool_result_chars: 50_000,
+            max_context_tokens: 500,
+            default_preview_chars: 200,
+            microcompact_after_turns: 100,
+            compaction_threshold: 0.75,
+        };
+
+        let output = project(ProjectionInput {
+            system_prompt: "test".into(),
+            messages: msgs,
+            budget,
+            state: ContextProjectionState::default(),
+        });
+
+        // Hard limit: should both trim AND signal compaction
+        assert!(output.report.needs_compaction, "should signal compaction");
+        assert!(output.report.dropped_messages > 0, "should drop messages");
+    }
+
+    #[test]
+    fn cache_breakpoints_placed_at_second_to_last_turn() {
+        let msgs = vec![
+            user_msg("turn 0"),
+            assistant_text("response 0"),
+            user_msg("turn 1"),
+            assistant_text("response 1"),
+            user_msg("turn 2"),
+            assistant_text("response 2"),
+        ];
+
+        let output = project(ProjectionInput {
+            system_prompt: "test".into(),
+            messages: msgs,
+            budget: default_budget(),
+            state: ContextProjectionState::default(),
+        });
+
+        assert_eq!(output.report.cache_breakpoints.len(), 1);
+        // Second-to-last turn starts at index 4 ("turn 2")
+        assert_eq!(output.report.cache_breakpoints[0], 4);
+    }
+
+    #[test]
+    fn no_cache_breakpoint_with_few_turns() {
+        let msgs = vec![
+            user_msg("turn 0"),
+            assistant_text("response 0"),
+        ];
+
+        let output = project(ProjectionInput {
+            system_prompt: "test".into(),
+            messages: msgs,
+            budget: default_budget(),
+            state: ContextProjectionState::default(),
+        });
+
+        assert!(output.report.cache_breakpoints.is_empty());
+    }
+
+    #[test]
+    fn microcompact_shrinks_old_tool_results() {
+        // Build 8 turns, each with a tool call + result
+        let mut msgs = Vec::new();
+        for i in 0..8 {
+            msgs.push(user_msg(&format!("turn {i}")));
+            msgs.push(assistant_tool_call(&format!("tc-{i}"), "bash", r#"{"command":"ls"}"#));
+            msgs.push(tool_result_msg(&format!("tc-{i}"), "bash", &format!("output {i}: {}", "X".repeat(300))));
+        }
+
+        // Microcompact after 3 turns (so turns 0..5 get compacted)
+        let budget = ContextProjectionBudget {
+            microcompact_after_turns: 3,
+            ..default_budget()
+        };
+
+        let output = project(ProjectionInput {
+            system_prompt: "test".into(),
+            messages: msgs,
+            budget,
+            state: ContextProjectionState::default(),
+        });
+
+        // First 5 turns' tool results should be microcompacted
+        let microcompacted_ids: Vec<&str> = output.report.replacements
+            .iter()
+            .filter(|r| matches!(r.strategy, ContextStrategy::Microcompacted))
+            .map(|r| r.tool_call_id.as_str())
+            .collect();
+        assert!(microcompacted_ids.contains(&"tc-0"), "tc-0 should be microcompacted");
+        assert!(microcompacted_ids.contains(&"tc-4"), "tc-4 should be microcompacted");
+        // Last 3 turns should NOT be microcompacted
+        assert!(!microcompacted_ids.contains(&"tc-5"), "tc-5 should not be microcompacted");
+        assert!(!microcompacted_ids.contains(&"tc-7"), "tc-7 should not be microcompacted");
+
+        // Verify the compacted text contains the summary marker
+        if let AgentMessage::ToolResult(tr) = &output.projected_messages[2] {
+            let text = extract_text(&tr.content);
+            assert!(text.contains("<tool-summary"), "expected microcompact summary, got: {text}");
+        } else {
+            panic!("expected tool result at index 2");
+        }
+    }
+
+    #[test]
+    fn calibrated_estimate_uses_api_ratio() {
+        // 100 chars -> raw estimate = 25 tokens
+        // API said actual was 35 tokens -> ratio = 1.4
+        // So 80 chars should estimate to 80/4 * 1.4 = 28
+        let state = ContextProjectionState {
+            last_api_usage: Some(ApiUsageSnapshot {
+                estimated_tokens: 25,
+                actual_input_tokens: 35,
+            }),
+            ..Default::default()
+        };
+        // 80 chars => raw=20, calibrated = 20 * 1.4 = 28
+        assert_eq!(calibrated_estimate(80, &state), 28);
+    }
+
+    #[test]
+    fn calibrated_estimate_falls_back_to_chars_div_4() {
+        let state = ContextProjectionState::default();
+        // No API usage -> raw chars/4
+        assert_eq!(calibrated_estimate(80, &state), 20);
+    }
+
+    #[test]
+    fn microcompact_skips_already_replaced_results() {
+        let big = "A".repeat(5000);
+        // Turn 1: oversized bash result (will be replaced by Phase 1)
+        // Turn 2: normal result
+        // Turn 3: current turn
+        let msgs = vec![
+            user_msg("turn 0"),
+            assistant_tool_call("tc-big", "bash", r#"{"command":"ls"}"#),
+            tool_result_msg("tc-big", "bash", &big),
+            user_msg("turn 1"),
+            assistant_tool_call("tc-small", "read", r#"{"path":"x.rs"}"#),
+            tool_result_msg("tc-small", "read", "small content"),
+            user_msg("turn 2"),
+        ];
+
+        let budget = ContextProjectionBudget {
+            microcompact_after_turns: 1, // turn 0 should be microcompacted
+            ..default_budget()
+        };
+
+        let output = project(ProjectionInput {
+            system_prompt: "test".into(),
+            messages: msgs,
+            budget,
+            state: ContextProjectionState::default(),
+        });
+
+        // tc-big should be replaced by Phase 1 (artifact budgeting), NOT microcompacted
+        let tc_big_replacement = output.report.replacements.iter()
+            .find(|r| r.tool_call_id == "tc-big")
+            .unwrap();
+        assert!(
+            matches!(tc_big_replacement.strategy, ContextStrategy::Tail { .. }),
+            "tc-big should use tail strategy from Phase 1, got {:?}",
+            tc_big_replacement.strategy,
+        );
+
+        // tc-small should be microcompacted (it was in an old turn and not replaced by Phase 1)
+        let tc_small_replacement = output.report.replacements.iter()
+            .find(|r| r.tool_call_id == "tc-small")
+            .unwrap();
+        assert!(
+            matches!(tc_small_replacement.strategy, ContextStrategy::Microcompacted),
+            "tc-small should be microcompacted, got {:?}",
+            tc_small_replacement.strategy,
         );
     }
 }

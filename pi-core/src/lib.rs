@@ -20,7 +20,7 @@ pub use agent::{Agent, AgentOptions, AgentState, Phase};
 pub use context::{AgentContext, LlmContext};
 pub use context_metadata::{ContentKind, ContextStrategy, ToolResultContext, fallback_strategy};
 pub use context_projection::{
-    ContextProjectionBudget, ContextProjectionReport, ContextProjectionState,
+    ApiUsageSnapshot, ContextProjectionBudget, ContextProjectionReport, ContextProjectionState,
     ContextReplacement, ProjectionInput, ProjectionOutput, estimate_tokens,
     estimate_tokens_for_text, project,
 };

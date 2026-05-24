@@ -32,6 +32,7 @@ import {
   type ContextProjectionState,
   MemoryArtifactStore,
 } from "../context/rustProjection.ts";
+import { isOverflowError } from "../context/overflow.ts";
 
 export interface TraceEntry {
   phase: "action" | "event" | "host";
@@ -77,7 +78,6 @@ export class RealLlm {
 
       // Store artifacts for any replacements
       for (const replacement of result.report.replacements) {
-        // Find the original tool result to get the full content
         const originalMsg = request.messages.find(
           (m) => m.role === "tool_result" && m.tool_call_id === replacement.tool_call_id,
         );
@@ -97,7 +97,7 @@ export class RealLlm {
       }
 
       this.log.push(
-        `context_projection: estimated=${result.report.estimated_tokens} replacements=${result.report.replacements.length} dropped=${result.report.dropped_messages}`,
+        `context_projection: estimated=${result.report.estimated_tokens} replacements=${result.report.replacements.length} dropped=${result.report.dropped_messages} compaction=${result.report.needs_compaction}`,
       );
 
       effectiveRequest = {
@@ -107,9 +107,59 @@ export class RealLlm {
       };
     }
 
-    const result = await callAnthropic(effectiveRequest, this.config);
-    this.log.push(...result.log);
-    return result;
+    try {
+      const result = await callAnthropic(effectiveRequest, this.config);
+      this.log.push(...result.log);
+
+      // Feed token usage back into projection state for calibration
+      this.updateTokenUsage(result.llmResult);
+
+      return result;
+    } catch (err) {
+      if (isOverflowError(err) && this.contextProjection) {
+        this.log.push("overflow detected, forcing aggressive projection");
+        // Force a hard trim by temporarily reducing the budget
+        const savedBudget = { ...this.contextProjection.budget };
+        this.contextProjection.budget.max_context_tokens =
+          Math.floor(savedBudget.max_context_tokens * 0.5);
+        const retryResult = callProjectContext(
+          request.system_prompt,
+          request.messages,
+          this.contextProjection.budget,
+          this.contextProjection.state,
+        );
+        this.contextProjection.state = retryResult.updated_state;
+        this.contextProjection.budget = savedBudget;
+
+        const retryReq: LlmRequest = {
+          system_prompt: request.system_prompt,
+          messages: retryResult.projected_messages,
+          tools: request.tools,
+        };
+        const result = await callAnthropic(retryReq, this.config);
+        this.log.push(...result.log);
+        this.updateTokenUsage(result.llmResult);
+        return result;
+      }
+      throw err;
+    }
+  }
+
+  /** Extract token usage from LLM result and feed back into projection state. */
+  private updateTokenUsage(llmResult: object): void {
+    if (!this.contextProjection) return;
+    const result = llmResult as { Ok?: { usage?: { input: number; output: number; cache_read: number; cache_write: number } } };
+    const usage = result.Ok?.usage;
+    if (!usage) return;
+
+    const actualInput = usage.input + usage.cache_read + usage.cache_write;
+    if (actualInput > 0) {
+      const estimated = this.contextProjection.state.last_api_usage?.estimated_tokens ?? 0;
+      this.contextProjection.state.last_api_usage = {
+        estimated_tokens: estimated || actualInput,
+        actual_input_tokens: actualInput,
+      };
+    }
   }
 }
 

@@ -32,6 +32,9 @@ pub enum ContextStrategy {
     HeadTail { head_chars: usize, tail_chars: usize },
     #[serde(rename = "drop_if_old")]
     DropIfOld,
+    /// Applied by microcompact: old tool result replaced with a one-line summary.
+    #[serde(rename = "microcompacted")]
+    Microcompacted,
 }
 
 /// Typed metadata that a host can attach to tool results for projection.

@@ -25,7 +25,7 @@ pub use context_projection::{
     ProjectionOutput,
 };
 pub use events::{
-    AgentAction, AgentEvent, BackgroundJobRef, CancelReason, ContentDelta, QueueMode,
+    AgentAction, AgentEvent, CancelReason, ContentDelta, QueueMode,
     ThinkingLevel, ToolExecutionUpdate, ToolOutputStream, WaitMode,
 };
 pub use llm::{LlmChunk, LlmError, LlmResult, Model, ModelCapabilities, ModelCost, ModelProvider};

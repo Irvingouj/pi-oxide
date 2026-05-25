@@ -16,10 +16,10 @@ use pi_core::{
     ContextProjectionState, LlmChunk, LlmContext, LlmResult, Model, ProjectionInput, ToolCall,
 };
 
+use crate::extension::{BashExtension, BuiltinExtension, Extension, ExtensionContext, ToolEvent};
 use crate::llm::LlmClient;
 use crate::markdown;
 use crate::session::FileSystemSessionBackend;
-use crate::tools;
 
 // ---------------------------------------------------------------------------
 // Command palette
@@ -94,6 +94,16 @@ pub struct App {
     suggestions: Vec<String>,
     show_suggestions: bool,
     suggestion_state: ListState,
+
+    // Extension-based tool execution
+    extensions: Vec<Box<dyn Extension>>,
+    running_tasks: Vec<RunningTask>,
+}
+
+struct RunningTask {
+    tool_call_id: pi_core::ToolCallId,
+    tool_name: String,
+    stream: Box<dyn crate::extension::ToolEventStream>,
 }
 
 impl App {
@@ -119,7 +129,14 @@ impl App {
             cost: Default::default(),
         };
 
-        let tool_defs = tools::definitions();
+        let extensions: Vec<Box<dyn Extension>> = vec![
+            Box::new(BuiltinExtension::new()),
+            Box::new(BashExtension::new()),
+        ];
+        let mut tool_defs = Vec::new();
+        for ext in &extensions {
+            tool_defs.extend(ext.tools());
+        }
         let agent = Agent::new(pi_core::AgentOptions {
             system_prompt: system_prompt.to_string(),
             model,
@@ -174,6 +191,8 @@ impl App {
             suggestions: Vec::new(),
             show_suggestions: false,
             suggestion_state: ListState::default(),
+            extensions,
+            running_tasks: Vec::new(),
         }
     }
 
@@ -197,6 +216,9 @@ impl App {
                     }
                 }
             }
+
+            // Poll running async tasks
+            self.poll_running_tasks(terminal);
 
             if self.should_quit {
                 self.save_session();
@@ -583,6 +605,21 @@ impl App {
                 let mut full_text = String::new();
 
                 for chunk in stream.by_ref() {
+                    // Cooperative cancellation: poll keyboard without blocking
+                    if crossterm::event::poll(Duration::from_millis(0)).unwrap_or(false) {
+                        if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
+                            if key.kind == KeyEventKind::Press {
+                                if key.code == KeyCode::Char('c')
+                                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                                {
+                                    self.cancelled = true;
+                                } else if key.code == KeyCode::Esc {
+                                    self.should_quit = true;
+                                    self.cancelled = true;
+                                }
+                            }
+                        }
+                    }
                     if self.cancelled {
                         self.agent.abort();
                         self.running = false;
@@ -695,14 +732,7 @@ impl App {
         terminal: &mut ratatui::DefaultTerminal,
         calls: Vec<ToolCall>,
     ) {
-        for call in &calls {
-            if self.cancelled {
-                self.agent.abort();
-                self.running = false;
-                self.entries.push(ChatEntry::System("Cancelled.".into()));
-                let _ = terminal.draw(|f| self.render(f));
-                return;
-            }
+        for call in calls {
             let args_summary = format_tool_args(&call.arguments);
             self.entries.push(ChatEntry::ToolStart {
                 name: call.name.as_str().to_string(),
@@ -710,55 +740,162 @@ impl App {
             });
             let _ = terminal.draw(|f| self.render(f));
 
-            let result = tools::execute(call, &self.cwd);
+            // Find the extension that handles this tool
+            let ext_idx = self
+                .extensions
+                .iter()
+                .position(|ext| ext.tools().iter().any(|def| def.name == call.name));
 
-            match result {
-                Ok(tool_result) => {
-                    let output_text = tool_result
-                        .content
-                        .iter()
-                        .filter_map(|c| {
-                            if let Content::Text(t) = c {
-                                Some(t.text.as_str())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
+            let ctx = ExtensionContext {
+                cwd: self.cwd.clone(),
+            };
 
-                    let display = if output_text.len() > 500 {
-                        format!(
-                            "{}...\n({} chars total)",
-                            &output_text[..500],
-                            output_text.len()
-                        )
-                    } else {
-                        output_text
-                    };
-
-                    self.entries.push(ChatEntry::ToolResult {
-                        name: call.name.as_str().to_string(),
-                        output: display,
-                        is_error: false,
-                    });
-                    let _ = terminal.draw(|f| self.render(f));
-
-                    let (_events, actions) =
-                        self.agent.on_tool_done(call.id.clone(), Ok(tool_result));
-                    self.handle_actions(terminal, actions);
+            if let Some(idx) = ext_idx {
+                let outcome = self.extensions[idx].execute(&call, &ctx);
+                match outcome {
+                    crate::extension::ExtensionOutcome::Complete(result) => {
+                        self.on_tool_result(terminal, call.id, result);
+                    }
+                    crate::extension::ExtensionOutcome::Running(stream) => {
+                        self.running_tasks.push(RunningTask {
+                            tool_call_id: call.id.clone(),
+                            tool_name: call.name.as_str().to_string(),
+                            stream,
+                        });
+                    }
                 }
-                Err(err) => {
-                    self.entries.push(ChatEntry::ToolResult {
-                        name: call.name.as_str().to_string(),
-                        output: err.message.clone(),
-                        is_error: true,
-                    });
-                    let _ = terminal.draw(|f| self.render(f));
+            } else {
+                self.on_tool_result(
+                    terminal,
+                    call.id,
+                    Err(pi_core::ToolError::new(
+                        "unknown_tool",
+                        format!("No extension provides tool: {}", call.name.as_str()),
+                    )),
+                );
+            }
+        }
 
-                    let (_events, actions) = self.agent.on_tool_done(call.id.clone(), Err(err));
-                    self.handle_actions(terminal, actions);
+        // If all tools were sync and are now done, auto-continue
+        if self.agent.state().pending_tool_calls.is_empty() && self.running_tasks.is_empty() {
+            let (_events, actions) = self.agent.continue_turn();
+            self.handle_actions(terminal, actions);
+        }
+    }
+
+    fn on_tool_result(
+        &mut self,
+        terminal: &mut ratatui::DefaultTerminal,
+        tool_call_id: pi_core::ToolCallId,
+        result: Result<pi_core::ToolResult, pi_core::ToolError>,
+    ) {
+        match result {
+            Ok(tool_result) => {
+                let output_text = tool_result
+                    .content
+                    .iter()
+                    .filter_map(|c| {
+                        if let Content::Text(t) = c {
+                            Some(t.text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let display = if output_text.len() > 500 {
+                    format!(
+                        "{}...\n({} chars total)",
+                        &output_text[..500],
+                        output_text.len()
+                    )
+                } else {
+                    output_text
+                };
+
+                self.entries.push(ChatEntry::ToolResult {
+                    name: tool_call_id.as_str().to_string(),
+                    output: display,
+                    is_error: false,
+                });
+                let _ = terminal.draw(|f| self.render(f));
+
+                let (_events, actions) =
+                    self.agent.on_tool_done(tool_call_id, Ok(tool_result));
+                self.handle_actions(terminal, actions);
+            }
+            Err(err) => {
+                self.entries.push(ChatEntry::ToolResult {
+                    name: tool_call_id.as_str().to_string(),
+                    output: err.message.clone(),
+                    is_error: true,
+                });
+                let _ = terminal.draw(|f| self.render(f));
+
+                let (_events, actions) = self.agent.on_tool_done(tool_call_id, Err(err));
+                self.handle_actions(terminal, actions);
+            }
+        }
+    }
+
+    fn poll_running_tasks(&mut self, terminal: &mut ratatui::DefaultTerminal) {
+        let mut remaining = Vec::new();
+        let mut just_completed: Vec<(pi_core::ToolCallId, Result<pi_core::ToolResult, pi_core::ToolError>)> = Vec::new();
+
+        for mut task in std::mem::take(&mut self.running_tasks) {
+            let mut done = false;
+            while let Some(event) = task.stream.try_recv() {
+                match event {
+                    ToolEvent::Update(update) => {
+                        let _events = self.agent.on_tool_update(update);
+                    }
+                    ToolEvent::Done(result) => {
+                        just_completed.push((task.tool_call_id.clone(), result));
+                        done = true;
+                        break;
+                    }
                 }
+            }
+            if !done {
+                remaining.push(task);
+            }
+        }
+        self.running_tasks = remaining;
+
+        // Process completed tasks outside the borrow of running_tasks
+        for (tool_call_id, result) in just_completed {
+            let output_text = match &result {
+                Ok(r) => r
+                    .content
+                    .iter()
+                    .filter_map(|c| {
+                        if let Content::Text(t) = c {
+                            Some(t.text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                Err(e) => e.message.clone(),
+            };
+            self.entries.push(ChatEntry::ToolResult {
+                name: tool_call_id.as_str().to_string(),
+                output: output_text,
+                is_error: result.is_err(),
+            });
+            let _ = terminal.draw(|f| self.render(f));
+
+            let all_tools_done_before = self.agent.state().pending_tool_calls.is_empty();
+            let (_events, actions) = self.agent.on_tool_done(tool_call_id.clone(), result);
+            let should_continue = all_tools_done_before && actions.is_empty();
+            self.handle_actions(terminal, actions);
+
+            // Auto-continue if all pending tools are done and not terminating
+            if should_continue {
+                let (_events, continue_actions) = self.agent.continue_turn();
+                self.handle_actions(terminal, continue_actions);
             }
         }
     }
@@ -866,8 +1003,8 @@ impl App {
             }
         }
 
-        // Streaming indicator
-        if self.running && self.streaming_text.is_empty() {
+        // Streaming indicator (only when LLM is actually streaming, not waiting for async tools)
+        if self.running && self.streaming_text.is_empty() && self.running_tasks.is_empty() {
             lines.push(Line::styled(
                 "  ● Thinking...",
                 Style::default().fg(Color::DarkGray),
@@ -1024,7 +1161,13 @@ impl App {
             ));
         }
 
-        if self.running {
+        if !self.running_tasks.is_empty() {
+            let count = self.running_tasks.len();
+            spans.push(Span::styled(
+                format!(" ● {count} tools"),
+                Style::default().fg(Color::Yellow),
+            ));
+        } else if self.running {
             spans.push(Span::styled(" ●", Style::default().fg(Color::Yellow)));
         }
 

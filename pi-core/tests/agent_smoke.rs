@@ -157,7 +157,7 @@ fn turn_end_after_tools_reports_assistant_and_tool_results() {
     assert!(matches!(turn_end.0, AgentMessage::Assistant(_)));
     assert_eq!(turn_end.1.len(), 1);
     assert_eq!(turn_end.1[0].tool_call_id, ToolCallId::new("call-1"));
-    assert!(matches!(actions[0], AgentAction::StreamLlm { .. }));
+    assert!(actions.is_empty(), "on_tool_done should return empty actions; host calls continue_turn()");
 }
 
 #[test]
@@ -179,5 +179,44 @@ fn tool_batch_terminates_only_when_all_results_terminate() {
     assert!(!events
         .iter()
         .any(|event| matches!(event, AgentEvent::AgentEnd { .. })));
+    assert!(actions.is_empty(), "non-unanimous termination should not finish; host calls continue_turn()");
+}
+
+#[test]
+fn continue_turn_after_tools_resumes_llm() {
+    let mut agent = Agent::new(dummy_options());
+    agent.start_turn(AgentMessage::user("use tool"));
+    agent.on_llm_done(LlmResult::Ok(assistant_with_tool_calls(vec![tool_call(
+        "call-1", "read",
+    )])));
+
+    let (_events, actions) =
+        agent.on_tool_done(ToolCallId::new("call-1"), Ok(ToolResult::text("result")));
+    assert!(actions.is_empty());
+
+    let (_events, actions) = agent.continue_turn();
+    assert_eq!(actions.len(), 1);
     assert!(matches!(actions[0], AgentAction::StreamLlm { .. }));
+}
+
+#[test]
+fn tool_batch_terminates_when_all_terminate() {
+    let mut agent = Agent::new(dummy_options());
+    agent.start_turn(AgentMessage::user("use tools"));
+    agent.on_llm_done(LlmResult::Ok(assistant_with_tool_calls(vec![
+        tool_call("call-1", "read"),
+        tool_call("call-2", "write"),
+    ])));
+
+    let mut terminating = ToolResult::text("stop");
+    terminating.terminate = Some(true);
+    agent.on_tool_done(ToolCallId::new("call-1"), Ok(terminating.clone()));
+
+    let (events, actions) =
+        agent.on_tool_done(ToolCallId::new("call-2"), Ok(terminating));
+
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, AgentEvent::AgentEnd { .. })));
+    assert!(matches!(actions[0], AgentAction::Finished { .. }));
 }

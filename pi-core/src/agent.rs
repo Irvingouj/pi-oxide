@@ -61,7 +61,6 @@ pub struct AgentOptions {
 pub enum Phase {
     Idle,
     Streaming,
-    ExecutingTools,
     WaitForInput,
 }
 
@@ -117,8 +116,8 @@ impl Agent {
 
     /// Start processing a new prompt.
     pub fn start_turn(&mut self, prompt: AgentMessage) -> (Vec<AgentEvent>, Vec<AgentAction>) {
-        if self.phase != Phase::Idle {
-            warn!(phase = ?self.phase, "start_turn requested while agent is not idle");
+        if self.phase == Phase::Streaming {
+            warn!(phase = ?self.phase, "start_turn requested while LLM is streaming");
             return (
                 vec![AgentEvent::AgentStart],
                 vec![AgentAction::WaitForInput {
@@ -155,8 +154,8 @@ impl Agent {
 
     /// Continue from the current transcript without adding a new message.
     pub fn continue_turn(&mut self) -> (Vec<AgentEvent>, Vec<AgentAction>) {
-        if self.phase != Phase::Idle {
-            warn!(phase = ?self.phase, "continue_turn requested while agent is not idle");
+        if self.phase == Phase::Streaming {
+            warn!(phase = ?self.phase, "continue_turn requested while LLM is streaming");
             return (vec![], vec![]);
         }
 
@@ -353,12 +352,7 @@ impl Agent {
             return (events, actions);
         }
 
-        // Execute tools
-        self.phase = Phase::ExecutingTools;
-        debug!(
-            tool_call_count = tool_calls.len(),
-            "assistant requested tool execution"
-        );
+        // Track all tools uniformly — execution strategy is a host concern
         for tc in &tool_calls {
             self.pending_tool_calls.insert(tc.id.clone(), tc.clone());
             self.state.pending_tool_calls.push(tc.id.0.clone());
@@ -368,8 +362,11 @@ impl Agent {
                 args: Some(tc.arguments.clone()),
             });
         }
-        actions.push(AgentAction::ExecuteTools { calls: tool_calls });
 
+        self.phase = Phase::Idle;
+        self.state.is_streaming = false;
+        debug!(tool_count = tool_calls.len(), "assistant requested tool execution");
+        actions.push(AgentAction::ExecuteTools { calls: tool_calls });
         (events, actions)
     }
 
@@ -379,11 +376,6 @@ impl Agent {
         tool_call_id: ToolCallId,
         result: Result<ToolResult, ToolError>,
     ) -> (Vec<AgentEvent>, Vec<AgentAction>) {
-        if self.phase != Phase::ExecutingTools {
-            warn!(phase = ?self.phase, "on_tool_done requested outside executing tools phase");
-            return (vec![], vec![]);
-        }
-
         let mut events = Vec::new();
         let tool_call = match self.pending_tool_calls.remove(&tool_call_id) {
             Some(tc) => tc,
@@ -444,7 +436,7 @@ impl Agent {
             message: agent_msg.clone(),
         });
 
-        // Check if all pending tools are done
+        // If more tools are still pending, just return events
         if !self.pending_tool_calls.is_empty() {
             trace!(
                 pending_tool_calls = self.pending_tool_calls.len(),
@@ -453,7 +445,7 @@ impl Agent {
             return (events, vec![]);
         }
 
-        // All tools done: end turn
+        // All tools done: emit TurnEnd. Host should call continue_turn() to stream next LLM response.
         let assistant_msg = self
             .state
             .messages
@@ -475,25 +467,11 @@ impl Agent {
             tool_results,
         });
 
-        // Check for steering / follow-up
-        let steering = self.drain_steering();
-        if !steering.is_empty() {
-            return self.inject_messages_and_stream(steering);
-        }
-
-        let follow = self.drain_follow_up();
-        if !follow.is_empty() {
-            return self.inject_messages_and_stream(follow);
-        }
-
-        // Check early termination hint
         if should_terminate {
             debug!("tool batch requested termination");
             events.push(AgentEvent::AgentEnd {
                 messages: self.state.messages.clone(),
             });
-            self.phase = Phase::Idle;
-            self.state.is_streaming = false;
             return (
                 events,
                 vec![AgentAction::Finished {
@@ -502,26 +480,13 @@ impl Agent {
             );
         }
 
-        // Continue with another LLM call
-        self.phase = Phase::Streaming;
-        debug!("tool batch finished; requesting next llm turn");
-        events.push(AgentEvent::TurnStart);
-        let actions = vec![AgentAction::StreamLlm {
-            context: self.build_llm_context(),
-            session_id: self.session_id.clone(),
-        }];
-
-        (events, actions)
+        (events, vec![])
     }
 
     /// Called by the host when a tool starts executing.
     /// Emits a ToolExecutionUpdate event for trace/observability.
     /// Does not change the core state machine phase.
     pub fn on_tool_started(&mut self, tool_call_id: ToolCallId) -> Vec<AgentEvent> {
-        if self.phase != Phase::ExecutingTools {
-            trace!(phase = ?self.phase, "on_tool_started outside executing tools phase");
-            return vec![];
-        }
         if !self.pending_tool_calls.contains_key(&tool_call_id) {
             trace!(
                 tool_call_id = tool_call_id.as_str(),
@@ -546,9 +511,6 @@ impl Agent {
     /// Emits a ToolExecutionUpdate event for trace/observability only.
     /// Does NOT add to the canonical model transcript.
     pub fn on_tool_update(&mut self, update: ToolExecutionUpdate) -> Vec<AgentEvent> {
-        if self.phase != Phase::ExecutingTools {
-            return vec![];
-        }
         if !self.pending_tool_calls.contains_key(&update.tool_call_id) {
             return vec![];
         }
@@ -575,10 +537,6 @@ impl Agent {
         tool_call_id: ToolCallId,
         reason: CancelReason,
     ) -> (Vec<AgentEvent>, Vec<AgentAction>) {
-        if self.phase != Phase::ExecutingTools {
-            return (vec![], vec![]);
-        }
-
         let tool_call = match self.pending_tool_calls.remove(&tool_call_id) {
             Some(tc) => tc,
             None => {
@@ -648,12 +606,12 @@ impl Agent {
             message: agent_msg.clone(),
         });
 
-        // If all tools are done, advance the state machine
+        // If more tools are still pending, just return events
         if !self.pending_tool_calls.is_empty() {
             return (events, vec![]);
         }
 
-        // All tools done
+        // All tools done: emit TurnEnd. Host should call continue_turn() to stream next LLM response.
         let assistant_msg = self
             .state
             .messages
@@ -670,24 +628,7 @@ impl Agent {
             tool_results,
         });
 
-        let steering = self.drain_steering();
-        if !steering.is_empty() {
-            return self.inject_messages_and_stream(steering);
-        }
-
-        let follow = self.drain_follow_up();
-        if !follow.is_empty() {
-            return self.inject_messages_and_stream(follow);
-        }
-
-        self.phase = Phase::Streaming;
-        events.push(AgentEvent::TurnStart);
-        let actions = vec![AgentAction::StreamLlm {
-            context: self.build_llm_context(),
-            session_id: self.session_id.clone(),
-        }];
-
-        (events, actions)
+        (events, vec![])
     }
 
     /// Inject a steering message mid-run.

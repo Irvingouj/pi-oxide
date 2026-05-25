@@ -40,14 +40,6 @@ pub struct ToolExecutionUpdate {
     pub timestamp: u64,
 }
 
-/// Reference to a background job started by a tool.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-pub struct BackgroundJobRef {
-    pub job_id: String,
-    pub tool_call_id: ToolCallId,
-    pub command_label: String,
-}
-
 // ---------------------------------------------------------------------------
 // Actions and events
 // ---------------------------------------------------------------------------

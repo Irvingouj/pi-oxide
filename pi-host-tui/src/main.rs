@@ -1,6 +1,7 @@
 use clap::Parser;
 
 mod app;
+mod extension;
 mod llm;
 mod markdown;
 mod session;

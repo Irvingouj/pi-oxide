@@ -13,22 +13,6 @@ use pi_core::{
 pub fn definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
-            name: ToolName::new("bash"),
-            label: "Bash".into(),
-            description: "Run a bash command. Returns stdout and stderr.".into(),
-            parameters: JsonSchema::new(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The bash command to run"
-                    }
-                },
-                "required": ["command"]
-            })),
-            execution_mode: ExecutionMode::Sequential,
-        },
-        ToolDefinition {
             name: ToolName::new("read"),
             label: "Read File".into(),
             description: "Read a file's contents. Use offset/limit for large files.".into(),

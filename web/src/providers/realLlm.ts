@@ -9,18 +9,26 @@ import {
   createAgent,
   destroyAgent,
   feedLlmChunk,
+  getSessionState,
   onLlmDone,
   onToolDone,
   onToolStarted,
   onToolUpdate,
   onToolCancelled,
   prompt,
+  setSessionState,
   type AgentAction,
   type AgentOptions,
+  type SessionState,
   type ToolCall,
   type ToolExecutionUpdate as ToolExecutionUpdateShape,
   type CancelReason,
 } from "../wasmBinding.ts";
+
+export interface SessionBackend {
+  save(sessionId: string, state: SessionState): Promise<void>;
+  load(sessionId: string): Promise<SessionState | null>;
+}
 import type { ToolRegistry } from "../fakeTools.ts";
 import type { ToolRuntime, ToolUpdate } from "../local/toolRuntime.ts";
 import type { LlmRequest } from "./types.ts";
@@ -180,7 +188,19 @@ export class RealAgentHost {
     this.trace.push({ phase, type, data });
   }
 
-  async run(options: AgentOptions, userPrompt: string): Promise<RealRunResult> {
+  async run(
+    options: AgentOptions,
+    userPrompt: string,
+    sessionBackend?: SessionBackend,
+  ): Promise<RealRunResult> {
+    // Load persisted session state before creating the agent
+    if (sessionBackend && options.session_id) {
+      const loaded = await sessionBackend.load(options.session_id);
+      if (loaded) {
+        options = { ...options, session_state: loaded };
+      }
+    }
+
     const handle = createAgent(options);
     this.log("host", "create_agent", { handle });
 
@@ -191,6 +211,13 @@ export class RealAgentHost {
     }
 
     const terminalAction = await this.processActions(handle, step.actions);
+
+    // Save session state after the run
+    if (sessionBackend && options.session_id) {
+      const state = getSessionState(handle);
+      await sessionBackend.save(options.session_id, state);
+    }
+
     return { terminalAction, trace: this.trace, handle };
   }
 

@@ -19,6 +19,3 @@ export async function ensureInit(): Promise<void> {
 
 /** Raw WASM exports — same shape as the Node rawBinding. */
 export const raw = wasm;
-
-/** Drain Rust trace buffer. */
-export const drainTraceLog = wasm.drainTraceLog;

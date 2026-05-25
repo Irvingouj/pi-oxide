@@ -9,7 +9,7 @@ A Rust agent framework where the core state machine is runtime-free and hosts ow
 | `pi-core` | Pure synchronous agent state machine. No async, no I/O. | [crates.io](https://crates.io/crates/pi-core) |
 | `pi-llm` | LLM provider protocol definitions. Pure types, no network. | [crates.io](https://crates.io/crates/pi-llm) |
 | `pi-host-web` | WASM host — browser fetch, events, storage | npm |
-| `pi-host-desktop` | Terminal host — ratatui TUI, reqwest, local tools | binary |
+| `pi-host-tui` | Terminal host — ratatui TUI, reqwest, local tools | binary |
 | `pi-bindings` | Stable C ABI (JSON wire protocol) | source build |
 | `pi-host-mobile` | Mobile host scaffold (iOS/Android via pi-bindings) | source build |
 

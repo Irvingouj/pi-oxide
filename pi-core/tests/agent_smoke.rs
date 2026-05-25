@@ -29,6 +29,7 @@ fn dummy_options() -> AgentOptions {
         tool_execution_mode: pi_core::ToolExecutionMode::Parallel,
         session_id: None,
         messages: vec![],
+        session_state: None,
     }
 }
 

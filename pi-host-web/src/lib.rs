@@ -3,12 +3,17 @@
 //! Exposes the agent state machine through typed WASM APIs.
 //! Every function returns a `ResultEnvelope<T>` — never throws.
 
+use std::cell::Cell;
 use std::cell::RefCell;
 
 use wasm_bindgen::prelude::*;
 
-use pi_core::Agent;
+use pi_core::{
+    estimate_tokens, estimate_tokens_for_text, fallback_strategy, Agent,
+};
 use tracing::info;
+use tracing_subscriber::layer::{Context, Layer};
+use tracing_subscriber::prelude::*;
 
 fn project_context(input: pi_core::ProjectionInput) -> pi_core::ProjectionOutput {
     pi_core::project(input)
@@ -19,69 +24,115 @@ use dto::*;
 
 thread_local! {
     static AGENT_SLOTS: RefCell<Vec<Option<Agent>>> = RefCell::new(Vec::new());
-    static TRACING_INIT: std::cell::Cell<bool> = std::cell::Cell::new(false);
+    static TRACING_INIT: Cell<bool> = Cell::new(false);
+    static LOG_LEVEL: Cell<tracing::Level> = Cell::new(tracing::Level::INFO);
 }
 
 fn init_tracing() {
     TRACING_INIT.with(|init| {
         if !init.get() {
-            let _ = tracing::subscriber::set_global_default(ConsoleSubscriber);
+            #[cfg(target_arch = "wasm32")]
+            {
+                let layer = DynamicLevelFilter::new(tracing_wasm::WASMLayer::default());
+                let _ = tracing_subscriber::registry().with(layer).try_init();
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let _ = tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).try_init();
+            }
             init.set(true);
         }
     });
 }
 
-#[derive(Debug)]
-struct ConsoleSubscriber;
-
-thread_local! {
-    static TRACE_BUF: RefCell<Vec<String>> = RefCell::new(Vec::new());
+#[wasm_bindgen(js_name = "setLogLevel")]
+pub fn set_log_level(level: String) {
+    let parsed = match level.as_str() {
+        "trace" => tracing::Level::TRACE,
+        "debug" => tracing::Level::DEBUG,
+        "info" => tracing::Level::INFO,
+        "warn" => tracing::Level::WARN,
+        "error" => tracing::Level::ERROR,
+        _ => tracing::Level::INFO,
+    };
+    LOG_LEVEL.with(|c| c.set(parsed));
 }
 
-#[wasm_bindgen(js_name = "drainTraceLog")]
-pub fn drain_trace_log() -> Vec<String> {
-    TRACE_BUF.with(|buf| {
-        let mut buf = buf.borrow_mut();
-        let out = buf.clone();
-        buf.clear();
-        out
-    })
+struct DynamicLevelFilter<L> {
+    inner: L,
 }
 
-impl tracing::Subscriber for ConsoleSubscriber {
-    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        metadata.level() <= &tracing::Level::INFO
+impl<L> DynamicLevelFilter<L> {
+    fn new(inner: L) -> Self {
+        Self { inner }
     }
-    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::Id {
-        tracing::Id::from_u64(1)
-    }
-    fn record(&self, _span: &tracing::Id, _values: &tracing::span::Record<'_>) {}
-    fn record_follows_from(&self, _span: &tracing::Id, _follows: &tracing::Id) {}
-    fn event(&self, event: &tracing::Event<'_>) {
-        let level = *event.metadata().level();
-        let mut fields = String::new();
-        let mut visitor = FieldVisitor(&mut fields);
-        event.record(&mut visitor);
-        let msg = format!("[pi-wasm {}] {}", level, fields);
-        TRACE_BUF.with(|buf| buf.borrow_mut().push(msg));
-    }
-    fn enter(&self, _span: &tracing::Id) {}
-    fn exit(&self, _span: &tracing::Id) {}
 }
 
-struct FieldVisitor<'a>(&'a mut String);
-impl tracing::field::Visit for FieldVisitor<'_> {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        if !self.0.is_empty() {
-            self.0.push(' ');
+impl<S, L> Layer<S> for DynamicLevelFilter<L>
+where
+    S: tracing::Subscriber,
+    L: Layer<S>,
+{
+    fn enabled(&self, metadata: &tracing::Metadata<'_>, ctx: Context<'_, S>) -> bool {
+        let level = LOG_LEVEL.with(|c| c.get());
+        if metadata.level() > &level {
+            return false;
         }
-        self.0.push_str(field.name());
-        self.0.push('=');
-        write!(self.0, "{:?}", value).unwrap();
+        self.inner.enabled(metadata, ctx)
+    }
+
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
+        self.inner.on_event(event, ctx)
+    }
+
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::Id,
+        ctx: Context<'_, S>,
+    ) {
+        self.inner.on_new_span(attrs, id, ctx)
+    }
+
+    fn on_record(
+        &self,
+        span: &tracing::Id,
+        values: &tracing::span::Record<'_>,
+        ctx: Context<'_, S>,
+    ) {
+        self.inner.on_record(span, values, ctx)
+    }
+
+    fn on_follows_from(
+        &self,
+        span: &tracing::Id,
+        follows: &tracing::Id,
+        ctx: Context<'_, S>,
+    ) {
+        self.inner.on_follows_from(span, follows, ctx)
+    }
+
+    fn on_enter(&self, id: &tracing::Id, ctx: Context<'_, S>) {
+        self.inner.on_enter(id, ctx)
+    }
+
+    fn on_exit(&self, id: &tracing::Id, ctx: Context<'_, S>) {
+        self.inner.on_exit(id, ctx)
+    }
+
+    fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
+        self.inner.on_close(id, ctx)
+    }
+
+    fn on_id_change(
+        &self,
+        old: &tracing::span::Id,
+        new: &tracing::span::Id,
+        ctx: Context<'_, S>,
+    ) {
+        self.inner.on_id_change(old, new, ctx)
     }
 }
-
-use std::fmt::Write;
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -385,6 +436,94 @@ pub fn project_context_export(input: ProjectionInput) -> ProjectionResult {
     ok(output)
 }
 
+#[wasm_bindgen(js_name = "getSessionState")]
+pub fn get_session_state(handle: u32) -> SessionStateResult {
+    console_error_panic_hook::set_once();
+
+    let result = with_agent(handle, |agent| agent.session_state().clone());
+    match result {
+        Ok(core_state) => ok(SessionStateOutput {
+            state: core_state.into(),
+        }),
+        Err(e) => err(&e),
+    }
+}
+
+#[wasm_bindgen(js_name = "setSessionState")]
+pub fn set_session_state(handle: u32, state: SessionState) -> EmptyResult {
+    console_error_panic_hook::set_once();
+
+    let core_state: pi_core::SessionState = state.into();
+    let result = with_agent(handle, |agent| agent.set_session_state(core_state));
+    match result {
+        Ok(()) => ok(()),
+        Err(e) => err(&e),
+    }
+}
+
+#[wasm_bindgen(js_name = "getSessionBranch")]
+pub fn get_session_branch(handle: u32) -> SessionBranchResult {
+    console_error_panic_hook::set_once();
+
+    let result = with_agent(handle, |agent| agent.session_branch());
+    match result {
+        Ok(entries) => ok(SessionBranchOutput {
+            entries: entries.into_iter().map(|e| e.into()).collect(),
+        }),
+        Err(e) => err(&e),
+    }
+}
+
+#[wasm_bindgen(js_name = "moveTo")]
+pub fn move_to(handle: u32, target_id: String, summary: Option<BranchSummary>) -> MoveToResult {
+    console_error_panic_hook::set_once();
+
+    let core_summary: Option<pi_core::BranchSummary> = summary.map(|s| s.into());
+    let result = with_agent(handle, |agent| agent.move_to(&target_id, core_summary));
+    match result {
+        Ok(id) => ok(MoveToOutput {
+            summary_entry_id: id,
+        }),
+        Err(e) => err(&e),
+    }
+}
+
+#[wasm_bindgen(js_name = "appendSessionEntry")]
+pub fn append_session_entry(handle: u32, entry: SessionEntry) -> EmptyResult {
+    console_error_panic_hook::set_once();
+
+    let core_entry: pi_core::SessionEntry = entry.into();
+    let result = with_agent(handle, |agent| agent.append_session_entry(core_entry));
+    match result {
+        Ok(()) => ok(()),
+        Err(e) => err(&e),
+    }
+}
+
+#[wasm_bindgen(js_name = "estimateTokens")]
+pub fn estimate_tokens_export(input: EstimateTokensInput) -> EstimateTokensResult {
+    console_error_panic_hook::set_once();
+
+    let core_messages: Vec<pi_core::AgentMessage> = input.messages.into_iter().map(|m| m.into()).collect();
+    let tokens = estimate_tokens(&core_messages);
+    ok(EstimateTokensOutput { tokens })
+}
+
+#[wasm_bindgen(js_name = "estimateTokensForText")]
+pub fn estimate_tokens_for_text_export(text: String) -> EstimateTokensResult {
+    console_error_panic_hook::set_once();
+
+    let tokens = estimate_tokens_for_text(&text);
+    ok(EstimateTokensOutput { tokens })
+}
+
+#[wasm_bindgen(js_name = "fallbackStrategy")]
+pub fn fallback_strategy_export(tool_name: String) -> ContextStrategy {
+    console_error_panic_hook::set_once();
+
+    fallback_strategy(&tool_name).into()
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -415,6 +554,7 @@ mod tests {
             tool_execution_mode: Default::default(),
             session_id: None,
             messages: vec![],
+            session_state: None,
         }
     }
 
@@ -567,5 +707,95 @@ mod tests {
         let data = resp.data.unwrap();
         assert!(!data.projected_messages.is_empty());
         assert!(data.report.estimated_tokens > 0);
+    }
+
+    #[test]
+    fn get_session_state_after_creation_is_empty() {
+        create_agent(dummy_options());
+        let resp = get_session_state(0);
+        assert!(resp.ok);
+        let state = resp.data.unwrap().state;
+        assert!(state.entries.is_empty());
+        assert_eq!(state.leaf_id, "");
+        destroy_agent(0);
+    }
+
+    #[test]
+    fn set_and_get_session_state_roundtrip() {
+        create_agent(dummy_options());
+        let custom_state = SessionState {
+            entries: vec![SessionEntry {
+                id: "entry-0".to_string(),
+                parent_id: None,
+                kind: EntryKind::Message {
+                    message: AgentMessage::User(UserMessage {
+                        content: vec![Content::Text(TextContent {
+                            text: "hi".to_string(),
+                        })],
+                        timestamp: 1,
+                    }),
+                },
+                timestamp: 1,
+            }],
+            leaf_id: "entry-0".to_string(),
+            name: "test-session".to_string(),
+        };
+
+        let set_resp = set_session_state(0, custom_state.clone());
+        assert!(set_resp.ok);
+
+        let get_resp = get_session_state(0);
+        assert!(get_resp.ok);
+        let retrieved = get_resp.data.unwrap().state;
+        assert_eq!(retrieved.entries.len(), 1);
+        assert_eq!(retrieved.leaf_id, "entry-0");
+        assert_eq!(retrieved.name, "test-session");
+        destroy_agent(0);
+    }
+
+    #[test]
+    fn get_session_branch_after_prompt() {
+        create_agent(dummy_options());
+        prompt(
+            0,
+            PromptRequest::Text {
+                text: "hello".to_string(),
+            },
+        );
+
+        let resp = get_session_branch(0);
+        assert!(resp.ok);
+        let entries = resp.data.unwrap().entries;
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(entries[0].kind, EntryKind::Message { .. }));
+        destroy_agent(0);
+    }
+
+    #[test]
+    fn estimate_tokens_returns_value() {
+        let input = EstimateTokensInput {
+            messages: vec![AgentMessage::User(UserMessage {
+                content: vec![Content::Text(TextContent {
+                    text: "hello world".to_string(),
+                })],
+                timestamp: 1,
+            })],
+        };
+        let resp = estimate_tokens_export(input);
+        assert!(resp.ok);
+        assert_eq!(resp.data.unwrap().tokens, 3); // (11 + 3) / 4 = 3.5 -> 3
+    }
+
+    #[test]
+    fn estimate_tokens_for_text_returns_value() {
+        let resp = estimate_tokens_for_text_export("hello".to_string());
+        assert!(resp.ok);
+        assert_eq!(resp.data.unwrap().tokens, 2); // (5 + 3) / 4 = 2
+    }
+
+    #[test]
+    fn fallback_strategy_returns_strategy() {
+        let strategy = fallback_strategy_export("ls".to_string());
+        assert!(matches!(strategy, ContextStrategy::Head { .. }));
     }
 }

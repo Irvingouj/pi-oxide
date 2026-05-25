@@ -465,6 +465,7 @@ mod tests {
             tool_execution_mode: ToolExecutionMode::Parallel,
             session_id: None,
             messages: vec![],
+            session_state: None,
         };
         CString::new(serde_json::to_string(&options).unwrap()).unwrap()
     }

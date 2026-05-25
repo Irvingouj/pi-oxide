@@ -3,7 +3,7 @@ members = [
     "pi-core",
     "pi-llm",
     "pi-bindings",
-    "pi-host-desktop",
+    "pi-host-tui",
     "pi-host-web",
     "pi-host-mobile",
 ]

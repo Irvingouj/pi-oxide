@@ -15,4 +15,3 @@ const pkg = await import("@pi-oxide/pi-host-web");
 pkg.initSync({ module: wasmBytes });
 
 export const raw = pkg;
-export const drainTraceLog = pkg.drainTraceLog;

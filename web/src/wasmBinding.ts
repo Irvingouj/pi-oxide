@@ -14,8 +14,12 @@ import type {
   EmptyResult,
   EventsOutput,
   EventsResult,
+  EstimateTokensOutput,
   LlmChunk,
   LlmResult,
+  MoveToOutput,
+  SessionBranchOutput,
+  SessionStateOutput,
   StateOutput,
   StateResult,
   StepOutput,
@@ -33,6 +37,7 @@ export type {
   AgentOptions,
   AgentState,
   AssistantMessage,
+  BranchSummary,
   CancelReason,
   Content,
   ContentDelta,
@@ -42,7 +47,10 @@ export type {
   ContextReplacement,
   ContextStrategy,
   CreateAgentOutput,
+  EntryKind,
   ErrorDto,
+  EstimateTokensInput,
+  EstimateTokensOutput,
   EventsOutput,
   EventsResult,
   HandleOutput,
@@ -64,7 +72,11 @@ export type {
   ProjectionResult,
   ProviderName,
   QueueMode,
+  SessionBranchOutput,
+  SessionEntry,
   SessionId,
+  SessionState,
+  SessionStateOutput,
   StateOutput,
   StateResult,
   StepOutput,
@@ -181,4 +193,46 @@ export function reset(handle: number): void {
 
 export function destroyAgent(handle: number): void {
   unwrap<void>(raw.destroyAgent(handle));
+}
+
+export function getSessionState(handle: number): SessionState {
+  return unwrap<SessionStateOutput>(raw.getSessionState(handle)).state;
+}
+
+export function setSessionState(handle: number, state: SessionState): void {
+  unwrap<void>(raw.setSessionState(handle, state));
+}
+
+export function getSessionBranch(handle: number): SessionEntry[] {
+  return unwrap<SessionBranchOutput>(raw.getSessionBranch(handle)).entries;
+}
+
+export function moveTo(
+  handle: number,
+  targetId: string,
+  summary?: BranchSummary,
+): string | undefined {
+  return unwrap<MoveToOutput>(raw.moveTo(handle, targetId, summary ?? null)).summary_entry_id ?? undefined;
+}
+
+export function appendSessionEntry(handle: number, entry: SessionEntry): void {
+  unwrap<void>(raw.appendSessionEntry(handle, entry));
+}
+
+export function estimateTokens(messages: AgentMessage[]): number {
+  return unwrap<EstimateTokensOutput>(
+    raw.estimateTokens({ messages }),
+  ).tokens;
+}
+
+export function estimateTokensForText(text: string): number {
+  return unwrap<EstimateTokensOutput>(raw.estimateTokensForText(text)).tokens;
+}
+
+export function fallbackStrategy(toolName: string): ContextStrategy {
+  return raw.fallbackStrategy(toolName);
+}
+
+export function setLogLevel(level: string): void {
+  raw.setLogLevel(level);
 }

@@ -10,6 +10,7 @@ use crate::events::{
 use crate::llm::{LlmChunk, LlmResult, Model};
 use crate::message::{AgentMessage, Content, StopReason, ToolCall, ToolResultMessage};
 use crate::tool::{ToolDefinition, ToolError, ToolExecutionMode, ToolResult};
+use crate::session::{BranchSummary, EntryKind, SessionEntry, SessionState};
 use crate::types::{SessionId, ToolCallId};
 use tracing::{debug, trace, warn};
 
@@ -49,6 +50,9 @@ pub struct AgentOptions {
     pub session_id: Option<SessionId>,
     #[serde(default)]
     pub messages: Vec<AgentMessage>,
+    #[serde(default)]
+    #[ts(skip)]
+    pub session_state: Option<SessionState>,
 }
 
 /// Internal phase of the agent state machine.
@@ -75,10 +79,15 @@ pub struct Agent {
     #[allow(dead_code)]
     tool_execution_mode: ToolExecutionMode,
     session_id: Option<SessionId>,
+    session_state: SessionState,
 }
 
 impl Agent {
     pub fn new(options: AgentOptions) -> Self {
+        let mut session_state = options.session_state.unwrap_or_default();
+        if session_state.entries.is_empty() && !options.messages.is_empty() {
+            session_state = SessionState::from_messages(&options.messages);
+        }
         Self {
             state: AgentState {
                 system_prompt: options.system_prompt,
@@ -101,6 +110,7 @@ impl Agent {
             follow_up_mode: options.follow_up_mode,
             tool_execution_mode: options.tool_execution_mode,
             session_id: options.session_id,
+            session_state,
         }
     }
 
@@ -117,6 +127,7 @@ impl Agent {
         }
 
         self.state.messages.push(prompt.clone());
+        self.append_session_message(&prompt);
         debug!(
             message_count = self.state.messages.len(),
             "agent turn started"
@@ -269,6 +280,7 @@ impl Agent {
         }
 
         self.state.streaming_message = None;
+        self.append_session_message(&msg);
         events.push(AgentEvent::MessageEnd {
             message: msg.clone(),
         });
@@ -423,6 +435,7 @@ impl Agent {
             self.completed_tool_results.push(msg.clone());
         }
         self.state.messages.push(agent_msg.clone());
+        self.append_session_message(&agent_msg);
         events.push(AgentEvent::MessageStart {
             message: agent_msg.clone(),
         });
@@ -626,6 +639,7 @@ impl Agent {
         });
         self.completed_tool_terminations.push(false);
         self.state.messages.push(agent_msg.clone());
+        self.append_session_message(&agent_msg);
         events.push(AgentEvent::MessageStart {
             message: agent_msg.clone(),
         });
@@ -709,6 +723,7 @@ impl Agent {
         self.state.is_streaming = false;
         self.state.streaming_message = None;
         self.phase = Phase::Idle;
+        self.session_state = SessionState::default();
 
         vec![
             AgentEvent::QueueUpdate {
@@ -726,6 +741,52 @@ impl Agent {
         &self.state
     }
 
+    /// Read-only access to the session tree.
+    pub fn session_state(&self) -> &SessionState {
+        &self.session_state
+    }
+
+    /// Replace the in-memory session tree.
+    pub fn set_session_state(&mut self, state: SessionState) {
+        self.session_state = state;
+    }
+
+    /// Get the current branch (root to leaf) as cloned entries.
+    pub fn session_branch(&self) -> Vec<SessionEntry> {
+        self.session_state.get_branch().into_iter().cloned().collect()
+    }
+
+    /// Move the leaf to a target entry, optionally creating a branch summary.
+    pub fn move_to(&mut self, target_id: &str, summary: Option<BranchSummary>) -> Option<String> {
+        self.session_state.move_to(target_id, summary)
+    }
+
+    /// Append a custom entry to the session tree.
+    pub fn append_session_entry(&mut self, entry: SessionEntry) {
+        self.session_state.leaf_id = entry.id.clone();
+        self.session_state.entries.push(entry);
+    }
+
+    /// Append a message to the session tree as an EntryKind::Message.
+    fn append_session_message(&mut self, message: &AgentMessage) {
+        let id = format!("entry-{}", self.session_state.entries.len());
+        let parent_id = self
+            .session_state
+            .entries
+            .last()
+            .map(|e| e.id.clone());
+        let entry = SessionEntry {
+            id,
+            parent_id,
+            kind: EntryKind::Message {
+                message: message.clone(),
+            },
+            timestamp: current_timestamp(),
+        };
+        self.session_state.leaf_id = entry.id.clone();
+        self.session_state.entries.push(entry);
+    }
+
     /// Reset state (clear messages, queues, runtime state).
     pub fn reset(&mut self) {
         debug!("agent state reset");
@@ -738,6 +799,7 @@ impl Agent {
         self.follow_up_queue.clear();
         self.pending_tool_calls.clear();
         self.completed_tool_results.clear();
+        self.session_state = SessionState::default();
         self.completed_tool_terminations.clear();
         self.phase = Phase::Idle;
     }
@@ -787,6 +849,7 @@ impl Agent {
                 message: msg.clone(),
             });
             self.state.messages.push(msg.clone());
+            self.append_session_message(&msg);
             events.push(AgentEvent::MessageEnd {
                 message: msg.clone(),
             });

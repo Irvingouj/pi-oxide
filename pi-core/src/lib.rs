@@ -34,7 +34,7 @@ pub use message::{
     AgentMessage, AssistantMessage, Content, ImageContent, TextContent, ToolCall,
     ToolResultMessage, UserMessage,
 };
-pub use session::{EntryKind, SessionEntry, SessionError, SessionState, SessionStorage};
+pub use session::{BranchSummary, EntryKind, SessionEntry, SessionError, SessionState, SessionStorage};
 pub use tool::{ExecutionMode, ToolDefinition, ToolError, ToolExecutionMode, ToolResult};
 pub use types::{
     ApiName, JsonSchema, ModelId, ModelName, ProviderName, SessionId, ToolArguments, ToolCallId,

@@ -21,8 +21,10 @@ import { initEnvDefaults } from "./config.ts";
 import { callLlm } from "./browserLlm.ts";
 import { LiveBrowserRuntime } from "./liveRuntime.ts";
 import { executeBrowserTool } from "./browserTools.ts";
-import { persistMessage, persistArtifact } from "./persistence.ts";
+import { IndexedDBSessionBackend } from "./persistence.ts";
+import { getSessionState, setSessionState } from "./wasmBinding.ts";
 import type { BrowserRuntime } from "./browserRuntime.ts";
+import type { SessionState } from "./wasmBinding.ts";
 import { BROWSER_TOOLS } from "./browserTools.ts";
 
 // --- Context projection ---
@@ -113,7 +115,6 @@ async function agentLoop(
             .join("\n");
           if (textParts) {
             addText(chatContainer, "assistant", textParts);
-            persistMessage("assistant", textParts);
           }
 
           // Feed start chunk then final result
@@ -185,7 +186,6 @@ async function agentLoop(
             resultDiv.className = "tool-result";
             resultDiv.textContent = resultStr.slice(0, 500);
             toolDiv.appendChild(resultDiv);
-            persistArtifact(`tool-${call.id}`, call.name, resultStr);
 
             lastStep = onToolDone(handle, call.id, {
               content: [{ type: "text", text: resultStr }],
@@ -220,6 +220,8 @@ export interface AppElements {
   statusEl: HTMLElement;
 }
 
+const SESSION_ID = "browser-default-session";
+
 export async function bootstrap(els: AppElements): Promise<{
   sendPrompt: (text: string) => Promise<void>;
 }> {
@@ -227,11 +229,24 @@ export async function bootstrap(els: AppElements): Promise<{
   initEnvDefaults();
 
   const runtime = new LiveBrowserRuntime();
+  const sessionBackend = new IndexedDBSessionBackend();
 
   const systemPrompt =
     "You are a browser automation agent. You can see the current page, " +
     "query elements, click, type, evaluate JavaScript, and read console logs. " +
     "Help the user accomplish tasks in the browser.";
+
+  // Try to restore previous session state
+  let restoredState: SessionState | undefined;
+  try {
+    const loaded = await sessionBackend.load(SESSION_ID);
+    if (loaded) {
+      restoredState = loaded;
+      els.statusEl.textContent = "Session restored";
+    }
+  } catch {
+    // No previous session — start fresh
+  }
 
   const handle = createAgent({
     system_prompt: systemPrompt,
@@ -245,9 +260,11 @@ export async function bootstrap(els: AppElements): Promise<{
       max_tokens: 1024,
     },
     tools: BROWSER_TOOLS,
+    session_id: SESSION_ID,
+    session_state: restoredState,
   });
 
-  els.statusEl.textContent = "Ready";
+  els.statusEl.textContent = restoredState ? "Session restored" : "Ready";
   els.statusEl.style.color = "#4caf50";
   els.sendBtn.disabled = false;
 
@@ -259,10 +276,18 @@ export async function bootstrap(els: AppElements): Promise<{
     els.sendBtn.disabled = true;
 
     addText(els.chatContainer, "user", text);
-    persistMessage("user", text);
 
     const step = prompt(handle, text);
     await agentLoop(handle, step.actions, els.chatContainer, els.sendBtn, runtime);
+
+    // Persist session state after the turn completes
+    try {
+      const state = getSessionState(handle);
+      await sessionBackend.save(SESSION_ID, state);
+    } catch (e) {
+      console.warn("session save failed:", e);
+    }
+
     running = false;
   }
 

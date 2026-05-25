@@ -1,11 +1,11 @@
 [package]
-name = "pi-host-desktop"
+name = "pi-host-tui"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Desktop host for pi-core. Tokio async runtime, native shell, terminal UI."
+description = "Terminal TUI host for pi-core. Ratatui interface, native shell, blocking HTTP."
 
 [[bin]]
 name = "pi"
@@ -19,6 +19,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 ratatui = "0.29"
 crossterm = "0.29"

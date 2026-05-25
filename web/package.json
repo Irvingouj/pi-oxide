@@ -13,6 +13,7 @@
     "build:wasm": "cd ../pi-host-web && PATH=\"$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH\" cargo build --target wasm32-unknown-unknown --release && wasm-bindgen --target web --out-dir ../web/public/pkg ../target/wasm32-unknown-unknown/release/pi_host_web.wasm && wasm-bindgen --target nodejs --out-dir ../web/pkg ../target/wasm32-unknown-unknown/release/pi_host_web.wasm"
   },
   "devDependencies": {
+    "playwright": "^1.60.0",
     "vite": "^8.0.14"
   },
   "dependencies": {

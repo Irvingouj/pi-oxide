@@ -672,6 +672,147 @@ pub struct AgentState {
     pub error_message: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Session types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct SessionEntry {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    pub kind: EntryKind,
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EntryKind {
+    Message {
+        #[serde(flatten)]
+        message: AgentMessage,
+    },
+    Compaction {
+        summary: String,
+        first_kept_entry_id: String,
+        tokens_before: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<JsonSchema>,
+    },
+    BranchSummary {
+        summary: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<JsonSchema>,
+    },
+    ModelChange {
+        provider: String,
+        model_id: String,
+    },
+    ThinkingLevelChange(ThinkingLevel),
+    Custom {
+        custom_type: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data: Option<JsonSchema>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct SessionState {
+    pub entries: Vec<SessionEntry>,
+    pub leaf_id: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct BranchSummary {
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<JsonSchema>,
+}
+
+// ---------------------------------------------------------------------------
+// Session result envelopes
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct SessionStateOutput {
+    pub state: SessionState,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct SessionBranchOutput {
+    pub entries: Vec<SessionEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct MoveToOutput {
+    pub summary_entry_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct EstimateTokensInput {
+    pub messages: Vec<AgentMessage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct EstimateTokensOutput {
+    pub tokens: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct SessionStateResult {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<SessionStateOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ErrorDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct SessionBranchResult {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<SessionBranchOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ErrorDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct MoveToResult {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<MoveToOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ErrorDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct EstimateTokensResult {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<EstimateTokensOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ErrorDto>,
+}
+
+// ---------------------------------------------------------------------------
+// Agent types
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct AgentOptions {
@@ -691,6 +832,8 @@ pub struct AgentOptions {
     pub session_id: Option<SessionId>,
     #[serde(default)]
     pub messages: Vec<AgentMessage>,
+    #[serde(default)]
+    pub session_state: Option<SessionState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Tsify)]
@@ -901,3 +1044,8 @@ dto_conv!(ToolResultContext, pi_core::ToolResultContext);
 dto_conv!(AgentState, pi_core::AgentState);
 dto_conv!(AgentOptions, pi_core::AgentOptions);
 dto_conv!(Phase, pi_core::Phase);
+
+dto_conv!(SessionEntry, pi_core::SessionEntry);
+dto_conv!(EntryKind, pi_core::EntryKind);
+dto_conv!(SessionState, pi_core::SessionState);
+dto_conv!(BranchSummary, pi_core::BranchSummary);

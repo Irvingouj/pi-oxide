@@ -16,6 +16,7 @@ use pi_core::{
 
 use crate::llm::LlmClient;
 use crate::markdown;
+use crate::session::FileSystemSessionBackend;
 use crate::tools;
 
 // ---------------------------------------------------------------------------
@@ -59,10 +60,19 @@ pub struct App {
     projection_state: ContextProjectionState,
     budget: ContextProjectionBudget,
     last_usage: Option<(u32, u32, u32)>, // (input, output, total)
+    session_id: Option<String>,
+    session_backend: FileSystemSessionBackend,
 }
 
 impl App {
-    pub fn new(system_prompt: &str, model_id: &str, api_key: &str, base_url: &str) -> Self {
+    pub fn new(
+        system_prompt: &str,
+        model_id: &str,
+        api_key: &str,
+        base_url: &str,
+        session_id: Option<String>,
+        session_state: Option<pi_core::SessionState>,
+    ) -> Self {
         let model = Model {
             id: pi_core::ModelId::new(model_id),
             name: pi_core::ModelName::new(model_id),
@@ -85,8 +95,9 @@ impl App {
             steering_mode: pi_core::QueueMode::OneAtATime,
             follow_up_mode: pi_core::QueueMode::OneAtATime,
             tool_execution_mode: pi_core::ToolExecutionMode::Parallel,
-            session_id: None,
+            session_id: session_id.as_ref().map(|id| pi_core::SessionId::new(id)),
             messages: Vec::new(),
+            session_state,
         });
 
         let llm_client = LlmClient::new(api_key, base_url, model_id);
@@ -97,6 +108,11 @@ impl App {
         if api_key.is_empty() {
             init_entries.push(ChatEntry::System(
                 "Warning: ANTHROPIC_API_KEY not set. LLM calls will fail.".into(),
+            ));
+        }
+        if session_id.is_some() {
+            init_entries.push(ChatEntry::System(
+                "Session loaded. Previous context is active.".into(),
             ));
         }
 
@@ -115,6 +131,8 @@ impl App {
             projection_state: ContextProjectionState::default(),
             budget: ContextProjectionBudget::default(),
             last_usage: None,
+            session_id,
+            session_backend: FileSystemSessionBackend::new(),
         }
     }
 
@@ -125,6 +143,7 @@ impl App {
     pub fn run(
         mut self,
         terminal: &mut ratatui::DefaultTerminal,
+        _session_backend: &FileSystemSessionBackend,
     ) -> Result<(), Box<dyn std::error::Error>> {
         loop {
             terminal.draw(|f| self.render(f))?;
@@ -133,12 +152,13 @@ impl App {
                 let event = crossterm::event::read()?;
                 if let crossterm::event::Event::Key(key) = event {
                     if key.kind == KeyEventKind::Press {
-                        self.handle_key(key.code);
+                        self.handle_key(terminal, key.code);
                     }
                 }
             }
 
             if self.should_quit {
+                self.save_session();
                 break;
             }
         }
@@ -146,14 +166,14 @@ impl App {
         Ok(())
     }
 
-    fn handle_key(&mut self, key: KeyCode) {
+    fn handle_key(&mut self, terminal: &mut ratatui::DefaultTerminal, key: KeyCode) {
         match key {
             KeyCode::Enter => {
                 if !self.running && !self.input.trim().is_empty() {
                     let text = self.input.clone();
                     self.input.clear();
                     self.cursor_pos = 0;
-                    self.submit_prompt(&text);
+                    self.submit_prompt(terminal, &text);
                 }
             }
             KeyCode::Char(c) => {
@@ -202,37 +222,51 @@ impl App {
     // Agent loop (synchronous — calls blocking HTTP via reqwest::blocking)
     // -----------------------------------------------------------------------
 
-    fn submit_prompt(&mut self, text: &str) {
+    fn submit_prompt(&mut self, terminal: &mut ratatui::DefaultTerminal, text: &str) {
         self.running = true;
         self.auto_scroll = true;
         self.entries.push(ChatEntry::User(text.to_string()));
 
+        // Force immediate redraw so the user message is visible
+        let _ = terminal.draw(|f| self.render(f));
+
         let (_events, actions) = self.agent.start_turn(AgentMessage::user(text));
-        self.handle_actions(actions);
+        self.handle_actions(terminal, actions);
+        self.save_session();
     }
 
-    fn handle_actions(&mut self, actions: Vec<AgentAction>) {
+    fn handle_actions(
+        &mut self,
+        terminal: &mut ratatui::DefaultTerminal,
+        actions: Vec<AgentAction>,
+    ) {
         for action in actions {
             match action {
                 AgentAction::StreamLlm { context, .. } => {
-                    self.stream_llm(context);
+                    self.stream_llm(terminal, context);
                 }
                 AgentAction::ExecuteTools { calls } => {
-                    self.execute_tools(calls);
+                    self.execute_tools(terminal, calls);
                 }
                 AgentAction::Finished { .. } => {
                     self.entries.push(ChatEntry::System("Done.".into()));
                     self.running = false;
+                    let _ = terminal.draw(|f| self.render(f));
                 }
                 AgentAction::WaitForInput { .. } => {
                     self.running = false;
+                    let _ = terminal.draw(|f| self.render(f));
                 }
                 _ => {}
             }
         }
     }
 
-    fn stream_llm(&mut self, context: LlmContext) {
+    fn stream_llm(
+        &mut self,
+        terminal: &mut ratatui::DefaultTerminal,
+        context: LlmContext,
+    ) {
         // Run context projection
         let projected = project(ProjectionInput {
             system_prompt: context.system_prompt.clone(),
@@ -246,6 +280,7 @@ impl App {
 
         self.entries.push(ChatEntry::Assistant(Text::raw("...")));
         self.streaming_text.clear();
+        let _ = terminal.draw(|f| self.render(f));
 
         match self.llm_client.stream_sync(
             &context.system_prompt,
@@ -265,7 +300,8 @@ impl App {
                             // Update last assistant entry
                             if let Some(ChatEntry::Assistant(_)) = self.entries.last() {
                                 let rendered = markdown::render(&full_text, 80);
-                                *self.entries.last_mut().unwrap() = ChatEntry::Assistant(rendered);
+                                *self.entries.last_mut().unwrap() =
+                                    ChatEntry::Assistant(rendered);
                             }
                         }
                         LlmChunk::ToolCallDelta {
@@ -283,6 +319,8 @@ impl App {
                         }
                         _ => {}
                     }
+                    // Redraw after each chunk so streaming is visible
+                    let _ = terminal.draw(|f| self.render(f));
                 }
 
                 // Collect tool calls from the stream's final state
@@ -321,7 +359,8 @@ impl App {
                     vec![Content::Text(pi_core::TextContent { text: full_text })]
                 };
 
-                let content: Vec<Content> = text_block.into_iter().chain(tool_use_blocks).collect();
+                let content: Vec<Content> =
+                    text_block.into_iter().chain(tool_use_blocks).collect();
                 let sr = if stop_reason == "tool_use" {
                     pi_core::StopReason::ToolUse
                 } else {
@@ -347,7 +386,7 @@ impl App {
 
                 let result = LlmResult::Ok(assistant_msg);
                 let (_events, actions) = self.agent.on_llm_done(result);
-                self.handle_actions(actions);
+                self.handle_actions(terminal, actions);
             }
             Err(e) => {
                 let err_result = LlmResult::Err {
@@ -359,20 +398,25 @@ impl App {
                     aborted: false,
                 };
                 let (_events, actions) = self.agent.on_llm_done(err_result);
-                self.handle_actions(actions);
+                self.handle_actions(terminal, actions);
             }
         }
 
         self.streaming_text.clear();
     }
 
-    fn execute_tools(&mut self, calls: Vec<ToolCall>) {
+    fn execute_tools(
+        &mut self,
+        terminal: &mut ratatui::DefaultTerminal,
+        calls: Vec<ToolCall>,
+    ) {
         for call in &calls {
             let args_summary = format_tool_args(&call.arguments);
             self.entries.push(ChatEntry::ToolStart {
                 name: call.name.as_str().to_string(),
                 args_summary: args_summary.clone(),
             });
+            let _ = terminal.draw(|f| self.render(f));
 
             let result = tools::execute(call);
 
@@ -406,10 +450,11 @@ impl App {
                         output: display,
                         is_error: false,
                     });
+                    let _ = terminal.draw(|f| self.render(f));
 
                     let (_events, actions) =
                         self.agent.on_tool_done(call.id.clone(), Ok(tool_result));
-                    self.handle_actions(actions);
+                    self.handle_actions(terminal, actions);
                 }
                 Err(err) => {
                     self.entries.push(ChatEntry::ToolResult {
@@ -417,10 +462,24 @@ impl App {
                         output: err.message.clone(),
                         is_error: true,
                     });
+                    let _ = terminal.draw(|f| self.render(f));
 
                     let (_events, actions) = self.agent.on_tool_done(call.id.clone(), Err(err));
-                    self.handle_actions(actions);
+                    self.handle_actions(terminal, actions);
                 }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Session persistence
+    // -----------------------------------------------------------------------
+
+    fn save_session(&self) {
+        if let Some(ref id) = self.session_id {
+            let state = self.agent.session_state();
+            if let Err(e) = self.session_backend.save(id, state) {
+                tracing::warn!(session_id = id.as_str(), error = ?e, "failed to save session");
             }
         }
     }
@@ -586,7 +645,8 @@ impl App {
 
         // Cursor
         if !self.running {
-            let cursor_x = area.x + 1 + (self.cursor_pos as u16).min(area.width.saturating_sub(3));
+            let cursor_x =
+                area.x + 1 + (self.cursor_pos as u16).min(area.width.saturating_sub(3));
             let cursor_y = area.y + 1;
             frame.set_cursor_position((cursor_x, cursor_y));
         }

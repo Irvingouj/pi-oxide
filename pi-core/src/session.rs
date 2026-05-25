@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::{debug, trace};
 
 use crate::events::ThinkingLevel;
 use crate::message::AgentMessage;
@@ -47,7 +48,7 @@ pub enum EntryKind {
 }
 
 /// In-memory session state managed by the core.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SessionState {
     pub entries: Vec<SessionEntry>,
     pub leaf_id: String,
@@ -56,10 +57,37 @@ pub struct SessionState {
 }
 
 impl SessionState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Build a session tree from existing messages (backfill for agents created before session support).
+    pub fn from_messages(messages: &[AgentMessage]) -> Self {
+        let mut state = Self::new();
+        for msg in messages {
+            let id = format!("entry-{}", state.entries.len());
+            let parent_id = state.entries.last().map(|e| e.id.clone());
+            state.entries.push(SessionEntry {
+                id,
+                parent_id,
+                kind: EntryKind::Message {
+                    message: msg.clone(),
+                },
+                timestamp: current_timestamp(),
+            });
+        }
+        if let Some(last) = state.entries.last() {
+            state.leaf_id = last.id.clone();
+        }
+        trace!(entries = state.entries.len(), "session state built from messages");
+        state
+    }
+
     /// Get the full branch from root to leaf.
     pub fn get_branch(&self) -> Vec<&SessionEntry> {
         let mut branch = Vec::new();
         let mut current = self.entries.iter().find(|e| e.id == self.leaf_id);
+        trace!(leaf_id = self.leaf_id, total_entries = self.entries.len(), "get_branch called");
 
         while let Some(entry) = current {
             branch.push(entry);
@@ -76,22 +104,26 @@ impl SessionState {
 
     /// Build the LLM-visible context from the current branch.
     pub fn build_context(&self) -> Vec<AgentMessage> {
-        self.get_branch()
+        let ctx = self.get_branch()
             .iter()
             .filter_map(|e| match &e.kind {
                 EntryKind::Message { message } => Some(message.clone()),
                 _ => None,
             })
-            .collect()
+            .collect::<Vec<_>>();
+        trace!(message_count = ctx.len(), "build_context");
+        ctx
     }
 
     /// Move to a target node, optionally creating a branch summary.
     pub fn move_to(&mut self, target_id: &str, summary: Option<BranchSummary>) -> Option<String> {
         let target = self.entries.iter().find(|e| e.id == target_id)?;
         self.leaf_id = target_id.to_string();
+        trace!(target_id, "session moved to target");
 
         if let Some(summary) = summary {
             let summary_id = format!("summary-{}", self.entries.len());
+            debug!(summary_id, target_id, "branch summary created");
             let entry = SessionEntry {
                 id: summary_id.clone(),
                 parent_id: target.parent_id.clone(),

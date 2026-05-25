@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use tracing::{debug, trace, warn};
 use ts_rs::TS;
 
 use crate::context_metadata::{fallback_strategy, ContextStrategy, ToolResultContext};
@@ -312,6 +313,13 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
     let mut updated_state = input.state.clone();
     let mut projected = Vec::with_capacity(input.messages.len());
 
+    trace!(
+        message_count = input.messages.len(),
+        max_tool_result_chars = input.budget.max_tool_result_chars,
+        max_context_tokens = input.budget.max_context_tokens,
+        "context projection started"
+    );
+
     // Step 1: Tool-result budgeting
     for msg in &input.messages {
         match msg {
@@ -352,6 +360,14 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
                     projected.push(msg.clone());
                     continue;
                 }
+
+                debug!(
+                    tool_call_id = tool_call_id_str.as_str(),
+                    tool_name = tool_name_str.as_str(),
+                    text_chars,
+                    max = input.budget.max_tool_result_chars,
+                    "tool result oversized, applying strategy"
+                );
 
                 // Determine strategy. Typed metadata wins; tool name is only a fallback.
                 let metadata = tool_result_context(&tr.details);
@@ -408,6 +424,11 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
     // Step 2: Microcompact — shrink old tool results to one-line summaries
     let turn_boundaries = find_turn_boundaries(&projected);
     let total_turns = turn_boundaries.len().saturating_sub(1);
+    trace!(
+        total_turns,
+        microcompact_after = input.budget.microcompact_after_turns,
+        "microcompact check"
+    );
     if total_turns > input.budget.microcompact_after_turns as usize {
         let cutoff_turn =
             total_turns.saturating_sub(input.budget.microcompact_after_turns as usize);
@@ -460,6 +481,13 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
     let msg_tokens = calibrated_estimate(msg_chars, &input.state);
     let sys_tokens = calibrated_estimate(sys_chars, &input.state);
     let total_tokens = msg_tokens + sys_tokens;
+    trace!(
+        msg_tokens,
+        sys_tokens,
+        total_tokens,
+        max_context_tokens = input.budget.max_context_tokens,
+        "token estimate"
+    );
 
     // Step 4: Trim or signal compaction
     let usage_pct = total_tokens as f32 / input.budget.max_context_tokens as f32;
@@ -467,9 +495,21 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
     let (trimmed, dropped_count) = if usage_pct > 1.0 {
         // Hard limit: must trim (safety net) + signal compaction
         needs_compaction = true;
-        trim_to_budget(&projected, input.budget.max_context_tokens, sys_tokens)
+        let (t, d) = trim_to_budget(&projected, input.budget.max_context_tokens, sys_tokens);
+        warn!(
+            dropped_messages = d,
+            remaining_messages = t.len(),
+            usage_pct,
+            "hard limit exceeded, trimming messages"
+        );
+        (t, d)
     } else if usage_pct > input.budget.compaction_threshold {
         // Soft threshold: signal compaction, don't trim yet
+        debug!(
+            usage_pct,
+            threshold = input.budget.compaction_threshold,
+            "soft threshold reached, signalling compaction"
+        );
         needs_compaction = true;
         (projected, 0)
     } else {
@@ -491,6 +531,14 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
         needs_compaction,
         cache_breakpoints,
     };
+
+    debug!(
+        estimated_tokens = report.estimated_tokens,
+        replacements = report.replacements.len(),
+        dropped_messages = report.dropped_messages,
+        needs_compaction = report.needs_compaction,
+        "context projection complete"
+    );
 
     ProjectionOutput {
         projected_messages: trimmed,

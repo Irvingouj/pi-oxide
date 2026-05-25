@@ -274,15 +274,6 @@
 
 <script type="module">
   import { bootstrap } from "../src/browser/app.ts";
-  import { drainTraceLog } from "../src/browser/wasm.ts";
-
-  // Periodically flush Rust tracing to browser console
-  setInterval(() => {
-    try {
-      const msgs = JSON.parse(drainTraceLog());
-      for (const m of msgs) console.log(m);
-    } catch {}
-  }, 200);
 
   const { sendPrompt } = await bootstrap({
     chatContainer: document.getElementById("chat-messages"),

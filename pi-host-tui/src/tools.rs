@@ -2,7 +2,7 @@
 //!
 //! Four tools: bash, read, write, edit — the minimum viable coding agent.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use pi_core::{
     ExecutionMode, JsonSchema, ToolArguments, ToolCall, ToolDefinition, ToolError, ToolName,
@@ -103,12 +103,21 @@ pub fn definitions() -> Vec<ToolDefinition> {
 
 // --- Execution ---
 
-pub fn execute(call: &ToolCall) -> Result<pi_core::ToolResult, ToolError> {
+fn resolve_path(path_str: &str, cwd: &Path) -> PathBuf {
+    let path = Path::new(path_str);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    }
+}
+
+pub fn execute(call: &ToolCall, cwd: &Path) -> Result<pi_core::ToolResult, ToolError> {
     match call.name.as_str() {
-        "bash" => exec_bash(&call.arguments),
-        "read" => exec_read(&call.arguments),
-        "write" => exec_write(&call.arguments),
-        "edit" => exec_edit(&call.arguments),
+        "bash" => exec_bash(&call.arguments, cwd),
+        "read" => exec_read(&call.arguments, cwd),
+        "write" => exec_write(&call.arguments, cwd),
+        "edit" => exec_edit(&call.arguments, cwd),
         name => Err(ToolError::new(
             "unknown_tool",
             format!("Unknown tool: {name}"),
@@ -123,12 +132,13 @@ fn get_str<'a>(args: &'a ToolArguments, key: &str) -> Result<&'a str, ToolError>
         .ok_or_else(|| ToolError::new("missing_param", format!("Missing parameter: {key}")))
 }
 
-fn exec_bash(args: &ToolArguments) -> Result<pi_core::ToolResult, ToolError> {
+fn exec_bash(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, ToolError> {
     let command = get_str(args, "command")?;
 
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(command)
+        .current_dir(cwd)
         .output()
         .map_err(|e| ToolError::new("exec_failed", e.to_string()))?;
 
@@ -153,8 +163,10 @@ fn exec_bash(args: &ToolArguments) -> Result<pi_core::ToolResult, ToolError> {
     Ok(pi_core::ToolResult::text(text))
 }
 
-fn exec_read(args: &ToolArguments) -> Result<pi_core::ToolResult, ToolError> {
+fn exec_read(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, ToolError> {
     let path = get_str(args, "path")?;
+    let resolved = resolve_path(path, cwd);
+    let resolved_str = resolved.to_str().unwrap_or(path);
     let offset = args.0.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let limit = args
         .0
@@ -162,8 +174,8 @@ fn exec_read(args: &ToolArguments) -> Result<pi_core::ToolResult, ToolError> {
         .and_then(|v| v.as_u64())
         .map(|l| l as usize);
 
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| ToolError::new("read_failed", format!("{path}: {e}")))?;
+    let content = std::fs::read_to_string(&resolved)
+        .map_err(|e| ToolError::new("read_failed", format!("{resolved_str}: {e}")))?;
 
     let lines: Vec<&str> = content.lines().collect();
     let start = offset.min(lines.len());
@@ -178,17 +190,19 @@ fn exec_read(args: &ToolArguments) -> Result<pi_core::ToolResult, ToolError> {
     Ok(pi_core::ToolResult::text(result))
 }
 
-fn exec_write(args: &ToolArguments) -> Result<pi_core::ToolResult, ToolError> {
+fn exec_write(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, ToolError> {
     let path = get_str(args, "path")?;
+    let resolved = resolve_path(path, cwd);
+    let resolved_str = resolved.to_str().unwrap_or(path);
     let content = get_str(args, "content")?;
 
-    if let Some(parent) = Path::new(path).parent() {
+    if let Some(parent) = resolved.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| ToolError::new("mkdir_failed", format!("{path}: {e}")))?;
+            .map_err(|e| ToolError::new("mkdir_failed", format!("{resolved_str}: {e}")))?;
     }
 
-    std::fs::write(path, content)
-        .map_err(|e| ToolError::new("write_failed", format!("{path}: {e}")))?;
+    std::fs::write(&resolved, content)
+        .map_err(|e| ToolError::new("write_failed", format!("{resolved_str}: {e}")))?;
 
     Ok(pi_core::ToolResult::text(format!(
         "Wrote {} bytes to {path}",
@@ -196,35 +210,37 @@ fn exec_write(args: &ToolArguments) -> Result<pi_core::ToolResult, ToolError> {
     )))
 }
 
-fn exec_edit(args: &ToolArguments) -> Result<pi_core::ToolResult, ToolError> {
+fn exec_edit(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, ToolError> {
     let path = get_str(args, "path")?;
+    let resolved = resolve_path(path, cwd);
+    let resolved_str = resolved.to_str().unwrap_or(path);
     let old_string = get_str(args, "old_string")?;
     let new_string = get_str(args, "new_string")?;
 
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| ToolError::new("read_failed", format!("{path}: {e}")))?;
+    let content = std::fs::read_to_string(&resolved)
+        .map_err(|e| ToolError::new("read_failed", format!("{resolved_str}: {e}")))?;
 
     let count = content.matches(old_string).count();
     if count == 0 {
         return Err(ToolError::new(
             "not_found",
-            format!("old_string not found in {path}"),
+            format!("old_string not found in {resolved_str}"),
         ));
     }
     if count > 1 {
         return Err(ToolError::new(
             "ambiguous",
             format!(
-                "old_string found {count} times in {path}. Provide more context to make it unique."
+                "old_string found {count} times in {resolved_str}. Provide more context to make it unique."
             ),
         ));
     }
 
     let new_content = content.replacen(old_string, new_string, 1);
-    std::fs::write(path, &new_content)
-        .map_err(|e| ToolError::new("write_failed", format!("{path}: {e}")))?;
+    std::fs::write(&resolved, &new_content)
+        .map_err(|e| ToolError::new("write_failed", format!("{resolved_str}: {e}")))?;
 
-    Ok(pi_core::ToolResult::text(format!("Edited {path}")))
+    Ok(pi_core::ToolResult::text(format!("Edited {resolved_str}")))
 }
 
 // --- Tests ---
@@ -245,7 +261,7 @@ mod tests {
     #[test]
     fn test_bash_echo() {
         let call = make_call("bash", serde_json::json!({"command": "echo hello world"}));
-        let result = execute(&call).unwrap();
+        let result = execute(&call, Path::new(".")).unwrap();
         let text = result
             .content
             .iter()
@@ -264,7 +280,7 @@ mod tests {
     #[test]
     fn test_bash_failure() {
         let call = make_call("bash", serde_json::json!({"command": "exit 42"}));
-        let result = execute(&call).unwrap();
+        let result = execute(&call, Path::new(".")).unwrap();
         let text = result
             .content
             .iter()
@@ -295,11 +311,11 @@ mod tests {
                 "content": "line 1\nline 2\nline 3\n"
             }),
         );
-        execute(&write_call).unwrap();
+        execute(&write_call, Path::new(".")).unwrap();
 
         // Read all
         let read_call = make_call("read", serde_json::json!({"path": path_str}));
-        let result = execute(&read_call).unwrap();
+        let result = execute(&read_call, Path::new(".")).unwrap();
         let text = result
             .content
             .iter()
@@ -324,7 +340,7 @@ mod tests {
                 "limit": 1
             }),
         );
-        let result = execute(&read_partial).unwrap();
+        let result = execute(&read_partial, Path::new(".")).unwrap();
         let text = result
             .content
             .iter()
@@ -360,7 +376,7 @@ mod tests {
                 "new_string": "hello rust"
             }),
         );
-        execute(&edit_call).unwrap();
+        execute(&edit_call, Path::new(".")).unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("hello rust"));
@@ -385,7 +401,7 @@ mod tests {
                 "new_string": "123"
             }),
         );
-        let err = execute(&call).unwrap_err();
+        let err = execute(&call, Path::new(".")).unwrap_err();
         assert_eq!(err.code, "not_found");
 
         std::fs::remove_dir_all(&dir).ok();
@@ -406,7 +422,7 @@ mod tests {
                 "new_string": "xyz"
             }),
         );
-        let err = execute(&call).unwrap_err();
+        let err = execute(&call, Path::new(".")).unwrap_err();
         assert_eq!(err.code, "ambiguous");
 
         std::fs::remove_dir_all(&dir).ok();
@@ -415,7 +431,7 @@ mod tests {
     #[test]
     fn test_unknown_tool() {
         let call = make_call("fly", serde_json::json!({}));
-        let err = execute(&call).unwrap_err();
+        let err = execute(&call, Path::new(".")).unwrap_err();
         assert_eq!(err.code, "unknown_tool");
     }
 }

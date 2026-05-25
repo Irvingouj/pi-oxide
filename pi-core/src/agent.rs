@@ -66,6 +66,7 @@ pub enum Phase {
 }
 
 /// The agent state machine. Purely synchronous; the host drives progress.
+#[derive(Clone)]
 pub struct Agent {
     state: AgentState,
     steering_queue: Vec<AgentMessage>,
@@ -739,6 +740,11 @@ impl Agent {
     /// Read-only access to current state.
     pub fn state(&self) -> &AgentState {
         &self.state
+    }
+
+    /// Mutable access to current state.
+    pub fn state_mut(&mut self) -> &mut AgentState {
+        &mut self.state
     }
 
     /// Read-only access to the session tree.

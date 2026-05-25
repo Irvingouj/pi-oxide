@@ -1,11 +1,13 @@
+use std::path::Path;
 use std::time::Duration;
 
-use crossterm::event::{KeyCode, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+    Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
+    ScrollbarOrientation, ScrollbarState, Wrap,
 };
 use ratatui::Frame;
 
@@ -18,6 +20,22 @@ use crate::llm::LlmClient;
 use crate::markdown;
 use crate::session::FileSystemSessionBackend;
 use crate::tools;
+
+// ---------------------------------------------------------------------------
+// Command palette
+// ---------------------------------------------------------------------------
+
+const COMMANDS: &[&str] = &[
+    "/clear",
+    "/help",
+    "/model",
+    "/quit",
+    "/session list",
+    "/session load",
+    "/session new",
+    "/tokens",
+    "/undo",
+];
 
 // ---------------------------------------------------------------------------
 // Chat line types
@@ -55,13 +73,27 @@ pub struct App {
     running: bool,
     streaming_text: String,
     #[allow(dead_code)]
-    current_tools: Vec<(String, String)>, // (name, args_summary) for active tools
+    current_tools: Vec<(String, String)>,
     llm_client: LlmClient,
     projection_state: ContextProjectionState,
     budget: ContextProjectionBudget,
-    last_usage: Option<(u32, u32, u32)>, // (input, output, total)
+    last_usage: Option<(u32, u32, u32)>,
     session_id: Option<String>,
     session_backend: FileSystemSessionBackend,
+    cwd: std::path::PathBuf,
+
+    // New: cancellation
+    cancelled: bool,
+
+    // New: history recall
+    history: Vec<String>,
+    history_index: Option<usize>,
+    original_input: String,
+
+    // New: command autocomplete
+    suggestions: Vec<String>,
+    show_suggestions: bool,
+    suggestion_state: ListState,
 }
 
 impl App {
@@ -72,6 +104,7 @@ impl App {
         base_url: &str,
         session_id: Option<String>,
         session_state: Option<pi_core::SessionState>,
+        cwd: &Path,
     ) -> Self {
         let model = Model {
             id: pi_core::ModelId::new(model_id),
@@ -103,7 +136,7 @@ impl App {
         let llm_client = LlmClient::new(api_key, base_url, model_id);
 
         let mut init_entries = vec![ChatEntry::System(
-            "Ready. Type a message and press Enter.".into(),
+            "Ready. Type a message and press Enter.  /help for commands.".into(),
         )];
         if api_key.is_empty() {
             init_entries.push(ChatEntry::System(
@@ -133,6 +166,14 @@ impl App {
             last_usage: None,
             session_id,
             session_backend: FileSystemSessionBackend::new(),
+            cwd: cwd.to_path_buf(),
+            cancelled: false,
+            history: Vec::new(),
+            history_index: None,
+            original_input: String::new(),
+            suggestions: Vec::new(),
+            show_suggestions: false,
+            suggestion_state: ListState::default(),
         }
     }
 
@@ -152,7 +193,7 @@ impl App {
                 let event = crossterm::event::read()?;
                 if let crossterm::event::Event::Key(key) = event {
                     if key.kind == KeyEventKind::Press {
-                        self.handle_key(terminal, key.code);
+                        self.handle_key(terminal, key);
                     }
                 }
             }
@@ -166,19 +207,64 @@ impl App {
         Ok(())
     }
 
-    fn handle_key(&mut self, terminal: &mut ratatui::DefaultTerminal, key: KeyCode) {
-        match key {
+    fn handle_key(&mut self, terminal: &mut ratatui::DefaultTerminal, key: KeyEvent) {
+        // Ctrl+C: cancel running LLM
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if self.running {
+                self.cancelled = true;
+            }
+            return;
+        }
+
+        match key.code {
             KeyCode::Enter => {
+                if self.show_suggestions {
+                    if let Some(idx) = self.suggestion_state.selected() {
+                        if let Some(cmd) = self.suggestions.get(idx).cloned() {
+                            self.input = cmd;
+                            self.cursor_pos = self.input.len();
+                            self.show_suggestions = false;
+                            return;
+                        }
+                    }
+                }
                 if !self.running && !self.input.trim().is_empty() {
                     let text = self.input.clone();
                     self.input.clear();
                     self.cursor_pos = 0;
+                    self.show_suggestions = false;
                     self.submit_prompt(terminal, &text);
+                }
+            }
+            KeyCode::Tab => {
+                if self.input.starts_with('/') {
+                    self.update_suggestions();
+                } else if self.show_suggestions {
+                    self.suggestion_state.select_next();
+                }
+            }
+            KeyCode::Up => {
+                if self.show_suggestions {
+                    self.suggestion_state.select_previous();
+                } else {
+                    self.history_recall_previous();
+                }
+            }
+            KeyCode::Down => {
+                if self.show_suggestions {
+                    self.suggestion_state.select_next();
+                } else {
+                    self.history_recall_next();
                 }
             }
             KeyCode::Char(c) => {
                 self.input.insert(self.cursor_pos, c);
                 self.cursor_pos += c.len_utf8();
+                if self.show_suggestions && !self.input.starts_with('/') {
+                    self.show_suggestions = false;
+                } else if self.input.starts_with('/') {
+                    self.update_suggestions();
+                }
             }
             KeyCode::Backspace => {
                 if self.cursor_pos > 0 {
@@ -189,6 +275,11 @@ impl App {
                         .unwrap_or(0);
                     self.cursor_pos -= prev;
                     self.input.remove(self.cursor_pos);
+                }
+                if self.input.is_empty() || !self.input.starts_with('/') {
+                    self.show_suggestions = false;
+                } else {
+                    self.update_suggestions();
                 }
             }
             KeyCode::Left => {
@@ -212,27 +303,223 @@ impl App {
                 }
             }
             KeyCode::Esc => {
-                self.should_quit = true;
+                if self.show_suggestions {
+                    self.show_suggestions = false;
+                } else {
+                    self.should_quit = true;
+                }
             }
             _ => {}
         }
     }
 
     // -----------------------------------------------------------------------
-    // Agent loop (synchronous — calls blocking HTTP via reqwest::blocking)
+    // History recall
+    // -----------------------------------------------------------------------
+
+    fn history_recall_previous(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+        if self.history_index.is_none() {
+            self.original_input = self.input.clone();
+            self.history_index = Some(self.history.len().saturating_sub(1));
+        } else {
+            self.history_index = Some(self.history_index.unwrap().saturating_sub(1));
+        }
+        if let Some(idx) = self.history_index {
+            self.input = self.history[idx].clone();
+            self.cursor_pos = self.input.len();
+        }
+    }
+
+    fn history_recall_next(&mut self) {
+        match self.history_index {
+            None => {}
+            Some(idx) => {
+                if idx + 1 < self.history.len() {
+                    self.history_index = Some(idx + 1);
+                    self.input = self.history[idx + 1].clone();
+                    self.cursor_pos = self.input.len();
+                } else {
+                    self.input = self.original_input.clone();
+                    self.cursor_pos = self.input.len();
+                    self.history_index = None;
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Suggestions
+    // -----------------------------------------------------------------------
+
+    fn update_suggestions(&mut self) {
+        if !self.input.starts_with('/') {
+            self.show_suggestions = false;
+            self.suggestions.clear();
+            self.suggestion_state.select(None);
+            return;
+        }
+        let filtered: Vec<String> = COMMANDS
+            .iter()
+            .filter(|c| c.starts_with(&self.input))
+            .cloned()
+            .map(|s| s.to_string())
+            .collect();
+        self.show_suggestions = !filtered.is_empty();
+        self.suggestions = filtered;
+        self.suggestion_state
+            .select(self.show_suggestions.then_some(0));
+    }
+
+    // -----------------------------------------------------------------------
+    // Agent loop
     // -----------------------------------------------------------------------
 
     fn submit_prompt(&mut self, terminal: &mut ratatui::DefaultTerminal, text: &str) {
+        // Command dispatch
+        if text.starts_with('/') {
+            self.handle_command(terminal, text);
+            return;
+        }
+
         self.running = true;
         self.auto_scroll = true;
+        self.cancelled = false;
         self.entries.push(ChatEntry::User(text.to_string()));
+        self.history.push(text.to_string());
+        self.history_index = None;
+        self.original_input.clear();
 
-        // Force immediate redraw so the user message is visible
         let _ = terminal.draw(|f| self.render(f));
 
         let (_events, actions) = self.agent.start_turn(AgentMessage::user(text));
         self.handle_actions(terminal, actions);
         self.save_session();
+    }
+
+    fn handle_command(&mut self, terminal: &mut ratatui::DefaultTerminal, text: &str) {
+        let parts: Vec<&str> = text.split_whitespace().collect();
+        let cmd = parts.first().copied().unwrap_or("");
+
+        match cmd {
+            "/clear" => {
+                self.agent.reset();
+                self.entries.clear();
+                self.entries.push(ChatEntry::System("Chat cleared.".into()));
+            }
+            "/help" => {
+                let list = COMMANDS.join("  ");
+                self.entries
+                    .push(ChatEntry::System(format!("Commands: {list}")));
+            }
+            "/quit" => {
+                self.should_quit = true;
+            }
+            "/model" => {
+                if parts.len() >= 2 {
+                    let model_id = parts[1];
+                    self.llm_client.set_model(model_id);
+                    self.agent.state_mut().model.id = pi_core::ModelId::new(model_id);
+                    self.agent.state_mut().model.name = pi_core::ModelName::new(model_id);
+                    self.entries.push(ChatEntry::System(format!(
+                        "Model switched to {model_id}"
+                    )));
+                } else {
+                    self.entries.push(ChatEntry::System(
+                        "Usage: /model <model_id>".into(),
+                    ));
+                }
+            }
+            "/session" => {
+                let sub = parts.get(1).copied().unwrap_or("");
+                match sub {
+                    "list" => {
+                        let ids = self.session_backend.list();
+                        let msg = if ids.is_empty() {
+                            "No saved sessions.".into()
+                        } else {
+                            format!("Sessions: {}", ids.join(", "))
+                        };
+                        self.entries.push(ChatEntry::System(msg));
+                    }
+                    "load" => {
+                        if let Some(id) = parts.get(2) {
+                            if let Some(state) = self.session_backend.load(id) {
+                                self.agent.reset();
+                                self.agent.set_session_state(state);
+                                self.session_id = Some(id.to_string());
+                                self.entries.clear();
+                                self.entries.push(ChatEntry::System(format!(
+                                    "Session '{id}' loaded."
+                                )));
+                            } else {
+                                self.entries.push(ChatEntry::System(format!(
+                                    "Session '{id}' not found."
+                                )));
+                            }
+                        } else {
+                            self.entries.push(ChatEntry::System(
+                                "Usage: /session load <id>".into(),
+                            ));
+                        }
+                    }
+                    "new" => {
+                        self.agent.reset();
+                        self.session_id = None;
+                        self.entries.clear();
+                        self.entries
+                            .push(ChatEntry::System("New session started.".into()));
+                    }
+                    _ => {
+                        self.entries.push(ChatEntry::System(
+                            "Usage: /session list | load <id> | new".into(),
+                        ));
+                    }
+                }
+            }
+            "/tokens" => {
+                if let Some((input, output, total)) = self.last_usage {
+                    let ctx_pct = if self.budget.max_context_tokens > 0 {
+                        (input as f64 / self.budget.max_context_tokens as f64 * 100.0) as u16
+                    } else {
+                        0
+                    };
+                    self.entries.push(ChatEntry::System(format!(
+                        "Tokens: in={input} out={output} total={total} ctx={ctx_pct}%"
+                    )));
+                } else {
+                    self.entries.push(ChatEntry::System(
+                        "No token usage recorded yet.".into(),
+                    ));
+                }
+            }
+            "/undo" => {
+                let msgs = &self.agent.state().messages;
+                if let Some(last_user_idx) = msgs.iter().rposition(|m| matches!(m, pi_core::AgentMessage::User(_))) {
+                    let new_len = last_user_idx;
+                    self.agent.state_mut().messages.truncate(new_len);
+                    // Also truncate entries to remove the last user+assistant+tools round
+                    if let Some(last_user_entry) =
+                        self.entries.iter().rposition(|e| matches!(e, ChatEntry::User(_)))
+                    {
+                        self.entries.truncate(last_user_entry);
+                    }
+                    self.entries
+                        .push(ChatEntry::System("Last turn undone.".into()));
+                } else {
+                    self.entries.push(ChatEntry::System("Nothing to undo.".into()));
+                }
+            }
+            _ => {
+                self.entries.push(ChatEntry::System(format!(
+                    "Unknown command: {cmd}. Type /help for list."
+                )));
+            }
+        }
+
+        let _ = terminal.draw(|f| self.render(f));
     }
 
     fn handle_actions(
@@ -241,6 +528,13 @@ impl App {
         actions: Vec<AgentAction>,
     ) {
         for action in actions {
+            if self.cancelled {
+                self.agent.abort();
+                self.running = false;
+                self.entries.push(ChatEntry::System("Cancelled.".into()));
+                let _ = terminal.draw(|f| self.render(f));
+                return;
+            }
             match action {
                 AgentAction::StreamLlm { context, .. } => {
                     self.stream_llm(terminal, context);
@@ -267,7 +561,6 @@ impl App {
         terminal: &mut ratatui::DefaultTerminal,
         context: LlmContext,
     ) {
-        // Run context projection
         let projected = project(ProjectionInput {
             system_prompt: context.system_prompt.clone(),
             messages: context.messages.clone(),
@@ -275,7 +568,6 @@ impl App {
             state: self.projection_state.clone(),
         });
         self.projection_state = projected.updated_state;
-
         let projected_messages = projected.projected_messages;
 
         self.entries.push(ChatEntry::Assistant(Text::raw("...")));
@@ -289,27 +581,24 @@ impl App {
         ) {
             Ok(mut stream) => {
                 let mut full_text = String::new();
-                let mut tool_calls = Vec::new();
-                let stop_reason;
 
                 for chunk in stream.by_ref() {
+                    if self.cancelled {
+                        self.agent.abort();
+                        self.running = false;
+                        self.entries.push(ChatEntry::System("Cancelled.".into()));
+                        let _ = terminal.draw(|f| self.render(f));
+                        return;
+                    }
                     match chunk {
                         LlmChunk::TextDelta { text } => {
                             full_text.push_str(&text);
                             self.streaming_text = full_text.clone();
-                            // Update last assistant entry
                             if let Some(ChatEntry::Assistant(_)) = self.entries.last() {
                                 let rendered = markdown::render(&full_text, 80);
                                 *self.entries.last_mut().unwrap() =
                                     ChatEntry::Assistant(rendered);
                             }
-                        }
-                        LlmChunk::ToolCallDelta {
-                            tool_call_id,
-                            delta,
-                        } => {
-                            // Accumulate tool call deltas — we'll process them on Done
-                            tool_calls.push((tool_call_id, delta));
                         }
                         LlmChunk::Done => break,
                         LlmChunk::Error { message } => {
@@ -319,11 +608,9 @@ impl App {
                         }
                         _ => {}
                     }
-                    // Redraw after each chunk so streaming is visible
                     let _ = terminal.draw(|f| self.render(f));
                 }
 
-                // Collect tool calls from the stream's final state
                 let usage = stream.usage();
                 if let Some((input, output, total)) = usage {
                     self.last_usage = Some((input, output, total));
@@ -333,10 +620,8 @@ impl App {
                     });
                 }
 
-                let stop = stream.stop_reason().unwrap_or("end_turn");
-                stop_reason = stop.to_string();
+                let stop_reason = stream.stop_reason().unwrap_or("end_turn");
 
-                // Build the final assistant message for core
                 let tool_use_blocks: Vec<Content> = stream
                     .tool_calls()
                     .into_iter()
@@ -411,6 +696,13 @@ impl App {
         calls: Vec<ToolCall>,
     ) {
         for call in &calls {
+            if self.cancelled {
+                self.agent.abort();
+                self.running = false;
+                self.entries.push(ChatEntry::System("Cancelled.".into()));
+                let _ = terminal.draw(|f| self.render(f));
+                return;
+            }
             let args_summary = format_tool_args(&call.arguments);
             self.entries.push(ChatEntry::ToolStart {
                 name: call.name.as_str().to_string(),
@@ -418,7 +710,7 @@ impl App {
             });
             let _ = terminal.draw(|f| self.render(f));
 
-            let result = tools::execute(call);
+            let result = tools::execute(call, &self.cwd);
 
             match result {
                 Ok(tool_result) => {
@@ -488,7 +780,7 @@ impl App {
     // Rendering
     // -----------------------------------------------------------------------
 
-    fn render(&self, frame: &mut Frame) {
+    fn render(&mut self, frame: &mut Frame) {
         let [chat_area, input_area, status_area] = Layout::vertical([
             Constraint::Fill(1),
             Constraint::Length(3),
@@ -583,9 +875,8 @@ impl App {
         }
 
         let total_lines = lines.len() as u16;
-        let visible = area.height.saturating_sub(2); // minus borders
+        let visible = area.height.saturating_sub(2);
 
-        // Auto-scroll: keep bottom visible
         let scroll = if total_lines > visible {
             if self.auto_scroll {
                 total_lines - visible
@@ -603,7 +894,6 @@ impl App {
 
         frame.render_widget(paragraph, area);
 
-        // Scrollbar
         if total_lines > visible {
             let mut scrollbar_state =
                 ScrollbarState::new(total_lines as usize).position(scroll as usize);
@@ -615,7 +905,7 @@ impl App {
         }
     }
 
-    fn render_input(&self, frame: &mut Frame, area: Rect) {
+    fn render_input(&mut self, frame: &mut Frame, area: Rect) {
         let style = if self.running {
             Style::default().fg(Color::DarkGray)
         } else {
@@ -629,11 +919,21 @@ impl App {
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(if self.running {
                         Color::DarkGray
+                    } else if self.show_suggestions {
+                        Color::Yellow
                     } else {
                         Color::Cyan
                     }))
-                    .title(if self.running { " thinking... " } else { " > " })
+                    .title(if self.running {
+                        " thinking... "
+                    } else if self.show_suggestions {
+                        " commands "
+                    } else {
+                        " > "
+                    })
                     .title_style(Style::default().fg(if self.running {
+                        Color::Yellow
+                    } else if self.show_suggestions {
                         Color::Yellow
                     } else {
                         Color::Cyan
@@ -643,12 +943,40 @@ impl App {
 
         frame.render_widget(input, area);
 
-        // Cursor
         if !self.running {
             let cursor_x =
                 area.x + 1 + (self.cursor_pos as u16).min(area.width.saturating_sub(3));
             let cursor_y = area.y + 1;
             frame.set_cursor_position((cursor_x, cursor_y));
+        }
+
+        // Suggestion popup
+        if self.show_suggestions && !self.suggestions.is_empty() {
+            let max_visible = 5u16;
+            let list_height = (self.suggestions.len() as u16).min(max_visible);
+            let popup_height = list_height + 2;
+
+            let popup_area = Rect {
+                x: area.x,
+                y: area.y.saturating_sub(popup_height),
+                width: area.width,
+                height: popup_height,
+            };
+
+            frame.render_widget(Clear, popup_area);
+
+            let items: Vec<ListItem> = self
+                .suggestions
+                .iter()
+                .map(|s| ListItem::new(s.as_str()))
+                .collect();
+
+            let list = List::new(items)
+                .block(Block::bordered().title(" commands "))
+                .highlight_style(Style::new().add_modifier(Modifier::REVERSED).fg(Color::Cyan))
+                .highlight_symbol("> ");
+
+            frame.render_stateful_widget(list, popup_area, &mut self.suggestion_state);
         }
     }
 

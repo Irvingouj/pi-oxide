@@ -7,6 +7,7 @@ use std::io::Read;
 
 // --- Public types ---
 
+#[derive(Clone)]
 pub struct LlmClient {
     client: reqwest::blocking::Client,
     api_key: String,
@@ -81,6 +82,10 @@ impl LlmClient {
 
     pub fn model_id(&self) -> &str {
         &self.model
+    }
+
+    pub fn set_model(&mut self, model: &str) {
+        self.model = model.to_string();
     }
 
     /// Start a streaming LLM request. Returns an iterator of LlmChunk values.

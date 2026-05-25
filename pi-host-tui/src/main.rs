@@ -36,6 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .session_id
         .as_ref()
         .and_then(|id| session_backend.load(id));
+    let cwd = std::env::current_dir()?;
 
     let mut terminal = ratatui::init();
     let app = app::App::new(
@@ -45,6 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &base_url,
         cli.session_id,
         session_state,
+        &cwd,
     );
     let result = app.run(&mut terminal, &session_backend);
     ratatui::restore();

@@ -18,6 +18,6 @@
     "vite": "^8.0.14"
   },
   "dependencies": {
-    "@pi-oxide/pi-host-web": "^0.2.1"
+    "@pi-oxide/pi-host-web": "^0.2.2"
   }
 }

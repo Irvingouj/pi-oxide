@@ -5,6 +5,7 @@
 //! into core via synchronous callbacks after completing async operations.
 
 pub mod agent;
+pub mod agent_runtime;
 pub mod context;
 pub mod context_metadata;
 pub mod context_projection;
@@ -17,6 +18,11 @@ pub mod tool;
 pub mod types;
 
 pub use agent::{Agent, AgentOptions, AgentState, Phase};
+pub use agent_runtime::{
+    AbortedAgent, AgentRuntime, FinishLlmTransition, FinishedAgent, IdleAgent, ReadyAgent,
+    StreamingAgent, ToolTransition, Transition, UserInputDuringTools,
+    WaitingToolsAgent,
+};
 pub use context::{AgentContext, LlmContext};
 pub use context_metadata::{fallback_strategy, ContentKind, ContextStrategy, ToolResultContext};
 pub use context_projection::{
@@ -35,7 +41,7 @@ pub use message::{
     ToolResultMessage, UserMessage,
 };
 pub use session::{BranchSummary, EntryKind, SessionEntry, SessionError, SessionState, SessionStorage};
-pub use tool::{ExecutionMode, ToolDefinition, ToolError, ToolExecutionMode, ToolResult};
+pub use tool::{ExecutionMode, ToolDefinition, ToolError, ToolExecutionMode, ToolResult, ToolRunMode};
 pub use types::{
     ApiName, JsonSchema, ModelId, ModelName, ProviderName, SessionId, ToolArguments, ToolCallId,
     ToolDetails, ToolName,

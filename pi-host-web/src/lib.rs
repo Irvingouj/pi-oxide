@@ -9,7 +9,8 @@ use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
 
 use pi_core::{
-    estimate_tokens, estimate_tokens_for_text, fallback_strategy, Agent,
+    estimate_tokens, estimate_tokens_for_text, fallback_strategy, AgentRuntime, Transition,
+    UserInputDuringTools,
 };
 use tracing::info;
 use tracing_subscriber::layer::{Context, Layer};
@@ -23,7 +24,7 @@ mod dto;
 use dto::*;
 
 thread_local! {
-    static AGENT_SLOTS: RefCell<Vec<Option<Agent>>> = RefCell::new(Vec::new());
+    static AGENT_SLOTS: RefCell<Vec<Option<AgentRuntime>>> = RefCell::new(Vec::new());
     static TRACING_INIT: Cell<bool> = Cell::new(false);
     static LOG_LEVEL: Cell<tracing::Level> = Cell::new(tracing::Level::INFO);
 }
@@ -142,12 +143,15 @@ where
 enum HostError {
     #[error("agent not found: handle {0} is invalid")]
     BadHandle(u32),
+    #[error("wrong phase: expected {expected}, got {actual}")]
+    WrongPhase { expected: &'static str, actual: &'static str },
 }
 
 impl HostError {
     fn code(&self) -> &'static str {
         match self {
             HostError::BadHandle(_) => "bad_handle",
+            HostError::WrongPhase { .. } => "wrong_phase",
         }
     }
     fn to_dto(&self) -> ErrorDto {
@@ -181,7 +185,7 @@ fn err<R: for<'de> serde::Deserialize<'de>>(e: &HostError) -> R {
 // Agent handle table
 // ---------------------------------------------------------------------------
 
-fn take_agent(handle: u32) -> Result<Agent, HostError> {
+fn take_runtime(handle: u32) -> Result<AgentRuntime, HostError> {
     AGENT_SLOTS.with(|slots| {
         let mut slots = slots.borrow_mut();
         let idx = handle as usize;
@@ -192,22 +196,22 @@ fn take_agent(handle: u32) -> Result<Agent, HostError> {
     })
 }
 
-fn put_agent(agent: Agent) -> u32 {
+fn put_runtime(runtime: AgentRuntime) -> u32 {
     AGENT_SLOTS.with(|slots| {
         let mut slots = slots.borrow_mut();
         for (i, slot) in slots.iter_mut().enumerate() {
             if slot.is_none() {
-                *slot = Some(agent);
+                *slot = Some(runtime);
                 return i as u32;
             }
         }
         let handle = slots.len() as u32;
-        slots.push(Some(agent));
+        slots.push(Some(runtime));
         handle
     })
 }
 
-fn with_agent<T>(handle: u32, op: impl FnOnce(&mut Agent) -> T) -> Result<T, HostError> {
+fn with_runtime<T>(handle: u32, op: impl FnOnce(&mut AgentRuntime) -> T) -> Result<T, HostError> {
     AGENT_SLOTS.with(|slots| {
         let mut slots = slots.borrow_mut();
         let idx = handle as usize;
@@ -215,7 +219,7 @@ fn with_agent<T>(handle: u32, op: impl FnOnce(&mut Agent) -> T) -> Result<T, Hos
             return Err(HostError::BadHandle(handle));
         }
         match &mut slots[idx] {
-            Some(agent) => Ok(op(agent)),
+            Some(runtime) => Ok(op(runtime)),
             None => Err(HostError::BadHandle(handle)),
         }
     })
@@ -225,14 +229,25 @@ fn with_agent<T>(handle: u32, op: impl FnOnce(&mut Agent) -> T) -> Result<T, Hos
 // WASM exports — typed DTOs, never strings
 // ---------------------------------------------------------------------------
 
+fn runtime_phase_name(runtime: &AgentRuntime) -> &'static str {
+    match runtime {
+        AgentRuntime::Idle(_) => "Idle",
+        AgentRuntime::Streaming(_) => "Streaming",
+        AgentRuntime::WaitingTools(_) => "WaitingTools",
+        AgentRuntime::ReadyToContinue(_) => "ReadyToContinue",
+        AgentRuntime::Finished(_) => "Finished",
+        AgentRuntime::Aborted(_) => "Aborted",
+    }
+}
+
 #[wasm_bindgen(js_name = "createAgent")]
 pub fn create_agent(options: AgentOptions) -> CreateAgentResult {
     console_error_panic_hook::set_once();
     init_tracing();
     info!("createAgent called");
     let core_options: pi_core::AgentOptions = options.into();
-    let agent = Agent::new(core_options);
-    let handle = put_agent(agent);
+    let runtime = AgentRuntime::new(core_options);
+    let handle = put_runtime(runtime);
     info!(handle, "agent created");
     ok(CreateAgentOutput { handle })
 }
@@ -247,7 +262,32 @@ pub fn prompt(handle: u32, prompt: PromptRequest) -> StepResult {
         PromptRequest::Text { text } => pi_core::AgentMessage::user(text),
     };
 
-    let result = with_agent(handle, |agent| agent.start_turn(core_prompt));
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+
+    let result = match runtime {
+        AgentRuntime::Idle(idle) => {
+            let Transition { events, actions, state } = idle.start_turn(core_prompt);
+            put_runtime(state.into_runtime());
+            Ok((events, actions))
+        }
+        AgentRuntime::WaitingTools(mut waiting) => {
+            let (events, actions) = waiting.submit_user_message(core_prompt).into_events_actions();
+            put_runtime(waiting.into_runtime());
+            Ok((events, actions))
+        }
+        other => {
+            let actual = runtime_phase_name(&other);
+            put_runtime(other);
+            Err(HostError::WrongPhase {
+                expected: "Idle or WaitingTools",
+                actual,
+            })
+        }
+    };
+
     match result {
         Ok((events, actions)) => ok(StepOutput {
             events: events.into_iter().map(|e| e.into()).collect(),
@@ -263,7 +303,27 @@ pub fn feed_llm_chunk(handle: u32, chunk: LlmChunk) -> EventsResult {
     info!(handle, "feedLlmChunk called");
 
     let core_chunk: pi_core::LlmChunk = chunk.into();
-    let result = with_agent(handle, |agent| agent.feed_llm_chunk(core_chunk));
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+
+    let result = match runtime {
+        AgentRuntime::Streaming(mut streaming) => {
+            let events = streaming.feed_llm_chunk(core_chunk);
+            put_runtime(streaming.into_runtime());
+            Ok(events)
+        }
+        other => {
+            let actual = runtime_phase_name(&other);
+            put_runtime(other);
+            Err(HostError::WrongPhase {
+                expected: "Streaming",
+                actual,
+            })
+        }
+    };
+
     match result {
         Ok(events) => ok(EventsOutput {
             events: events.into_iter().map(|e| e.into()).collect(),
@@ -278,7 +338,27 @@ pub fn on_llm_done(handle: u32, result: LlmResult) -> StepResult {
     info!(handle, "onLlmDone called");
 
     let core_result: pi_core::LlmResult = result.into();
-    let result = with_agent(handle, |agent| agent.on_llm_done(core_result));
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+
+    let result = match runtime {
+        AgentRuntime::Streaming(streaming) => {
+            let (events, actions, new_runtime) = streaming.finish_llm(core_result).into_parts();
+            put_runtime(new_runtime);
+            Ok((events, actions))
+        }
+        other => {
+            let actual = runtime_phase_name(&other);
+            put_runtime(other);
+            Err(HostError::WrongPhase {
+                expected: "Streaming",
+                actual,
+            })
+        }
+    };
+
     match result {
         Ok((events, actions)) => ok(StepOutput {
             events: events.into_iter().map(|e| e.into()).collect(),
@@ -304,7 +384,27 @@ pub fn on_tool_done(handle: u32, tool_call_id: String, payload: ToolDonePayload)
         ToolDonePayload::BareSuccess(result) => Ok(result.into()),
     };
 
-    let result = with_agent(handle, |agent| agent.on_tool_done(id, core_result));
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+
+    let result = match runtime {
+        AgentRuntime::WaitingTools(waiting) => {
+            let (events, actions, new_runtime) = waiting.on_tool_done(id, core_result).into_parts();
+            put_runtime(new_runtime);
+            Ok((events, actions))
+        }
+        other => {
+            let actual = runtime_phase_name(&other);
+            put_runtime(other);
+            Err(HostError::WrongPhase {
+                expected: "WaitingTools",
+                actual,
+            })
+        }
+    };
+
     match result {
         Ok((events, actions)) => ok(StepOutput {
             events: events.into_iter().map(|e| e.into()).collect(),
@@ -324,7 +424,27 @@ pub fn on_tool_started(handle: u32, tool_call_id: String) -> EventsResult {
     );
 
     let id = pi_core::ToolCallId::new(&tool_call_id);
-    let result = with_agent(handle, |agent| agent.on_tool_started(id));
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+
+    let result = match runtime {
+        AgentRuntime::WaitingTools(mut waiting) => {
+            let events = waiting.on_tool_started(id);
+            put_runtime(waiting.into_runtime());
+            Ok(events)
+        }
+        other => {
+            let actual = runtime_phase_name(&other);
+            put_runtime(other);
+            Err(HostError::WrongPhase {
+                expected: "WaitingTools",
+                actual,
+            })
+        }
+    };
+
     match result {
         Ok(events) => ok(EventsOutput {
             events: events.into_iter().map(|e| e.into()).collect(),
@@ -338,7 +458,27 @@ pub fn on_tool_update(handle: u32, update: ToolExecutionUpdate) -> EventsResult 
     console_error_panic_hook::set_once();
 
     let core_update: pi_core::ToolExecutionUpdate = update.into();
-    let result = with_agent(handle, |agent| agent.on_tool_update(core_update));
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+
+    let result = match runtime {
+        AgentRuntime::WaitingTools(mut waiting) => {
+            let events = waiting.on_tool_update(core_update);
+            put_runtime(waiting.into_runtime());
+            Ok(events)
+        }
+        other => {
+            let actual = runtime_phase_name(&other);
+            put_runtime(other);
+            Err(HostError::WrongPhase {
+                expected: "WaitingTools",
+                actual,
+            })
+        }
+    };
+
     match result {
         Ok(events) => ok(EventsOutput {
             events: events.into_iter().map(|e| e.into()).collect(),
@@ -353,7 +493,27 @@ pub fn on_tool_cancelled(handle: u32, tool_call_id: String, reason: CancelReason
 
     let id = pi_core::ToolCallId::new(&tool_call_id);
     let core_reason: pi_core::CancelReason = reason.into();
-    let result = with_agent(handle, |agent| agent.on_tool_cancelled(id, core_reason));
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+
+    let result = match runtime {
+        AgentRuntime::WaitingTools(waiting) => {
+            let (events, actions, new_runtime) = waiting.cancel_tool(id, core_reason).into_parts();
+            put_runtime(new_runtime);
+            Ok((events, actions))
+        }
+        other => {
+            let actual = runtime_phase_name(&other);
+            put_runtime(other);
+            Err(HostError::WrongPhase {
+                expected: "WaitingTools",
+                actual,
+            })
+        }
+    };
+
     match result {
         Ok((events, actions)) => ok(StepOutput {
             events: events.into_iter().map(|e| e.into()).collect(),
@@ -368,7 +528,32 @@ pub fn steer(handle: u32, message: AgentMessage) -> EventsResult {
     console_error_panic_hook::set_once();
 
     let core_message: pi_core::AgentMessage = message.into();
-    let result = with_agent(handle, |agent| agent.steer(core_message));
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+
+    let result = match runtime {
+        AgentRuntime::Idle(mut idle) => {
+            let events = idle.steer(core_message);
+            put_runtime(idle.into_runtime());
+            Ok(events)
+        }
+        AgentRuntime::ReadyToContinue(mut ready) => {
+            let events = ready.steer(core_message);
+            put_runtime(ready.into_runtime());
+            Ok(events)
+        }
+        other => {
+            let actual = runtime_phase_name(&other);
+            put_runtime(other);
+            Err(HostError::WrongPhase {
+                expected: "Idle or ReadyToContinue",
+                actual,
+            })
+        }
+    };
+
     match result {
         Ok(events) => ok(EventsOutput {
             events: events.into_iter().map(|e| e.into()).collect(),
@@ -382,9 +567,37 @@ pub fn follow_up(handle: u32, message: AgentMessage) -> EmptyResult {
     console_error_panic_hook::set_once();
 
     let core_message: pi_core::AgentMessage = message.into();
-    let result = with_agent(handle, |agent| {
-        agent.follow_up(core_message);
-    });
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+
+    let result = match runtime {
+        AgentRuntime::Idle(mut idle) => {
+            idle.follow_up(core_message);
+            put_runtime(idle.into_runtime());
+            Ok(())
+        }
+        AgentRuntime::ReadyToContinue(mut ready) => {
+            ready.follow_up(core_message);
+            put_runtime(ready.into_runtime());
+            Ok(())
+        }
+        AgentRuntime::WaitingTools(mut waiting) => {
+            waiting.submit_user_message(core_message);
+            put_runtime(waiting.into_runtime());
+            Ok(())
+        }
+        other => {
+            let actual = runtime_phase_name(&other);
+            put_runtime(other);
+            Err(HostError::WrongPhase {
+                expected: "Idle, ReadyToContinue, or WaitingTools",
+                actual,
+            })
+        }
+    };
+
     match result {
         Ok(()) => ok(()),
         Err(e) => err(&e),
@@ -395,7 +608,7 @@ pub fn follow_up(handle: u32, message: AgentMessage) -> EmptyResult {
 pub fn state(handle: u32) -> StateResult {
     console_error_panic_hook::set_once();
 
-    let result = with_agent(handle, |agent| agent.state().clone());
+    let result = with_runtime(handle, |runtime| runtime.state().clone());
     match result {
         Ok(core_state) => ok(StateOutput {
             state: core_state.into(),
@@ -408,18 +621,20 @@ pub fn state(handle: u32) -> StateResult {
 pub fn reset(handle: u32) -> EmptyResult {
     console_error_panic_hook::set_once();
 
-    let result = with_agent(handle, |agent| agent.reset());
-    match result {
-        Ok(()) => ok(()),
-        Err(e) => err(&e),
-    }
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+    let runtime = runtime.reset();
+    put_runtime(runtime);
+    ok(())
 }
 
 #[wasm_bindgen(js_name = "destroyAgent")]
 pub fn destroy_agent(handle: u32) -> EmptyResult {
     console_error_panic_hook::set_once();
 
-    match take_agent(handle) {
+    match take_runtime(handle) {
         Ok(_) => ok(()),
         Err(e) => err(&e),
     }
@@ -440,13 +655,15 @@ pub fn project_context_export(input: ProjectionInput) -> ProjectionResult {
 pub fn get_session_state(handle: u32) -> SessionStateResult {
     console_error_panic_hook::set_once();
 
-    let result = with_agent(handle, |agent| agent.session_state().clone());
-    match result {
-        Ok(core_state) => ok(SessionStateOutput {
-            state: core_state.into(),
-        }),
-        Err(e) => err(&e),
-    }
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+    let core_state = runtime.session_state().clone();
+    put_runtime(runtime);
+    ok(SessionStateOutput {
+        state: core_state.into(),
+    })
 }
 
 #[wasm_bindgen(js_name = "setSessionState")]
@@ -454,24 +671,30 @@ pub fn set_session_state(handle: u32, state: SessionState) -> EmptyResult {
     console_error_panic_hook::set_once();
 
     let core_state: pi_core::SessionState = state.into();
-    let result = with_agent(handle, |agent| agent.set_session_state(core_state));
-    match result {
-        Ok(()) => ok(()),
-        Err(e) => err(&e),
-    }
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+    let mut runtime = runtime;
+    runtime.set_session_state(core_state);
+    put_runtime(runtime);
+    ok(())
 }
 
 #[wasm_bindgen(js_name = "getSessionBranch")]
 pub fn get_session_branch(handle: u32) -> SessionBranchResult {
     console_error_panic_hook::set_once();
 
-    let result = with_agent(handle, |agent| agent.session_branch());
-    match result {
-        Ok(entries) => ok(SessionBranchOutput {
-            entries: entries.into_iter().map(|e| e.into()).collect(),
-        }),
-        Err(e) => err(&e),
-    }
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+    let agent = runtime.into_agent();
+    let entries = agent.session_branch();
+    put_runtime(AgentRuntime::from_agent(agent));
+    ok(SessionBranchOutput {
+        entries: entries.into_iter().map(|e| e.into()).collect(),
+    })
 }
 
 #[wasm_bindgen(js_name = "moveTo")]
@@ -479,13 +702,14 @@ pub fn move_to(handle: u32, target_id: String, summary: Option<BranchSummary>) -
     console_error_panic_hook::set_once();
 
     let core_summary: Option<pi_core::BranchSummary> = summary.map(|s| s.into());
-    let result = with_agent(handle, |agent| agent.move_to(&target_id, core_summary));
-    match result {
-        Ok(id) => ok(MoveToOutput {
-            summary_entry_id: id,
-        }),
-        Err(e) => err(&e),
-    }
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+    let mut agent = runtime.into_agent();
+    let id = agent.move_to(&target_id, core_summary);
+    put_runtime(AgentRuntime::from_agent(agent));
+    ok(MoveToOutput { summary_entry_id: id })
 }
 
 #[wasm_bindgen(js_name = "appendSessionEntry")]
@@ -493,11 +717,14 @@ pub fn append_session_entry(handle: u32, entry: SessionEntry) -> EmptyResult {
     console_error_panic_hook::set_once();
 
     let core_entry: pi_core::SessionEntry = entry.into();
-    let result = with_agent(handle, |agent| agent.append_session_entry(core_entry));
-    match result {
-        Ok(()) => ok(()),
-        Err(e) => err(&e),
-    }
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+    let mut agent = runtime.into_agent();
+    agent.append_session_entry(core_entry);
+    put_runtime(AgentRuntime::from_agent(agent));
+    ok(())
 }
 
 #[wasm_bindgen(js_name = "estimateTokens")]

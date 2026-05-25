@@ -364,14 +364,6 @@ pub struct ToolExecutionUpdate {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct BackgroundJobRef {
-    pub job_id: String,
-    pub tool_call_id: ToolCallId,
-    pub command_label: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentAction {
     StreamLlm {
@@ -842,7 +834,6 @@ pub struct AgentOptions {
 pub enum Phase {
     Idle,
     Streaming,
-    ExecutingTools,
     WaitForInput,
 }
 
@@ -1019,7 +1010,6 @@ dto_conv!(ToolError, pi_core::ToolError);
 dto_conv!(ToolOutputStream, pi_core::ToolOutputStream);
 dto_conv!(CancelReason, pi_core::CancelReason);
 dto_conv!(ToolExecutionUpdate, pi_core::ToolExecutionUpdate);
-dto_conv!(BackgroundJobRef, pi_core::BackgroundJobRef);
 dto_conv!(AgentAction, pi_core::AgentAction);
 dto_conv!(AgentEvent, pi_core::AgentEvent);
 dto_conv!(ContentDelta, pi_core::ContentDelta);

@@ -216,12 +216,15 @@ export interface ToolCall {
     arguments: ToolArguments;
 }
 
+export type ToolRunMode = "immediate" | "deferred";
+
 export interface ToolDefinition {
     name: ToolName;
     label: string;
     description: string;
     parameters: JsonSchema;
     execution_mode?: ExecutionMode;
+    tool_run_mode?: ToolRunMode;
 }
 
 export interface ToolError {

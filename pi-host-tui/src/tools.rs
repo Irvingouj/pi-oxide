@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use pi_core::{
     ExecutionMode, JsonSchema, ToolArguments, ToolCall, ToolDefinition, ToolError, ToolName,
+    ToolRunMode,
 };
 
 // --- Definitions ---
@@ -35,6 +36,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
                 "required": ["path"]
             })),
             execution_mode: ExecutionMode::Parallel,
+            tool_run_mode: ToolRunMode::Immediate,
         },
         ToolDefinition {
             name: ToolName::new("write"),
@@ -55,6 +57,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
                 "required": ["path", "content"]
             })),
             execution_mode: ExecutionMode::Sequential,
+            tool_run_mode: ToolRunMode::Immediate,
         },
         ToolDefinition {
             name: ToolName::new("edit"),
@@ -81,6 +84,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
                 "required": ["path", "old_string", "new_string"]
             })),
             execution_mode: ExecutionMode::Sequential,
+            tool_run_mode: ToolRunMode::Immediate,
         },
     ]
 }

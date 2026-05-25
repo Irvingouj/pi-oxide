@@ -2,10 +2,8 @@
 members = [
     "pi-core",
     "pi-llm",
-    "pi-bindings",
     "pi-host-tui",
     "pi-host-web",
-    "pi-host-mobile",
 ]
 resolver = "3"
 
@@ -29,7 +27,6 @@ exclude = [
 [workspace.dependencies]
 pi-core = { version = "0.1.0", path = "pi-core" }
 pi-llm = { version = "0.1.0", path = "pi-llm" }
-pi-bindings = { path = "pi-bindings" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

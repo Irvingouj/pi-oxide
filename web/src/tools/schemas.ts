@@ -19,6 +19,7 @@ export interface ToolDefinition {
   description: string;
   parameters: object;
   execution_mode: "parallel" | "sequential";
+  tool_run_mode?: "immediate" | "deferred";
 }
 
 // ========================================================================

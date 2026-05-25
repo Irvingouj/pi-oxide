@@ -115,7 +115,7 @@ impl Agent {
     }
 
     /// Start processing a new prompt.
-    pub fn start_turn(&mut self, prompt: AgentMessage) -> (Vec<AgentEvent>, Vec<AgentAction>) {
+    pub(crate) fn start_turn(&mut self, prompt: AgentMessage) -> (Vec<AgentEvent>, Vec<AgentAction>) {
         if self.phase == Phase::Streaming {
             warn!(phase = ?self.phase, "start_turn requested while LLM is streaming");
             return (
@@ -153,7 +153,7 @@ impl Agent {
     }
 
     /// Continue from the current transcript without adding a new message.
-    pub fn continue_turn(&mut self) -> (Vec<AgentEvent>, Vec<AgentAction>) {
+    pub(crate) fn continue_turn(&mut self) -> (Vec<AgentEvent>, Vec<AgentAction>) {
         if self.phase == Phase::Streaming {
             warn!(phase = ?self.phase, "continue_turn requested while LLM is streaming");
             return (vec![], vec![]);
@@ -193,7 +193,7 @@ impl Agent {
     }
 
     /// Feed a streaming chunk from the LLM.
-    pub fn feed_llm_chunk(&mut self, chunk: LlmChunk) -> Vec<AgentEvent> {
+    pub(crate) fn feed_llm_chunk(&mut self, chunk: LlmChunk) -> Vec<AgentEvent> {
         if self.phase != Phase::Streaming {
             trace!(phase = ?self.phase, "ignored llm chunk outside streaming phase");
             return vec![];
@@ -260,7 +260,7 @@ impl Agent {
     }
 
     /// Called by the host when the LLM stream ends.
-    pub fn on_llm_done(&mut self, result: LlmResult) -> (Vec<AgentEvent>, Vec<AgentAction>) {
+    pub(crate) fn on_llm_done(&mut self, result: LlmResult) -> (Vec<AgentEvent>, Vec<AgentAction>) {
         if self.phase != Phase::Streaming {
             warn!(phase = ?self.phase, "on_llm_done requested outside streaming phase");
             return (vec![], vec![]);
@@ -371,7 +371,7 @@ impl Agent {
     }
 
     /// Called by the host when a tool finishes executing.
-    pub fn on_tool_done(
+    pub(crate) fn on_tool_done(
         &mut self,
         tool_call_id: ToolCallId,
         result: Result<ToolResult, ToolError>,
@@ -480,13 +480,14 @@ impl Agent {
             );
         }
 
+        self.phase = Phase::WaitForInput;
         (events, vec![])
     }
 
     /// Called by the host when a tool starts executing.
     /// Emits a ToolExecutionUpdate event for trace/observability.
     /// Does not change the core state machine phase.
-    pub fn on_tool_started(&mut self, tool_call_id: ToolCallId) -> Vec<AgentEvent> {
+    pub(crate) fn on_tool_started(&mut self, tool_call_id: ToolCallId) -> Vec<AgentEvent> {
         if !self.pending_tool_calls.contains_key(&tool_call_id) {
             trace!(
                 tool_call_id = tool_call_id.as_str(),
@@ -510,7 +511,7 @@ impl Agent {
     /// Called by the host with a streaming chunk from a running tool.
     /// Emits a ToolExecutionUpdate event for trace/observability only.
     /// Does NOT add to the canonical model transcript.
-    pub fn on_tool_update(&mut self, update: ToolExecutionUpdate) -> Vec<AgentEvent> {
+    pub(crate) fn on_tool_update(&mut self, update: ToolExecutionUpdate) -> Vec<AgentEvent> {
         if !self.pending_tool_calls.contains_key(&update.tool_call_id) {
             return vec![];
         }
@@ -532,7 +533,7 @@ impl Agent {
 
     /// Called by the host when a tool is cancelled.
     /// Treats cancellation like a tool error result so the state machine can advance.
-    pub fn on_tool_cancelled(
+    pub(crate) fn on_tool_cancelled(
         &mut self,
         tool_call_id: ToolCallId,
         reason: CancelReason,
@@ -632,7 +633,7 @@ impl Agent {
     }
 
     /// Inject a steering message mid-run.
-    pub fn steer(&mut self, message: AgentMessage) -> Vec<AgentEvent> {
+    pub(crate) fn steer(&mut self, message: AgentMessage) -> Vec<AgentEvent> {
         self.steering_queue.push(message);
         debug!(
             queued = self.steering_queue.len(),
@@ -645,7 +646,7 @@ impl Agent {
     }
 
     /// Queue a follow-up message for after the run would otherwise stop.
-    pub fn follow_up(&mut self, message: AgentMessage) {
+    pub(crate) fn follow_up(&mut self, message: AgentMessage) {
         self.follow_up_queue.push(message);
         debug!(
             queued = self.follow_up_queue.len(),
@@ -654,7 +655,7 @@ impl Agent {
     }
 
     /// Abort the current run.
-    pub fn abort(&mut self) -> Vec<AgentEvent> {
+    pub(crate) fn abort(&mut self) -> Vec<AgentEvent> {
         warn!(phase = ?self.phase, "agent aborted");
         self.steering_queue.clear();
         self.follow_up_queue.clear();
@@ -694,7 +695,7 @@ impl Agent {
     }
 
     /// Replace the in-memory session tree.
-    pub fn set_session_state(&mut self, state: SessionState) {
+    pub(crate) fn set_session_state(&mut self, state: SessionState) {
         self.session_state = state;
     }
 
@@ -735,7 +736,7 @@ impl Agent {
     }
 
     /// Reset state (clear messages, queues, runtime state).
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         debug!("agent state reset");
         self.state.messages.clear();
         self.state.is_streaming = false;
@@ -812,6 +813,12 @@ impl Agent {
         }];
 
         (events, actions)
+    }
+
+    /// Internal accessor for the typestate layer.
+    /// Returns the first pending tool call without removing it.
+    pub(crate) fn peek_pending_tool_call(&self) -> Option<&ToolCall> {
+        self.pending_tool_calls.values().next()
     }
 }
 

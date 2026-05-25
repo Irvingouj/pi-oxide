@@ -5,6 +5,7 @@ mod extension;
 mod llm;
 mod markdown;
 mod session;
+mod smoke_test;
 mod tools;
 
 #[derive(Parser)]

@@ -15,6 +15,8 @@ pub struct ToolDefinition {
     pub parameters: JsonSchema,
     #[serde(rename = "execution_mode", default)]
     pub execution_mode: ExecutionMode,
+    #[serde(rename = "tool_run_mode", default)]
+    pub tool_run_mode: ToolRunMode,
 }
 
 /// Whether a tool can run concurrently with other tools.
@@ -33,6 +35,17 @@ pub enum ToolExecutionMode {
     #[default]
     Parallel,
     Sequential,
+}
+
+/// Whether a tool must execute synchronously (immediate) or may be deferred (async).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolRunMode {
+    /// Tool must complete synchronously; host cannot yield during execution.
+    #[default]
+    Immediate,
+    /// Tool may run in the background; host later reports done/cancelled.
+    Deferred,
 }
 
 /// Result of a tool execution, returned by the host via `on_tool_done`.

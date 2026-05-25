@@ -12,8 +12,9 @@ use ratatui::widgets::{
 use ratatui::Frame;
 
 use pi_core::{
-    project, Agent, AgentAction, AgentMessage, Content, ContextProjectionBudget,
+    project, AgentAction, AgentMessage, AgentRuntime, Content, ContextProjectionBudget,
     ContextProjectionState, LlmChunk, LlmContext, LlmResult, Model, ProjectionInput, ToolCall,
+    ToolTransition, UserInputDuringTools, WaitMode,
 };
 
 use crate::extension::{BashExtension, BuiltinExtension, Extension, ExtensionContext, ToolEvent};
@@ -63,7 +64,7 @@ enum ChatEntry {
 // ---------------------------------------------------------------------------
 
 pub struct App {
-    agent: Agent,
+    agent: Option<AgentRuntime>,
     entries: Vec<ChatEntry>,
     input: String,
     cursor_pos: usize,
@@ -107,6 +108,14 @@ struct RunningTask {
 }
 
 impl App {
+    fn agent(&self) -> &AgentRuntime {
+        self.agent.as_ref().unwrap()
+    }
+
+    fn agent_mut(&mut self) -> &mut AgentRuntime {
+        self.agent.as_mut().unwrap()
+    }
+
     pub fn new(
         system_prompt: &str,
         model_id: &str,
@@ -137,7 +146,7 @@ impl App {
         for ext in &extensions {
             tool_defs.extend(ext.tools());
         }
-        let agent = Agent::new(pi_core::AgentOptions {
+        let agent = AgentRuntime::new(pi_core::AgentOptions {
             system_prompt: system_prompt.to_string(),
             model,
             tools: tool_defs,
@@ -167,7 +176,7 @@ impl App {
         }
 
         Self {
-            agent,
+            agent: Some(agent),
             entries: init_entries,
             input: String::new(),
             cursor_pos: 0,
@@ -416,7 +425,43 @@ impl App {
 
         let _ = terminal.draw(|f| self.render(f));
 
-        let (_events, actions) = self.agent.start_turn(AgentMessage::user(text));
+        let runtime = self.agent.take().unwrap();
+        let (_events, actions, new_runtime) = match runtime {
+            AgentRuntime::Idle(idle) => {
+                let t = idle.start_turn(AgentMessage::user(text));
+                (t.events, t.actions, t.state.into_runtime())
+            }
+            AgentRuntime::ReadyToContinue(ready) => {
+                let t1 = ready.wait_for_input();
+                let t2 = t1.state.start_turn(AgentMessage::user(text));
+                (t2.events, t2.actions, t2.state.into_runtime())
+            }
+            AgentRuntime::Finished(finished) => {
+                let t1 = finished.restart();
+                let t2 = t1.state.start_turn(AgentMessage::user(text));
+                (t2.events, t2.actions, t2.state.into_runtime())
+            }
+            AgentRuntime::Aborted(aborted) => {
+                let t1 = aborted.restart();
+                let t2 = t1.state.start_turn(AgentMessage::user(text));
+                (t2.events, t2.actions, t2.state.into_runtime())
+            }
+            AgentRuntime::WaitingTools(mut waiting) => {
+                let disposition = waiting.submit_user_message(AgentMessage::user(text));
+                let (events, actions) = disposition.into_events_actions();
+                (events, actions, waiting.into_runtime())
+            }
+            other => {
+                (
+                    vec![],
+                    vec![AgentAction::WaitForInput {
+                        mode: WaitMode::Any,
+                    }],
+                    other,
+                )
+            }
+        };
+        self.agent = Some(new_runtime);
         self.handle_actions(terminal, actions);
         self.save_session();
     }
@@ -427,7 +472,8 @@ impl App {
 
         match cmd {
             "/clear" => {
-                self.agent.reset();
+                let agent = self.agent.take().unwrap().reset();
+                self.agent = Some(agent);
                 self.entries.clear();
                 self.entries.push(ChatEntry::System("Chat cleared.".into()));
             }
@@ -443,8 +489,8 @@ impl App {
                 if parts.len() >= 2 {
                     let model_id = parts[1];
                     self.llm_client.set_model(model_id);
-                    self.agent.state_mut().model.id = pi_core::ModelId::new(model_id);
-                    self.agent.state_mut().model.name = pi_core::ModelName::new(model_id);
+                    self.agent_mut().state_mut().model.id = pi_core::ModelId::new(model_id);
+                    self.agent_mut().state_mut().model.name = pi_core::ModelName::new(model_id);
                     self.entries.push(ChatEntry::System(format!(
                         "Model switched to {model_id}"
                     )));
@@ -469,8 +515,9 @@ impl App {
                     "load" => {
                         if let Some(id) = parts.get(2) {
                             if let Some(state) = self.session_backend.load(id) {
-                                self.agent.reset();
-                                self.agent.set_session_state(state);
+                                let agent = self.agent.take().unwrap().reset();
+                                self.agent = Some(agent);
+                                self.agent_mut().set_session_state(state);
                                 self.session_id = Some(id.to_string());
                                 self.entries.clear();
                                 self.entries.push(ChatEntry::System(format!(
@@ -488,7 +535,8 @@ impl App {
                         }
                     }
                     "new" => {
-                        self.agent.reset();
+                        let agent = self.agent.take().unwrap().reset();
+                        self.agent = Some(agent);
                         self.session_id = None;
                         self.entries.clear();
                         self.entries
@@ -518,10 +566,10 @@ impl App {
                 }
             }
             "/undo" => {
-                let msgs = &self.agent.state().messages;
+                let msgs = &self.agent_mut().state().messages;
                 if let Some(last_user_idx) = msgs.iter().rposition(|m| matches!(m, pi_core::AgentMessage::User(_))) {
                     let new_len = last_user_idx;
-                    self.agent.state_mut().messages.truncate(new_len);
+                    self.agent_mut().state_mut().messages.truncate(new_len);
                     // Also truncate entries to remove the last user+assistant+tools round
                     if let Some(last_user_entry) =
                         self.entries.iter().rposition(|e| matches!(e, ChatEntry::User(_)))
@@ -551,7 +599,15 @@ impl App {
     ) {
         for action in actions {
             if self.cancelled {
-                self.agent.abort();
+                let runtime = self.agent.take().unwrap();
+                let (_events, new_runtime) = match runtime {
+                    AgentRuntime::Streaming(streaming) => {
+                        let t = streaming.abort();
+                        (t.events, t.state.into_runtime())
+                    }
+                    other => (vec![], other),
+                };
+                self.agent = Some(new_runtime);
                 self.running = false;
                 self.entries.push(ChatEntry::System("Cancelled.".into()));
                 let _ = terminal.draw(|f| self.render(f));
@@ -621,7 +677,15 @@ impl App {
                         }
                     }
                     if self.cancelled {
-                        self.agent.abort();
+                        let runtime = self.agent.take().unwrap();
+                        let (_events, new_runtime) = match runtime {
+                            AgentRuntime::Streaming(streaming) => {
+                                let t = streaming.abort();
+                                (t.events, t.state.into_runtime())
+                            }
+                            other => (vec![], other),
+                        };
+                        self.agent = Some(new_runtime);
                         self.running = false;
                         self.entries.push(ChatEntry::System("Cancelled.".into()));
                         let _ = terminal.draw(|f| self.render(f));
@@ -707,7 +771,15 @@ impl App {
                 };
 
                 let result = LlmResult::Ok(assistant_msg);
-                let (_events, actions) = self.agent.on_llm_done(result);
+                let runtime = self.agent.take().unwrap();
+                let (_events, actions, new_runtime) = match runtime {
+                    AgentRuntime::Streaming(streaming) => {
+                        let transition = streaming.finish_llm(result);
+                        transition.into_parts()
+                    }
+                    other => (vec![], vec![], other),
+                };
+                self.agent = Some(new_runtime);
                 self.handle_actions(terminal, actions);
             }
             Err(e) => {
@@ -719,7 +791,15 @@ impl App {
                     },
                     aborted: false,
                 };
-                let (_events, actions) = self.agent.on_llm_done(err_result);
+                let runtime = self.agent.take().unwrap();
+                let (_events, actions, new_runtime) = match runtime {
+                    AgentRuntime::Streaming(streaming) => {
+                        let transition = streaming.finish_llm(err_result);
+                        transition.into_parts()
+                    }
+                    other => (vec![], vec![], other),
+                };
+                self.agent = Some(new_runtime);
                 self.handle_actions(terminal, actions);
             }
         }
@@ -776,9 +856,22 @@ impl App {
             }
         }
 
+        // If async tools are running, let the user keep typing
+        if !self.running_tasks.is_empty() {
+            self.running = false;
+        }
+
         // If all tools were sync and are now done, auto-continue
-        if self.agent.state().pending_tool_calls.is_empty() && self.running_tasks.is_empty() {
-            let (_events, actions) = self.agent.continue_turn();
+        if self.agent().state().pending_tool_calls.is_empty() && self.running_tasks.is_empty() {
+            let runtime = self.agent.take().unwrap();
+            let (_events, actions, new_runtime) = match runtime {
+                AgentRuntime::ReadyToContinue(ready) => {
+                    let t = ready.continue_turn();
+                    (t.events, t.actions, t.state.into_runtime())
+                }
+                other => (vec![], vec![], other),
+            };
+            self.agent = Some(new_runtime);
             self.handle_actions(terminal, actions);
         }
     }
@@ -821,8 +914,15 @@ impl App {
                 });
                 let _ = terminal.draw(|f| self.render(f));
 
-                let (_events, actions) =
-                    self.agent.on_tool_done(tool_call_id, Ok(tool_result));
+                let runtime = self.agent.take().unwrap();
+                let (_events, actions, new_runtime) = match runtime {
+                    AgentRuntime::WaitingTools(waiting) => {
+                        let transition = waiting.on_tool_done(tool_call_id, Ok(tool_result));
+                        transition.into_parts()
+                    }
+                    other => (vec![], vec![], other),
+                };
+                self.agent = Some(new_runtime);
                 self.handle_actions(terminal, actions);
             }
             Err(err) => {
@@ -833,7 +933,15 @@ impl App {
                 });
                 let _ = terminal.draw(|f| self.render(f));
 
-                let (_events, actions) = self.agent.on_tool_done(tool_call_id, Err(err));
+                let runtime = self.agent.take().unwrap();
+                let (_events, actions, new_runtime) = match runtime {
+                    AgentRuntime::WaitingTools(waiting) => {
+                        let transition = waiting.on_tool_done(tool_call_id, Err(err));
+                        transition.into_parts()
+                    }
+                    other => (vec![], vec![], other),
+                };
+                self.agent = Some(new_runtime);
                 self.handle_actions(terminal, actions);
             }
         }
@@ -848,7 +956,7 @@ impl App {
             while let Some(event) = task.stream.try_recv() {
                 match event {
                     ToolEvent::Update(update) => {
-                        let _events = self.agent.on_tool_update(update);
+                        let _events = self.agent_mut().on_tool_update(update);
                     }
                     ToolEvent::Done(result) => {
                         just_completed.push((task.tool_call_id.clone(), result));
@@ -863,9 +971,9 @@ impl App {
         }
         self.running_tasks = remaining;
 
-        // Process completed tasks outside the borrow of running_tasks
-        for (tool_call_id, result) in just_completed {
-            let output_text = match &result {
+        // Process completed tasks — UI first, then typestate transitions
+        for (tool_call_id, result) in &just_completed {
+            let output_text = match result {
                 Ok(r) => r
                     .content
                     .iter()
@@ -886,16 +994,33 @@ impl App {
                 is_error: result.is_err(),
             });
             let _ = terminal.draw(|f| self.render(f));
+        }
 
-            let all_tools_done_before = self.agent.state().pending_tool_calls.is_empty();
-            let (_events, actions) = self.agent.on_tool_done(tool_call_id.clone(), result);
-            let should_continue = all_tools_done_before && actions.is_empty();
-            self.handle_actions(terminal, actions);
+        // Apply typestate transitions for all completed async tools
+        let mut runtime = self.agent.take().unwrap();
+        for (tool_call_id, result) in just_completed {
+            runtime = match runtime {
+                AgentRuntime::WaitingTools(waiting) => {
+                    let transition = waiting.on_tool_done(tool_call_id, result);
+                    match transition {
+                        ToolTransition::WaitingTools(t) => t.state.into_runtime(),
+                        ToolTransition::Ready(t) => t.state.into_runtime(),
+                        ToolTransition::Finished(t) => t.state.into_runtime(),
+                    }
+                }
+                other => other,
+            };
+        }
 
-            // Auto-continue if all pending tools are done and not terminating
-            if should_continue {
-                let (_events, continue_actions) = self.agent.continue_turn();
-                self.handle_actions(terminal, continue_actions);
+        // Auto-continue if all pending tools are done and phase is Ready
+        match runtime {
+            AgentRuntime::ReadyToContinue(ready) => {
+                let transition = ready.continue_turn();
+                self.agent = Some(transition.state.into_runtime());
+                self.handle_actions(terminal, transition.actions);
+            }
+            other => {
+                self.agent = Some(other);
             }
         }
     }
@@ -906,7 +1031,7 @@ impl App {
 
     fn save_session(&self) {
         if let Some(ref id) = self.session_id {
-            let state = self.agent.session_state();
+            let state = self.agent().session_state();
             if let Err(e) = self.session_backend.save(id, state) {
                 tracing::warn!(session_id = id.as_str(), error = ?e, "failed to save session");
             }

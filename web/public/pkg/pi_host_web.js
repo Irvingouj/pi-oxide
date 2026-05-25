@@ -1,6 +1,16 @@
 /* @ts-self-types="./pi_host_web.d.ts" */
 
 /**
+ * @param {number} handle
+ * @param {SessionEntry} entry
+ * @returns {EmptyResult}
+ */
+export function appendSessionEntry(handle, entry) {
+    const ret = wasm.appendSessionEntry(handle, entry);
+    return ret;
+}
+
+/**
  * @param {AgentOptions} options
  * @returns {CreateAgentResult}
  */
@@ -19,13 +29,34 @@ export function destroyAgent(handle) {
 }
 
 /**
- * @returns {string[]}
+ * @param {EstimateTokensInput} input
+ * @returns {EstimateTokensResult}
  */
-export function drainTraceLog() {
-    const ret = wasm.drainTraceLog();
-    var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-    return v1;
+export function estimateTokens(input) {
+    const ret = wasm.estimateTokens(input);
+    return ret;
+}
+
+/**
+ * @param {string} text
+ * @returns {EstimateTokensResult}
+ */
+export function estimateTokensForText(text) {
+    const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.estimateTokensForText(ptr0, len0);
+    return ret;
+}
+
+/**
+ * @param {string} tool_name
+ * @returns {ContextStrategy}
+ */
+export function fallbackStrategy(tool_name) {
+    const ptr0 = passStringToWasm0(tool_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.fallbackStrategy(ptr0, len0);
+    return ret;
 }
 
 /**
@@ -45,6 +76,37 @@ export function feedLlmChunk(handle, chunk) {
  */
 export function followUp(handle, message) {
     const ret = wasm.followUp(handle, message);
+    return ret;
+}
+
+/**
+ * @param {number} handle
+ * @returns {SessionBranchResult}
+ */
+export function getSessionBranch(handle) {
+    const ret = wasm.getSessionBranch(handle);
+    return ret;
+}
+
+/**
+ * @param {number} handle
+ * @returns {SessionStateResult}
+ */
+export function getSessionState(handle) {
+    const ret = wasm.getSessionState(handle);
+    return ret;
+}
+
+/**
+ * @param {number} handle
+ * @param {string} target_id
+ * @param {BranchSummary | null} [summary]
+ * @returns {MoveToResult}
+ */
+export function moveTo(handle, target_id, summary) {
+    const ptr0 = passStringToWasm0(target_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.moveTo(handle, ptr0, len0, isLikeNone(summary) ? 0 : addToExternrefTable0(summary));
     return ret;
 }
 
@@ -135,6 +197,25 @@ export function reset(handle) {
 }
 
 /**
+ * @param {string} level
+ */
+export function setLogLevel(level) {
+    const ptr0 = passStringToWasm0(level, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    wasm.setLogLevel(ptr0, len0);
+}
+
+/**
+ * @param {number} handle
+ * @param {SessionState} state
+ * @returns {EmptyResult}
+ */
+export function setSessionState(handle, state) {
+    const ret = wasm.setSessionState(handle, state);
+    return ret;
+}
+
+/**
  * @param {number} handle
  * @returns {StateResult}
  */
@@ -181,6 +262,47 @@ function __wbg_get_imports() {
                 wasm.__wbindgen_free(deferred0_0, deferred0_1, 1);
             }
         },
+        __wbg_log_0c201ade58bb55e1: function(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+            let deferred0_0;
+            let deferred0_1;
+            try {
+                deferred0_0 = arg0;
+                deferred0_1 = arg1;
+                console.log(getStringFromWasm0(arg0, arg1), getStringFromWasm0(arg2, arg3), getStringFromWasm0(arg4, arg5), getStringFromWasm0(arg6, arg7));
+            } finally {
+                wasm.__wbindgen_free(deferred0_0, deferred0_1, 1);
+            }
+        },
+        __wbg_log_ce2c4456b290c5e7: function(arg0, arg1) {
+            let deferred0_0;
+            let deferred0_1;
+            try {
+                deferred0_0 = arg0;
+                deferred0_1 = arg1;
+                console.log(getStringFromWasm0(arg0, arg1));
+            } finally {
+                wasm.__wbindgen_free(deferred0_0, deferred0_1, 1);
+            }
+        },
+        __wbg_mark_b4d943f3bc2d2404: function(arg0, arg1) {
+            performance.mark(getStringFromWasm0(arg0, arg1));
+        },
+        __wbg_measure_84362959e621a2c1: function() { return handleError(function (arg0, arg1, arg2, arg3) {
+            let deferred0_0;
+            let deferred0_1;
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                deferred0_0 = arg0;
+                deferred0_1 = arg1;
+                deferred1_0 = arg2;
+                deferred1_1 = arg3;
+                performance.measure(getStringFromWasm0(arg0, arg1), getStringFromWasm0(arg2, arg3));
+            } finally {
+                wasm.__wbindgen_free(deferred0_0, deferred0_1, 1);
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }, arguments); },
         __wbg_new_227d7c05414eb861: function() {
             const ret = new Error();
             return ret;
@@ -200,11 +322,6 @@ function __wbg_get_imports() {
             const ret = JSON.stringify(arg0);
             return ret;
         }, arguments); },
-        __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Ref(String) -> Externref`.
-            const ret = getStringFromWasm0(arg0, arg1);
-            return ret;
-        },
         __wbindgen_init_externref_table: function() {
             const table = wasm.__wbindgen_externrefs;
             const offset = table.grow(4);
@@ -225,17 +342,6 @@ function addToExternrefTable0(obj) {
     const idx = wasm.__externref_table_alloc();
     wasm.__wbindgen_externrefs.set(idx, obj);
     return idx;
-}
-
-function getArrayJsValueFromWasm0(ptr, len) {
-    ptr = ptr >>> 0;
-    const mem = getDataViewMemory0();
-    const result = [];
-    for (let i = ptr; i < ptr + 4 * len; i += 4) {
-        result.push(wasm.__wbindgen_externrefs.get(mem.getUint32(i, true)));
-    }
-    wasm.__externref_drop_slice(ptr, len);
-    return result;
 }
 
 let cachedDataViewMemory0 = null;

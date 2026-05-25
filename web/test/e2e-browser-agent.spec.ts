@@ -8,7 +8,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { createServer } from "http";
-import { readFileSync } from "fs";
+import { readFileSync, copyFileSync, mkdirSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { execSync } from "child_process";
 import { fileURLToPath } from "url";
@@ -32,6 +32,39 @@ test.beforeAll(async () => {
   // Build web-target WASM into public/pkg/
   const projectRoot = join(__dirname, "../../");
   execSync(`cd "${projectRoot}" && wasm-bindgen --target web --out-dir web/public/pkg target/wasm32-unknown-unknown/release/pi_host_web.wasm`, { stdio: "pipe" });
+
+  // Copy SDK into public/ so Worker tests can import it via relative URL
+  const sdkSourceDir = join(__dirname, "../node_modules/@pi-oxide/pi-host-web");
+  const sdkDestDir = join(PUBLIC_DIR, "test-sdk");
+  mkdirSync(join(sdkDestDir, "sdk"), { recursive: true });
+  copyFileSync(join(sdkSourceDir, "pi_host_web.js"), join(sdkDestDir, "pi_host_web.js"));
+  copyFileSync(join(sdkSourceDir, "pi_host_web_bg.wasm"), join(sdkDestDir, "pi_host_web_bg.wasm"));
+  copyFileSync(join(sdkSourceDir, "sdk/index.js"), join(sdkDestDir, "sdk/index.js"));
+
+  // Worker script that imports the SDK from a real URL (not Blob) so import.meta.url resolves correctly
+  writeFileSync(
+    join(sdkDestDir, "worker.js"),
+    `import { Agent } from "./sdk/index.js";
+
+async function main() {
+  try {
+    const agent = await Agent.create({
+      system_prompt: "test",
+      model: {
+        id: "test", name: "Test", provider: "test", api: "test",
+        reasoning: false, context_window: 4096, max_tokens: 1024,
+        capabilities: { vision: false, json_mode: true, function_calling: true, streaming: true },
+        cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+      },
+      tools: [],
+    });
+    self.postMessage({ success: true });
+  } catch (e) {
+    self.postMessage({ success: false, error: String(e) });
+  }
+}
+main();\n`
+  );
 
   server = createServer((req, res) => {
     // Strip query string
@@ -239,4 +272,21 @@ test.describe("Browser Agent E2E", () => {
     expect(roles).toContain("user");
     expect(roles).toContain("assistant");
   });
+
 });
+
+test("SDK initializes in a Web Worker without hitting node:fs", async ({ page }) => {
+  await page.goto(baseUrl);
+
+  const result = await page.evaluate(async (workerUrl) => {
+    const worker = new Worker(workerUrl, { type: "module" });
+
+    return new Promise<{ success: boolean; error?: string }>((resolve) => {
+      worker.onmessage = (e) => resolve(e.data);
+      worker.onerror = (e) => resolve({ success: false, error: e.message });
+    });
+  }, `${baseUrl}/test-sdk/worker.js`);
+
+  expect(result.success).toBe(true);
+});
+

@@ -35,14 +35,14 @@ let initialized = false;
 /** Ensure the WASM module is loaded. Safe to call multiple times. */
 export async function ensureInit() {
   if (initialized) return;
-  if (typeof window !== "undefined") {
-    await init();
-  } else {
+  if (typeof process !== "undefined" && process.versions?.node) {
     const { readFileSync } = await import("node:fs");
     const bytes = readFileSync(
       new URL("../pi_host_web_bg.wasm", import.meta.url)
     );
     initSync({ module: bytes });
+  } else {
+    await init();
   }
   initialized = true;
 }

@@ -16,6 +16,7 @@ export interface AgentOptions {
     tool_execution_mode?: ToolExecutionMode;
     session_id?: SessionId;
     messages?: AgentMessage[];
+    session_state?: SessionState | null;
 }
 
 export interface AgentState {
@@ -46,10 +47,9 @@ export interface AssistantMessage {
     usage: TokenUsage;
 }
 
-export interface BackgroundJobRef {
-    job_id: string;
-    tool_call_id: ToolCallId;
-    command_label: string;
+export interface BranchSummary {
+    summary: string;
+    details?: JsonSchema;
 }
 
 export interface ContextProjectionBudget {
@@ -102,6 +102,20 @@ export interface EmptyResult {
 export interface ErrorDto {
     code: string;
     message: string;
+}
+
+export interface EstimateTokensInput {
+    messages: AgentMessage[];
+}
+
+export interface EstimateTokensOutput {
+    tokens: number;
+}
+
+export interface EstimateTokensResult {
+    ok: boolean;
+    data?: EstimateTokensOutput;
+    error?: ErrorDto;
 }
 
 export interface EventsOutput {
@@ -158,6 +172,16 @@ export interface ModelCost {
     cache_write: number;
 }
 
+export interface MoveToOutput {
+    summary_entry_id: string | null;
+}
+
+export interface MoveToResult {
+    ok: boolean;
+    data?: MoveToOutput;
+    error?: ErrorDto;
+}
+
 export interface ProjectionInput {
     system_prompt: string;
     messages: AgentMessage[];
@@ -174,6 +198,39 @@ export interface ProjectionOutput {
 export interface ProjectionResult {
     ok: boolean;
     data?: ProjectionOutput;
+    error?: ErrorDto;
+}
+
+export interface SessionBranchOutput {
+    entries: SessionEntry[];
+}
+
+export interface SessionBranchResult {
+    ok: boolean;
+    data?: SessionBranchOutput;
+    error?: ErrorDto;
+}
+
+export interface SessionEntry {
+    id: string;
+    parent_id?: string;
+    kind: EntryKind;
+    timestamp: number;
+}
+
+export interface SessionState {
+    entries: SessionEntry[];
+    leaf_id: string;
+    name?: string;
+}
+
+export interface SessionStateOutput {
+    state: SessionState;
+}
+
+export interface SessionStateResult {
+    ok: boolean;
+    data?: SessionStateOutput;
     error?: ErrorDto;
 }
 
@@ -216,15 +273,12 @@ export interface ToolCall {
     arguments: ToolArguments;
 }
 
-export type ToolRunMode = "immediate" | "deferred";
-
 export interface ToolDefinition {
     name: ToolName;
     label: string;
     description: string;
     parameters: JsonSchema;
     execution_mode?: ExecutionMode;
-    tool_run_mode?: ToolRunMode;
 }
 
 export interface ToolError {
@@ -288,6 +342,8 @@ export type ContentKind = "file_read" | "command_output" | "diff" | "search_resu
 
 export type ContextStrategy = { type: "keep_full" } | { type: "head"; max_chars: number } | { type: "tail"; max_chars: number } | { type: "head_tail"; head_chars: number; tail_chars: number } | { type: "drop_if_old" } | { type: "microcompacted" };
 
+export type EntryKind = ({ type: "message" } & {} & AgentMessage) | { type: "compaction"; summary: string; first_kept_entry_id: string; tokens_before: number; details?: JsonSchema } | { type: "branch_summary"; summary: string; details?: JsonSchema } | { type: "model_change"; provider: string; model_id: string } | ({ type: "thinking_level_change" } & ThinkingLevel) | { type: "custom"; custom_type: string; data?: JsonSchema };
+
 export type ExecutionMode = "parallel" | "sequential";
 
 export type JsonSchema = Value;
@@ -302,7 +358,7 @@ export type ModelName = string;
 
 export type ModelProvider = "open_ai" | "anthropic" | "google" | "ollama" | "custom";
 
-export type Phase = "idle" | "streaming" | "executing_tools" | "wait_for_input";
+export type Phase = "idle" | "streaming" | "wait_for_input";
 
 export type PromptRequest = AgentMessage | { text: string };
 
@@ -333,15 +389,27 @@ export type ToolOutputStream = "stdout" | "stderr" | "status";
 export type WaitMode = "steering" | "follow_up" | "any";
 
 
+export function appendSessionEntry(handle: number, entry: SessionEntry): EmptyResult;
+
 export function createAgent(options: AgentOptions): CreateAgentResult;
 
 export function destroyAgent(handle: number): EmptyResult;
 
-export function drainTraceLog(): string[];
+export function estimateTokens(input: EstimateTokensInput): EstimateTokensResult;
+
+export function estimateTokensForText(text: string): EstimateTokensResult;
+
+export function fallbackStrategy(tool_name: string): ContextStrategy;
 
 export function feedLlmChunk(handle: number, chunk: LlmChunk): EventsResult;
 
 export function followUp(handle: number, message: AgentMessage): EmptyResult;
+
+export function getSessionBranch(handle: number): SessionBranchResult;
+
+export function getSessionState(handle: number): SessionStateResult;
+
+export function moveTo(handle: number, target_id: string, summary?: BranchSummary | null): MoveToResult;
 
 export function onLlmDone(handle: number, result: LlmResult): StepResult;
 
@@ -359,6 +427,10 @@ export function prompt(handle: number, prompt: PromptRequest): StepResult;
 
 export function reset(handle: number): EmptyResult;
 
+export function setLogLevel(level: string): void;
+
+export function setSessionState(handle: number, state: SessionState): EmptyResult;
+
 export function state(handle: number): StateResult;
 
 export function steer(handle: number, message: AgentMessage): EventsResult;
@@ -367,11 +439,17 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly appendSessionEntry: (a: number, b: any) => any;
     readonly createAgent: (a: any) => any;
     readonly destroyAgent: (a: number) => any;
-    readonly drainTraceLog: () => [number, number];
+    readonly estimateTokens: (a: any) => any;
+    readonly estimateTokensForText: (a: number, b: number) => any;
+    readonly fallbackStrategy: (a: number, b: number) => any;
     readonly feedLlmChunk: (a: number, b: any) => any;
     readonly followUp: (a: number, b: any) => any;
+    readonly getSessionBranch: (a: number) => any;
+    readonly getSessionState: (a: number) => any;
+    readonly moveTo: (a: number, b: number, c: number, d: number) => any;
     readonly onLlmDone: (a: number, b: any) => any;
     readonly onToolCancelled: (a: number, b: number, c: number, d: any) => any;
     readonly onToolDone: (a: number, b: number, c: number, d: any) => any;
@@ -380,6 +458,8 @@ export interface InitOutput {
     readonly projectContext: (a: any) => any;
     readonly prompt: (a: number, b: any) => any;
     readonly reset: (a: number) => any;
+    readonly setLogLevel: (a: number, b: number) => void;
+    readonly setSessionState: (a: number, b: any) => any;
     readonly state: (a: number) => any;
     readonly steer: (a: number, b: any) => any;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
@@ -388,7 +468,6 @@ export interface InitOutput {
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __externref_drop_slice: (a: number, b: number) => void;
     readonly __wbindgen_start: () => void;
 }
 

@@ -10,7 +10,8 @@
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "smoke:real-llm": "node --experimental-strip-types scripts/real-llm-smoke.ts",
     "smoke:real-local-coding": "node --experimental-strip-types scripts/real-local-coding-smoke.ts",
-    "build:wasm": "cd ../pi-host-web && PATH=\"$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH\" cargo build --target wasm32-unknown-unknown --release && wasm-bindgen --target web --out-dir ../web/public/pkg ../target/wasm32-unknown-unknown/release/pi_host_web.wasm && wasm-bindgen --target nodejs --out-dir ../web/pkg ../target/wasm32-unknown-unknown/release/pi_host_web.wasm"
+    "build:wasm": "cd ../pi-host-web && PATH=\"$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH\" cargo build --target wasm32-unknown-unknown --release && wasm-bindgen --target web --out-dir ../web/public/pkg ../target/wasm32-unknown-unknown/release/pi_host_web.wasm && wasm-bindgen --target nodejs --out-dir ../web/pkg ../target/wasm32-unknown-unknown/release/pi_host_web.wasm && npm run build:sdk",
+    "build:sdk": "node scripts/patch-pkg.js"
   },
   "devDependencies": {
     "playwright": "^1.60.0",

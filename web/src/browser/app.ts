@@ -1,30 +1,25 @@
 /**
  * Browser app — wires WASM, agent loop, LLM, tools, persistence, and UI.
  *
- * This is the browser-specific equivalent of RealAgentHost, but optimized
- * for the inline browser experience with DOM rendering and IndexedDB persistence.
+ * Uses the high-level @pi-oxide/pi-host-web SDK (Agent class) with
+ * streaming LLM responses and event-driven DOM rendering.
  */
 
-import { ensureInit } from "./wasm.ts";
 import {
-  createAgent,
-  prompt,
-  feedLlmChunk,
-  onLlmDone,
-  onToolDone,
-  onToolStarted,
+  Agent,
   projectContext,
-  type StepOutput,
-  type AgentAction,
-} from "./wasmBinding.ts";
-import { initEnvDefaults } from "./config.ts";
+  toolResult,
+  type AgentEvent,
+  type AgentMessage,
+  type LlmChunk,
+  type SessionState,
+} from "@pi-oxide/pi-host-web";
 import { callLlm } from "./browserLlm.ts";
+import { initEnvDefaults } from "./config.ts";
 import { LiveBrowserRuntime } from "./liveRuntime.ts";
 import { executeBrowserTool } from "./browserTools.ts";
 import { IndexedDBSessionBackend } from "./persistence.ts";
-import { getSessionState, setSessionState } from "./wasmBinding.ts";
 import type { BrowserRuntime } from "./browserRuntime.ts";
-import type { SessionState } from "./wasmBinding.ts";
 import { BROWSER_TOOLS } from "./browserTools.ts";
 
 // --- Context projection ---
@@ -72,143 +67,147 @@ function addText(chatContainer: HTMLElement, type: string, text: string): HTMLDi
   return div;
 }
 
-// --- Agent loop ---
+// --- Streaming LLM provider ---
 
-async function agentLoop(
-  handle: number,
-  actions: AgentAction[],
-  chatContainer: HTMLElement,
-  sendBtn: HTMLButtonElement,
-  runtime: BrowserRuntime,
-): Promise<void> {
-  for (const action of actions) {
-    switch (action.type) {
-      case "stream_llm": {
-        const projected = runProjection(
-          action.context.system_prompt,
-          action.context.messages,
+interface BrowserLlmBlock {
+  type: string;
+  text?: string;
+  id?: string;
+  name?: string;
+  input?: unknown;
+}
+
+interface BrowserLlmResponse {
+  content: BrowserLlmBlock[];
+  stop_reason: string;
+}
+
+async function* buildStreamingChunks(
+  data: BrowserLlmResponse,
+): AsyncGenerator<LlmChunk> {
+  // Start chunk
+  yield {
+    kind: "start",
+    content: [{ type: "text", text: "" }],
+    api: "anthropic",
+    provider: "anthropic",
+    model: "browser-model",
+    stop_reason: "end_turn",
+    error_message: null,
+    timestamp: Date.now(),
+    usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },
+  };
+
+  // Stream text word-by-word for UX
+  for (const block of data.content) {
+    if (block.type === "text" && block.text) {
+      const words = block.text.split(/(\s+)/);
+      for (const word of words) {
+        if (word) {
+          yield { kind: "text_delta", text: word };
+          await new Promise((r) => setTimeout(r, 15));
+        }
+      }
+    }
+  }
+}
+
+function buildLlmResult(data: BrowserLlmResponse): object {
+  const content = data.content
+    .filter((b) => b.type === "text" || b.type === "tool_use")
+    .map((b) => {
+      if (b.type === "text") return { type: "text", text: b.text };
+      return { type: "tool_call", id: b.id, name: b.name, arguments: b.input || {} };
+    });
+
+  if (content.length === 0) {
+    content.push({ type: "text", text: "" });
+  }
+
+  const stopReason = data.stop_reason === "tool_use" ? "tool_use" : "end_turn";
+
+  return {
+    Ok: {
+      content,
+      api: "anthropic",
+      provider: "anthropic",
+      model: "browser-model",
+      stop_reason: stopReason,
+      error_message: null,
+      timestamp: Date.now(),
+      usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },
+    },
+  };
+}
+
+// --- Event-driven DOM renderer ---
+
+class DomRenderer {
+  private chatContainer: HTMLElement;
+  private sendBtn: HTMLButtonElement;
+  private currentTextDiv: HTMLDivElement | null = null;
+  private toolCards = new Map<string, HTMLDivElement>();
+
+  constructor(chatContainer: HTMLElement, sendBtn: HTMLButtonElement) {
+    this.chatContainer = chatContainer;
+    this.sendBtn = sendBtn;
+  }
+
+  onEvent(event: AgentEvent) {
+    switch (event.type) {
+      case "message_start": {
+        this.currentTextDiv = addText(this.chatContainer, "assistant", "");
+        break;
+      }
+
+      case "message_update": {
+        const delta = event.delta as Record<string, unknown>;
+        if (delta.kind === "text_delta" && typeof delta.text === "string") {
+          if (this.currentTextDiv) {
+            this.currentTextDiv.textContent += delta.text;
+          } else {
+            this.currentTextDiv = addText(this.chatContainer, "assistant", delta.text);
+          }
+        }
+        this.chatContainer.scrollTop = this.chatContainer.scrollHeight;
+        break;
+      }
+
+      case "message_end": {
+        this.currentTextDiv = null;
+        break;
+      }
+
+      case "tool_execution_start": {
+        const toolDiv = addMsg(
+          this.chatContainer,
+          "tool",
+          `<span class="tool-name">${(event as any).tool_name}</span> <span class="tool-id">${(event as any).tool_call_id}</span>`,
         );
-        const loadingDiv = addMsg(chatContainer, "loading", "Thinking...");
+        this.toolCards.set((event as any).tool_call_id, toolDiv);
+        break;
+      }
 
-        try {
-          const data = await callLlm(
-            action.context.system_prompt,
-            projected as Parameters<typeof callLlm>[1],
-            action.context.tools as Parameters<typeof callLlm>[2],
-          );
-          loadingDiv.remove();
-
-          const content = data.content
-            .filter((b) => b.type === "text" || b.type === "tool_use")
-            .map((b) => {
-              if (b.type === "text") return { type: "text", text: b.text };
-              return { type: "tool_call", id: b.id, name: b.name, arguments: b.input || {} };
-            });
-
-          if (content.length === 0) content.push({ type: "text", text: "" });
-
-          const stopReason = data.stop_reason === "tool_use" ? "tool_use" : "end_turn";
-
-          const textParts = data.content
-            .filter((b) => b.type === "text")
-            .map((b) => b.text)
-            .join("\n");
-          if (textParts) {
-            addText(chatContainer, "assistant", textParts);
-          }
-
-          // Feed start chunk then final result
-          feedLlmChunk(handle, {
-            kind: "start",
-            content: [{ type: "text", text: "" }],
-            api: "anthropic",
-            provider: "anthropic",
-            model: "test",
-            stop_reason: "end_turn",
-            error_message: null,
-            timestamp: Date.now(),
-            usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },
-          });
-
-          const step = onLlmDone(handle, {
-            Ok: {
-              content,
-              api: "anthropic",
-              provider: "anthropic",
-              model: "test",
-              stop_reason: stopReason,
-              error_message: null,
-              timestamp: Date.now(),
-              usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },
-            },
-          });
-          await agentLoop(handle, step.actions, chatContainer, sendBtn, runtime);
-          return;
-        } catch (e: unknown) {
-          loadingDiv.remove();
-          const msg = e instanceof Error ? e.message : String(e);
-          addText(chatContainer, "error", `LLM Error: ${msg}`);
-
-          try {
-            const step = onLlmDone(handle, {
-              Err: { error: { code: "call_failed", message: msg }, aborted: false },
-            });
-            await agentLoop(handle, step.actions, chatContainer, sendBtn, runtime);
-          } catch {
-            sendBtn.disabled = false;
-          }
+      case "tool_execution_end": {
+        const toolDiv = this.toolCards.get((event as any).tool_call_id);
+        const result = (event as any).result as { content?: Array<{ text?: string }> };
+        const text = result.content?.map((c) => c.text).join("\n") ?? "";
+        if (toolDiv) {
+          const resultDiv = document.createElement("div");
+          resultDiv.className = "tool-result";
+          resultDiv.textContent = text.slice(0, 500);
+          toolDiv.appendChild(resultDiv);
         }
         break;
       }
 
-      case "execute_tools": {
-        let lastStep: StepOutput | null = null;
-        for (const call of action.calls) {
-          onToolStarted(handle, call.id);
-
-          const toolDiv = addMsg(
-            chatContainer,
-            "tool",
-            `<span class="tool-name">${call.name}</span>(${Object.entries(call.arguments)
-              .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-              .join(", ")})`,
-          );
-
-          const toolResult = executeBrowserTool(call, runtime);
-
-          if ("error" in toolResult && toolResult.error) {
-            lastStep = onToolDone(handle, call.id, {
-              error: { code: toolResult.error.code, message: toolResult.error.message },
-            });
-          } else {
-            const resultStr = JSON.stringify(toolResult, null, 2);
-            const resultDiv = document.createElement("div");
-            resultDiv.className = "tool-result";
-            resultDiv.textContent = resultStr.slice(0, 500);
-            toolDiv.appendChild(resultDiv);
-
-            lastStep = onToolDone(handle, call.id, {
-              content: [{ type: "text", text: resultStr }],
-            });
-          }
-        }
-        if (lastStep) {
-          await agentLoop(handle, lastStep.actions, chatContainer, sendBtn, runtime);
-        }
-        return;
-      }
-
       case "finished":
-        addText(chatContainer, "assistant", "Done");
-        sendBtn.disabled = false;
-        return;
-
-      case "wait_for_input":
-        sendBtn.disabled = false;
-        return;
+      case "wait_for_input": {
+        this.sendBtn.disabled = false;
+        break;
+      }
     }
   }
-  sendBtn.disabled = false;
 }
 
 // --- Public bootstrap API ---
@@ -225,11 +224,11 @@ const SESSION_ID = "browser-default-session";
 export async function bootstrap(els: AppElements): Promise<{
   sendPrompt: (text: string) => Promise<void>;
 }> {
-  await ensureInit();
   initEnvDefaults();
 
   const runtime = new LiveBrowserRuntime();
   const sessionBackend = new IndexedDBSessionBackend();
+  const renderer = new DomRenderer(els.chatContainer, els.sendBtn);
 
   const systemPrompt =
     "You are a browser automation agent. You can see the current page, " +
@@ -248,7 +247,7 @@ export async function bootstrap(els: AppElements): Promise<{
     // No previous session — start fresh
   }
 
-  const handle = createAgent({
+  const agent = await Agent.create({
     system_prompt: systemPrompt,
     model: {
       id: "browser-model",
@@ -258,6 +257,8 @@ export async function bootstrap(els: AppElements): Promise<{
       reasoning: false,
       context_window: 100000,
       max_tokens: 1024,
+      capabilities: { vision: false, json_mode: true, function_calling: true, streaming: true },
+      cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
     },
     tools: BROWSER_TOOLS,
     session_id: SESSION_ID,
@@ -277,12 +278,45 @@ export async function bootstrap(els: AppElements): Promise<{
 
     addText(els.chatContainer, "user", text);
 
-    const step = prompt(handle, text);
-    await agentLoop(handle, step.actions, els.chatContainer, els.sendBtn, runtime);
+    try {
+      await agent.run(text, {
+        llm: {
+          async call(context) {
+            const projected = runProjection(
+              context.system_prompt,
+              context.messages as unknown[],
+            );
+            const data = await callLlm(
+              context.system_prompt,
+              projected as Parameters<typeof callLlm>[1],
+              context.tools as Parameters<typeof callLlm>[2],
+            );
+            return {
+              chunks: buildStreamingChunks(data),
+              result: Promise.resolve(buildLlmResult(data) as any),
+            };
+          },
+        },
+        tools: {
+          async [BROWSER_TOOLS[0].name](call: any) {
+            const result = executeBrowserTool(call, runtime);
+            if ("error" in result && result.error) {
+              return { error: result.error };
+            }
+            return toolResult(JSON.stringify(result, null, 2).slice(0, 500));
+          },
+        },
+        onEvent: (event) => renderer.onEvent(event),
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      addText(els.chatContainer, "error", `Error: ${msg}`);
+      els.sendBtn.disabled = false;
+    }
 
     // Persist session state after the turn completes
     try {
-      const state = getSessionState(handle);
+      const state = agent.getSessionState();
       await sessionBackend.save(SESSION_ID, state);
     } catch (e) {
       console.warn("session save failed:", e);

@@ -1,6 +1,7 @@
 use pi_core::{
     AgentAction, AgentEvent, AgentMessage, AgentOptions, AgentRuntime, AssistantMessage, Content,
-    LlmResult, Model, StopReason, ToolArguments, ToolCall, ToolCallId, ToolName, ToolResult,
+    ContentDelta, LlmChunk, LlmResult, Model, StopReason, ToolArguments, ToolCall, ToolCallId,
+    ToolName, ToolResult,
 };
 
 fn dummy_model() -> Model {
@@ -93,7 +94,9 @@ fn on_llm_done_with_no_tools_finishes() {
     let (_events, actions, runtime) = transition.into_parts();
 
     assert!(!runtime.state().is_streaming);
-    assert!(actions.iter().any(|a| matches!(a, AgentAction::Finished { .. })));
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, AgentAction::Finished { .. })));
 }
 
 #[test]
@@ -152,15 +155,17 @@ fn turn_end_after_tools_reports_assistant_and_tool_results() {
     let t = idle.start_turn(AgentMessage::user("use tool"));
     let streaming = t.state;
 
-    let transition = streaming.finish_llm(LlmResult::Ok(assistant_with_tool_calls(vec![tool_call(
-        "call-1", "read",
-    )])));
+    let transition =
+        streaming.finish_llm(LlmResult::Ok(assistant_with_tool_calls(vec![tool_call(
+            "call-1", "read",
+        )])));
     let (_events, _actions, runtime) = transition.into_parts();
 
     let AgentRuntime::WaitingTools(waiting) = runtime else {
         panic!("expected WaitingTools");
     };
-    let transition = waiting.on_tool_done(ToolCallId::new("call-1"), Ok(ToolResult::text("result")));
+    let transition =
+        waiting.on_tool_done(ToolCallId::new("call-1"), Ok(ToolResult::text("result")));
     let (events, actions, _runtime) = transition.into_parts();
 
     let turn_end = events
@@ -177,7 +182,10 @@ fn turn_end_after_tools_reports_assistant_and_tool_results() {
     assert!(matches!(turn_end.0, AgentMessage::Assistant(_)));
     assert_eq!(turn_end.1.len(), 1);
     assert_eq!(turn_end.1[0].tool_call_id, ToolCallId::new("call-1"));
-    assert!(actions.is_empty(), "on_tool_done should return empty actions; host calls continue_turn()");
+    assert!(
+        actions.is_empty(),
+        "on_tool_done should return empty actions; host calls continue_turn()"
+    );
 }
 
 #[test]
@@ -206,11 +214,17 @@ fn tool_batch_terminates_only_when_all_results_terminate() {
     let AgentRuntime::WaitingTools(waiting) = runtime else {
         panic!("expected WaitingTools");
     };
-    let transition = waiting.on_tool_done(ToolCallId::new("call-2"), Ok(ToolResult::text("continue")));
+    let transition =
+        waiting.on_tool_done(ToolCallId::new("call-2"), Ok(ToolResult::text("continue")));
     let (events, actions, _runtime) = transition.into_parts();
 
-    assert!(!events.iter().any(|event| matches!(event, AgentEvent::AgentEnd { .. })));
-    assert!(actions.is_empty(), "non-unanimous termination should not finish; host calls continue_turn()");
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, AgentEvent::AgentEnd { .. })));
+    assert!(
+        actions.is_empty(),
+        "non-unanimous termination should not finish; host calls continue_turn()"
+    );
 }
 
 #[test]
@@ -222,15 +236,17 @@ fn continue_turn_after_tools_resumes_llm() {
     let t = idle.start_turn(AgentMessage::user("use tool"));
     let streaming = t.state;
 
-    let transition = streaming.finish_llm(LlmResult::Ok(assistant_with_tool_calls(vec![tool_call(
-        "call-1", "read",
-    )])));
+    let transition =
+        streaming.finish_llm(LlmResult::Ok(assistant_with_tool_calls(vec![tool_call(
+            "call-1", "read",
+        )])));
     let (_events, _actions, runtime) = transition.into_parts();
 
     let AgentRuntime::WaitingTools(waiting) = runtime else {
         panic!("expected WaitingTools");
     };
-    let transition = waiting.on_tool_done(ToolCallId::new("call-1"), Ok(ToolResult::text("result")));
+    let transition =
+        waiting.on_tool_done(ToolCallId::new("call-1"), Ok(ToolResult::text("result")));
     let (_events, actions, runtime) = transition.into_parts();
     assert!(actions.is_empty());
 
@@ -271,6 +287,70 @@ fn tool_batch_terminates_when_all_terminate() {
     let transition = waiting.on_tool_done(ToolCallId::new("call-2"), Ok(terminating));
     let (events, actions, _runtime) = transition.into_parts();
 
-    assert!(events.iter().any(|event| matches!(event, AgentEvent::AgentEnd { .. })));
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, AgentEvent::AgentEnd { .. })));
     assert!(matches!(actions[0], AgentAction::Finished { .. }));
+}
+
+#[test]
+fn text_delta_is_incremental_not_accumulated() {
+    let runtime = AgentRuntime::new(dummy_options());
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let t = idle.start_turn(AgentMessage::user("hello"));
+    let mut streaming = t.state;
+
+    // Feed Start chunk to initialize the assistant message
+    let start_chunk = LlmChunk::Start {
+        partial: AssistantMessage::empty(),
+    };
+    let events = streaming.feed_llm_chunk(start_chunk);
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::MessageStart { .. })));
+
+    // Feed first text delta
+    let events = streaming.feed_llm_chunk(LlmChunk::TextDelta {
+        text: "Hello".into(),
+    });
+    let deltas: Vec<&ContentDelta> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::MessageUpdate { delta, .. } => Some(delta),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deltas.len(), 1);
+    assert!(
+        matches!(deltas[0], ContentDelta::TextDelta { text } if text == "Hello"),
+        "first delta should be the incremental chunk 'Hello', got {:?}",
+        deltas[0]
+    );
+
+    // Feed second text delta
+    let events = streaming.feed_llm_chunk(LlmChunk::TextDelta {
+        text: " world".into(),
+    });
+    let deltas: Vec<&ContentDelta> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::MessageUpdate { delta, .. } => Some(delta),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deltas.len(), 1);
+    assert!(
+        matches!(deltas[0], ContentDelta::TextDelta { text } if text == " world"),
+        "second delta should be the incremental chunk ' world', got {:?}",
+        deltas[0]
+    );
+
+    // Finish the turn so the message is complete
+    let transition = streaming.finish_llm(LlmResult::done());
+    let (_events, actions, _runtime) = transition.into_parts();
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, AgentAction::Finished { .. })));
 }

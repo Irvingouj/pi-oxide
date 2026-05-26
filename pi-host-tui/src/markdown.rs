@@ -133,18 +133,21 @@ fn render_code_block(lang: &str, code_lines: &[String], lines: &mut Vec<Line<'st
 
     let ss = SS.get_or_init(|| SyntaxSet::load_defaults_newlines());
     let ts = TS.get_or_init(|| ThemeSet::load_defaults());
-    let syntax = ss.find_syntax_by_token(lang).unwrap_or_else(|| ss.find_syntax_plain_text());
+    let syntax = ss
+        .find_syntax_by_token(lang)
+        .unwrap_or_else(|| ss.find_syntax_plain_text());
     let theme = &ts.themes["base16-ocean.dark"];
     let mut highlighter = HighlightLines::new(syntax, theme);
 
     for line in LinesWithEndings::from(trimmed) {
         let highlighted = highlighter.highlight_line(line, ss).unwrap_or_default();
-        let mut spans: Vec<Span<'static>> = vec![
-            Span::styled("  ", Style::default().fg(Color::DarkGray)),
-        ];
+        let mut spans: Vec<Span<'static>> =
+            vec![Span::styled("  ", Style::default().fg(Color::DarkGray))];
         for (style, text) in highlighted {
             let text = text.trim_end_matches('\n');
-            if text.is_empty() { continue; }
+            if text.is_empty() {
+                continue;
+            }
             let c = style.foreground;
             spans.push(Span::styled(
                 text.to_string(),

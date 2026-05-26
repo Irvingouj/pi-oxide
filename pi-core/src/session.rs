@@ -79,7 +79,10 @@ impl SessionState {
         if let Some(last) = state.entries.last() {
             state.leaf_id = last.id.clone();
         }
-        trace!(entries = state.entries.len(), "session state built from messages");
+        trace!(
+            entries = state.entries.len(),
+            "session state built from messages"
+        );
         state
     }
 
@@ -87,7 +90,11 @@ impl SessionState {
     pub fn get_branch(&self) -> Vec<&SessionEntry> {
         let mut branch = Vec::new();
         let mut current = self.entries.iter().find(|e| e.id == self.leaf_id);
-        trace!(leaf_id = self.leaf_id, total_entries = self.entries.len(), "get_branch called");
+        trace!(
+            leaf_id = self.leaf_id,
+            total_entries = self.entries.len(),
+            "get_branch called"
+        );
 
         while let Some(entry) = current {
             branch.push(entry);
@@ -104,7 +111,8 @@ impl SessionState {
 
     /// Build the LLM-visible context from the current branch.
     pub fn build_context(&self) -> Vec<AgentMessage> {
-        let ctx = self.get_branch()
+        let ctx = self
+            .get_branch()
             .iter()
             .filter_map(|e| match &e.kind {
                 EntryKind::Message { message } => Some(message.clone()),

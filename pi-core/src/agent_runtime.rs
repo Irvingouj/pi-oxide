@@ -38,23 +38,43 @@ impl FinishLlmTransition {
     pub fn into_parts(self) -> (Vec<AgentEvent>, Vec<AgentAction>, AgentRuntime) {
         match self {
             FinishLlmTransition::MoreStreaming(t) => {
-                let Transition { events, actions, state } = t;
+                let Transition {
+                    events,
+                    actions,
+                    state,
+                } = t;
                 (events, actions, state.into_runtime())
             }
             FinishLlmTransition::WaitingTools(t) => {
-                let Transition { events, actions, state } = t;
+                let Transition {
+                    events,
+                    actions,
+                    state,
+                } = t;
                 (events, actions, state.into_runtime())
             }
             FinishLlmTransition::Ready(t) => {
-                let Transition { events, actions, state } = t;
+                let Transition {
+                    events,
+                    actions,
+                    state,
+                } = t;
                 (events, actions, state.into_runtime())
             }
             FinishLlmTransition::Finished(t) => {
-                let Transition { events, actions, state } = t;
+                let Transition {
+                    events,
+                    actions,
+                    state,
+                } = t;
                 (events, actions, state.into_runtime())
             }
             FinishLlmTransition::Aborted(t) => {
-                let Transition { events, actions, state } = t;
+                let Transition {
+                    events,
+                    actions,
+                    state,
+                } = t;
                 (events, actions, state.into_runtime())
             }
         }
@@ -72,15 +92,27 @@ impl ToolTransition {
     pub fn into_parts(self) -> (Vec<AgentEvent>, Vec<AgentAction>, AgentRuntime) {
         match self {
             ToolTransition::WaitingTools(t) => {
-                let Transition { events, actions, state } = t;
+                let Transition {
+                    events,
+                    actions,
+                    state,
+                } = t;
                 (events, actions, state.into_runtime())
             }
             ToolTransition::Ready(t) => {
-                let Transition { events, actions, state } = t;
+                let Transition {
+                    events,
+                    actions,
+                    state,
+                } = t;
                 (events, actions, state.into_runtime())
             }
             ToolTransition::Finished(t) => {
-                let Transition { events, actions, state } = t;
+                let Transition {
+                    events,
+                    actions,
+                    state,
+                } = t;
                 (events, actions, state.into_runtime())
             }
         }
@@ -311,7 +343,10 @@ impl StreamingAgent {
         }
 
         // Tool execution requested — host decides sync vs async; core always waits
-        if actions.iter().any(|a| matches!(a, AgentAction::ExecuteTools { .. })) {
+        if actions
+            .iter()
+            .any(|a| matches!(a, AgentAction::ExecuteTools { .. }))
+        {
             return FinishLlmTransition::WaitingTools(Transition {
                 events,
                 actions,
@@ -373,7 +408,10 @@ impl WaitingToolsAgent {
     ) -> ToolTransition {
         let (events, actions) = self.agent.on_tool_done(id, result);
 
-        if actions.iter().any(|a| matches!(a, AgentAction::Finished { .. })) {
+        if actions
+            .iter()
+            .any(|a| matches!(a, AgentAction::Finished { .. }))
+        {
             return ToolTransition::Finished(Transition {
                 events,
                 actions,
@@ -404,14 +442,13 @@ impl WaitingToolsAgent {
         self.agent.on_tool_started(id)
     }
 
-    pub fn cancel_tool(
-        mut self,
-        id: ToolCallId,
-        reason: CancelReason,
-    ) -> ToolTransition {
+    pub fn cancel_tool(mut self, id: ToolCallId, reason: CancelReason) -> ToolTransition {
         let (events, actions) = self.agent.on_tool_cancelled(id, reason);
 
-        if actions.iter().any(|a| matches!(a, AgentAction::Finished { .. })) {
+        if actions
+            .iter()
+            .any(|a| matches!(a, AgentAction::Finished { .. }))
+        {
             return ToolTransition::Finished(Transition {
                 events,
                 actions,

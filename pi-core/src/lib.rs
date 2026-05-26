@@ -20,8 +20,7 @@ pub mod types;
 pub use agent::{Agent, AgentOptions, AgentState, Phase};
 pub use agent_runtime::{
     AbortedAgent, AgentRuntime, FinishLlmTransition, FinishedAgent, IdleAgent, ReadyAgent,
-    StreamingAgent, ToolTransition, Transition, UserInputDuringTools,
-    WaitingToolsAgent,
+    StreamingAgent, ToolTransition, Transition, UserInputDuringTools, WaitingToolsAgent,
 };
 pub use context::{AgentContext, LlmContext};
 pub use context_metadata::{fallback_strategy, ContentKind, ContextStrategy, ToolResultContext};
@@ -31,8 +30,8 @@ pub use context_projection::{
     ProjectionOutput,
 };
 pub use events::{
-    AgentAction, AgentEvent, CancelReason, ContentDelta, QueueMode,
-    ThinkingLevel, ToolExecutionUpdate, ToolOutputStream, WaitMode,
+    AgentAction, AgentEvent, CancelReason, ContentDelta, QueueMode, ThinkingLevel,
+    ToolExecutionUpdate, ToolOutputStream, WaitMode,
 };
 pub use llm::{LlmChunk, LlmError, LlmResult, Model, ModelCapabilities, ModelCost, ModelProvider};
 pub use message::StopReason;
@@ -40,8 +39,12 @@ pub use message::{
     AgentMessage, AssistantMessage, Content, ImageContent, TextContent, ToolCall,
     ToolResultMessage, UserMessage,
 };
-pub use session::{BranchSummary, EntryKind, SessionEntry, SessionError, SessionState, SessionStorage};
-pub use tool::{ExecutionMode, ToolDefinition, ToolError, ToolExecutionMode, ToolResult, ToolRunMode};
+pub use session::{
+    BranchSummary, EntryKind, SessionEntry, SessionError, SessionState, SessionStorage,
+};
+pub use tool::{
+    ExecutionMode, ToolDefinition, ToolError, ToolExecutionMode, ToolResult, ToolRunMode,
+};
 pub use types::{
     ApiName, JsonSchema, ModelId, ModelName, ProviderName, SessionId, ToolArguments, ToolCallId,
     ToolDetails, ToolName,

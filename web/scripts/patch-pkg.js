@@ -22,6 +22,25 @@ mkdirSync(sdkDir, { recursive: true });
 copyFileSync(join(sdkSourceDir, "index.js"), join(sdkDir, "index.js"));
 copyFileSync(join(sdkSourceDir, "index.d.ts"), join(sdkDir, "index.d.ts"));
 
+// Copy rebuilt WASM and bindings so pi-host-web/pkg stays in sync
+const webPublicPkg = join(__dirname, "../public/pkg");
+copyFileSync(
+  join(webPublicPkg, "pi_host_web_bg.wasm"),
+  join(pkgDir, "pi_host_web_bg.wasm")
+);
+copyFileSync(
+  join(webPublicPkg, "pi_host_web_bg.wasm.d.ts"),
+  join(pkgDir, "pi_host_web_bg.wasm.d.ts")
+);
+copyFileSync(
+  join(webPublicPkg, "pi_host_web.js"),
+  join(pkgDir, "pi_host_web.js")
+);
+copyFileSync(
+  join(webPublicPkg, "pi_host_web.d.ts"),
+  join(pkgDir, "pi_host_web.d.ts")
+);
+
 // Patch package.json
 const pkgJsonPath = join(pkgDir, "package.json");
 const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));

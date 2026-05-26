@@ -5,8 +5,8 @@ mod tests {
     use std::path::Path;
 
     use pi_core::{
-        AgentMessage, AgentOptions, AgentRuntime, Model, ModelCapabilities,
-        ModelCost, ModelId, ModelName, ProviderName, ToolDefinition,
+        AgentMessage, AgentOptions, AgentRuntime, Model, ModelCapabilities, ModelCost, ModelId,
+        ModelName, ProviderName, ToolDefinition,
     };
 
     use crate::extension::{BashExtension, BuiltinExtension, Extension, ExtensionContext};
@@ -83,11 +83,9 @@ mod tests {
         };
 
         // Stream LLM
-        let mut stream = llm_client.stream_sync(
-            &context.system_prompt,
-            &context.messages,
-            &context.tools,
-        ).expect("stream_sync failed");
+        let mut stream = llm_client
+            .stream_sync(&context.system_prompt, &context.messages, &context.tools)
+            .expect("stream_sync failed");
 
         let mut chunks = vec![];
         for chunk in stream.by_ref() {
@@ -102,22 +100,30 @@ mod tests {
         let assistant_msg = pi_core::AssistantMessage {
             content: if stream.tool_calls().is_empty() {
                 vec![pi_core::Content::Text(pi_core::message::TextContent {
-                    text: chunks.iter().filter_map(|c| {
-                        if let pi_core::LlmChunk::TextDelta { text } = c {
-                            Some(text.as_str())
-                        } else {
-                            None
-                        }
-                    }).collect::<Vec<_>>().concat(),
+                    text: chunks
+                        .iter()
+                        .filter_map(|c| {
+                            if let pi_core::LlmChunk::TextDelta { text } = c {
+                                Some(text.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .concat(),
                 })]
             } else {
-                stream.tool_calls().into_iter().map(|tc| {
-                    pi_core::Content::ToolCall(pi_core::ToolCall {
-                        id: pi_core::ToolCallId::new(&tc.id),
-                        name: pi_core::ToolName::new(&tc.name),
-                        arguments: pi_core::ToolArguments::new(tc.input),
+                stream
+                    .tool_calls()
+                    .into_iter()
+                    .map(|tc| {
+                        pi_core::Content::ToolCall(pi_core::ToolCall {
+                            id: pi_core::ToolCallId::new(&tc.id),
+                            name: pi_core::ToolName::new(&tc.name),
+                            arguments: pi_core::ToolArguments::new(tc.input),
+                        })
                     })
-                }).collect()
+                    .collect()
             },
             api: pi_core::ApiName("fireworks".to_string()),
             provider: ProviderName("fireworks".to_string()),
@@ -134,9 +140,9 @@ mod tests {
         };
 
         let (events, actions, new_runtime) = match runtime {
-            AgentRuntime::Streaming(streaming) => {
-                streaming.finish_llm(pi_core::LlmResult::Ok(assistant_msg)).into_parts()
-            }
+            AgentRuntime::Streaming(streaming) => streaming
+                .finish_llm(pi_core::LlmResult::Ok(assistant_msg))
+                .into_parts(),
             _ => panic!("expected Streaming, got non-Streaming AgentRuntime"),
         };
         runtime = new_runtime;
@@ -144,7 +150,11 @@ mod tests {
         println!("finish_llm actions: {:?}", actions);
 
         // Execute tools
-        let mut running_tasks: Vec<(pi_core::ToolCallId, String, Box<dyn crate::extension::ToolEventStream>)> = vec![];
+        let mut running_tasks: Vec<(
+            pi_core::ToolCallId,
+            String,
+            Box<dyn crate::extension::ToolEventStream>,
+        )> = vec![];
         for action in actions {
             match action {
                 pi_core::AgentAction::ExecuteTools { calls } => {
@@ -162,18 +172,29 @@ mod tests {
                                 println!("Sync tool result: {:?}", result);
                                 runtime = match runtime {
                                     AgentRuntime::WaitingTools(waiting) => {
-                                        let transition = waiting.on_tool_done(call.id.clone(), result);
+                                        let transition =
+                                            waiting.on_tool_done(call.id.clone(), result);
                                         match transition {
-                                            pi_core::ToolTransition::Ready(t) => t.state.into_runtime(),
-                                            pi_core::ToolTransition::Finished(t) => t.state.into_runtime(),
-                                            pi_core::ToolTransition::WaitingTools(t) => t.state.into_runtime(),
+                                            pi_core::ToolTransition::Ready(t) => {
+                                                t.state.into_runtime()
+                                            }
+                                            pi_core::ToolTransition::Finished(t) => {
+                                                t.state.into_runtime()
+                                            }
+                                            pi_core::ToolTransition::WaitingTools(t) => {
+                                                t.state.into_runtime()
+                                            }
                                         }
                                     }
                                     other => other,
                                 };
                             }
                             crate::extension::ExtensionOutcome::Running(stream) => {
-                                running_tasks.push((call.id.clone(), call.name.as_str().to_string(), stream));
+                                running_tasks.push((
+                                    call.id.clone(),
+                                    call.name.as_str().to_string(),
+                                    stream,
+                                ));
                             }
                         }
                     }
@@ -199,9 +220,13 @@ mod tests {
                                 AgentRuntime::WaitingTools(waiting) => {
                                     let transition = waiting.on_tool_done(id.clone(), result);
                                     match transition {
-                                        pi_core::ToolTransition::WaitingTools(t) => t.state.into_runtime(),
+                                        pi_core::ToolTransition::WaitingTools(t) => {
+                                            t.state.into_runtime()
+                                        }
                                         pi_core::ToolTransition::Ready(t) => t.state.into_runtime(),
-                                        pi_core::ToolTransition::Finished(t) => t.state.into_runtime(),
+                                        pi_core::ToolTransition::Finished(t) => {
+                                            t.state.into_runtime()
+                                        }
                                     }
                                 }
                                 other => other,
@@ -217,7 +242,10 @@ mod tests {
             running_tasks = remaining;
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        assert!(running_tasks.is_empty(), "tools did not complete within 30s");
+        assert!(
+            running_tasks.is_empty(),
+            "tools did not complete within 30s"
+        );
 
         // Auto-continue
         let actions = match runtime {
@@ -229,7 +257,9 @@ mod tests {
                 transition.actions
             }
             _ => {
-                println!("Not ReadyToContinue after tools: agent runtime not in ReadyToContinue state");
+                println!(
+                    "Not ReadyToContinue after tools: agent runtime not in ReadyToContinue state"
+                );
                 return;
             }
         };
@@ -237,11 +267,9 @@ mod tests {
         // Stream second LLM response
         if let Some(pi_core::AgentAction::StreamLlm { context, .. }) = actions.into_iter().next() {
             println!("Streaming second LLM response...");
-            let mut stream = llm_client.stream_sync(
-                &context.system_prompt,
-                &context.messages,
-                &context.tools,
-            ).expect("second stream_sync failed");
+            let mut stream = llm_client
+                .stream_sync(&context.system_prompt, &context.messages, &context.tools)
+                .expect("second stream_sync failed");
 
             let mut chunks = vec![];
             for chunk in stream.by_ref() {

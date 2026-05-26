@@ -9,8 +9,8 @@ use crate::events::{
 };
 use crate::llm::{LlmChunk, LlmResult, Model};
 use crate::message::{AgentMessage, Content, StopReason, ToolCall, ToolResultMessage};
-use crate::tool::{ToolDefinition, ToolError, ToolExecutionMode, ToolResult};
 use crate::session::{BranchSummary, EntryKind, SessionEntry, SessionState};
+use crate::tool::{ToolDefinition, ToolError, ToolExecutionMode, ToolResult};
 use crate::types::{SessionId, ToolCallId};
 use tracing::{debug, trace, warn};
 
@@ -115,7 +115,10 @@ impl Agent {
     }
 
     /// Start processing a new prompt.
-    pub(crate) fn start_turn(&mut self, prompt: AgentMessage) -> (Vec<AgentEvent>, Vec<AgentAction>) {
+    pub(crate) fn start_turn(
+        &mut self,
+        prompt: AgentMessage,
+    ) -> (Vec<AgentEvent>, Vec<AgentAction>) {
         if self.phase == Phase::Streaming {
             warn!(phase = ?self.phase, "start_turn requested while LLM is streaming");
             return (
@@ -213,6 +216,7 @@ impl Agent {
             LlmChunk::TextDelta { text } => {
                 trace!(bytes = text.len(), "llm text delta");
                 if let Some(AgentMessage::Assistant(ref mut a)) = self.state.messages.last_mut() {
+                    let delta_text = text.clone();
                     if let Some(Content::Text(ref mut t)) = a.content.last_mut() {
                         t.text.push_str(&text);
                     } else {
@@ -223,9 +227,7 @@ impl Agent {
                     self.state.streaming_message = Some(msg.clone());
                     events.push(AgentEvent::MessageUpdate {
                         message: msg.clone(),
-                        delta: ContentDelta::TextDelta {
-                            text: msg.assistant_text(),
-                        },
+                        delta: ContentDelta::TextDelta { text: delta_text },
                     });
                 }
             }
@@ -365,7 +367,10 @@ impl Agent {
 
         self.phase = Phase::Idle;
         self.state.is_streaming = false;
-        debug!(tool_count = tool_calls.len(), "assistant requested tool execution");
+        debug!(
+            tool_count = tool_calls.len(),
+            "assistant requested tool execution"
+        );
         actions.push(AgentAction::ExecuteTools { calls: tool_calls });
         (events, actions)
     }
@@ -701,7 +706,11 @@ impl Agent {
 
     /// Get the current branch (root to leaf) as cloned entries.
     pub fn session_branch(&self) -> Vec<SessionEntry> {
-        self.session_state.get_branch().into_iter().cloned().collect()
+        self.session_state
+            .get_branch()
+            .into_iter()
+            .cloned()
+            .collect()
     }
 
     /// Move the leaf to a target entry, optionally creating a branch summary.
@@ -718,11 +727,7 @@ impl Agent {
     /// Append a message to the session tree as an EntryKind::Message.
     fn append_session_message(&mut self, message: &AgentMessage) {
         let id = format!("entry-{}", self.session_state.entries.len());
-        let parent_id = self
-            .session_state
-            .entries
-            .last()
-            .map(|e| e.id.clone());
+        let parent_id = self.session_state.entries.last().map(|e| e.id.clone());
         let entry = SessionEntry {
             id,
             parent_id,

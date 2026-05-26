@@ -39,7 +39,9 @@ fn init_tracing() {
             }
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let _ = tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).try_init();
+                let _ = tracing_subscriber::fmt()
+                    .with_max_level(tracing::Level::INFO)
+                    .try_init();
             }
             init.set(true);
         }
@@ -104,12 +106,7 @@ where
         self.inner.on_record(span, values, ctx)
     }
 
-    fn on_follows_from(
-        &self,
-        span: &tracing::Id,
-        follows: &tracing::Id,
-        ctx: Context<'_, S>,
-    ) {
+    fn on_follows_from(&self, span: &tracing::Id, follows: &tracing::Id, ctx: Context<'_, S>) {
         self.inner.on_follows_from(span, follows, ctx)
     }
 
@@ -125,12 +122,7 @@ where
         self.inner.on_close(id, ctx)
     }
 
-    fn on_id_change(
-        &self,
-        old: &tracing::span::Id,
-        new: &tracing::span::Id,
-        ctx: Context<'_, S>,
-    ) {
+    fn on_id_change(&self, old: &tracing::span::Id, new: &tracing::span::Id, ctx: Context<'_, S>) {
         self.inner.on_id_change(old, new, ctx)
     }
 }
@@ -144,7 +136,10 @@ enum HostError {
     #[error("agent not found: handle {0} is invalid")]
     BadHandle(u32),
     #[error("wrong phase: expected {expected}, got {actual}")]
-    WrongPhase { expected: &'static str, actual: &'static str },
+    WrongPhase {
+        expected: &'static str,
+        actual: &'static str,
+    },
 }
 
 impl HostError {
@@ -269,12 +264,18 @@ pub fn prompt(handle: u32, prompt: PromptRequest) -> StepResult {
 
     let result = match runtime {
         AgentRuntime::Idle(idle) => {
-            let Transition { events, actions, state } = idle.start_turn(core_prompt);
+            let Transition {
+                events,
+                actions,
+                state,
+            } = idle.start_turn(core_prompt);
             put_runtime(state.into_runtime());
             Ok((events, actions))
         }
         AgentRuntime::WaitingTools(mut waiting) => {
-            let (events, actions) = waiting.submit_user_message(core_prompt).into_events_actions();
+            let (events, actions) = waiting
+                .submit_user_message(core_prompt)
+                .into_events_actions();
             put_runtime(waiting.into_runtime());
             Ok((events, actions))
         }
@@ -709,7 +710,9 @@ pub fn move_to(handle: u32, target_id: String, summary: Option<BranchSummary>) -
     let mut agent = runtime.into_agent();
     let id = agent.move_to(&target_id, core_summary);
     put_runtime(AgentRuntime::from_agent(agent));
-    ok(MoveToOutput { summary_entry_id: id })
+    ok(MoveToOutput {
+        summary_entry_id: id,
+    })
 }
 
 #[wasm_bindgen(js_name = "appendSessionEntry")]
@@ -731,7 +734,8 @@ pub fn append_session_entry(handle: u32, entry: SessionEntry) -> EmptyResult {
 pub fn estimate_tokens_export(input: EstimateTokensInput) -> EstimateTokensResult {
     console_error_panic_hook::set_once();
 
-    let core_messages: Vec<pi_core::AgentMessage> = input.messages.into_iter().map(|m| m.into()).collect();
+    let core_messages: Vec<pi_core::AgentMessage> =
+        input.messages.into_iter().map(|m| m.into()).collect();
     let tokens = estimate_tokens(&core_messages);
     ok(EstimateTokensOutput { tokens })
 }

@@ -7,7 +7,7 @@ import test from "node:test";
 import { Agent } from "../../pi-host-web/pkg/sdk/index.js";
 
 test("SDK streams LLM chunks progressively", async () => {
-  const events: string[] = [];
+  const events: any[] = [];
 
   const agent = await Agent.create({
     system_prompt: "test",
@@ -58,7 +58,7 @@ test("SDK streams LLM chunks progressively", async () => {
     },
     tools: {},
     onEvent(event) {
-      events.push(event.type);
+      events.push(event);
     },
   });
 
@@ -72,8 +72,20 @@ test("SDK streams LLM chunks progressively", async () => {
     "chunks should be spaced in time (streamed)"
   );
   assert.ok(
-    events.includes("message_update"),
+    events.some((e) => e.type === "message_update"),
     "should emit message_update for streamed text"
+  );
+
+  // Deltas must carry incremental text, not accumulated text
+  const messageUpdateEvents = events.filter((e) => e.type === "message_update");
+  const textDeltas = messageUpdateEvents
+    .map((e: any) => e.delta)
+    .filter((d) => d?.kind === "text_delta")
+    .map((d) => d.text);
+  assert.deepStrictEqual(
+    textDeltas,
+    ["Hello", " world"],
+    "text_delta should contain incremental chunks, not accumulated text"
   );
 
   agent.destroy();

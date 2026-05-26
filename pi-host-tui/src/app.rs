@@ -6,8 +6,8 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
-    ScrollbarOrientation, ScrollbarState, Wrap,
+    Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+    ScrollbarState, Wrap,
 };
 use ratatui::Frame;
 
@@ -451,15 +451,13 @@ impl App {
                 let (events, actions) = disposition.into_events_actions();
                 (events, actions, waiting.into_runtime())
             }
-            other => {
-                (
-                    vec![],
-                    vec![AgentAction::WaitForInput {
-                        mode: WaitMode::Any,
-                    }],
-                    other,
-                )
-            }
+            other => (
+                vec![],
+                vec![AgentAction::WaitForInput {
+                    mode: WaitMode::Any,
+                }],
+                other,
+            ),
         };
         self.agent = Some(new_runtime);
         self.handle_actions(terminal, actions);
@@ -491,13 +489,11 @@ impl App {
                     self.llm_client.set_model(model_id);
                     self.agent_mut().state_mut().model.id = pi_core::ModelId::new(model_id);
                     self.agent_mut().state_mut().model.name = pi_core::ModelName::new(model_id);
-                    self.entries.push(ChatEntry::System(format!(
-                        "Model switched to {model_id}"
-                    )));
+                    self.entries
+                        .push(ChatEntry::System(format!("Model switched to {model_id}")));
                 } else {
-                    self.entries.push(ChatEntry::System(
-                        "Usage: /model <model_id>".into(),
-                    ));
+                    self.entries
+                        .push(ChatEntry::System("Usage: /model <model_id>".into()));
                 }
             }
             "/session" => {
@@ -520,18 +516,15 @@ impl App {
                                 self.agent_mut().set_session_state(state);
                                 self.session_id = Some(id.to_string());
                                 self.entries.clear();
-                                self.entries.push(ChatEntry::System(format!(
-                                    "Session '{id}' loaded."
-                                )));
+                                self.entries
+                                    .push(ChatEntry::System(format!("Session '{id}' loaded.")));
                             } else {
-                                self.entries.push(ChatEntry::System(format!(
-                                    "Session '{id}' not found."
-                                )));
+                                self.entries
+                                    .push(ChatEntry::System(format!("Session '{id}' not found.")));
                             }
                         } else {
-                            self.entries.push(ChatEntry::System(
-                                "Usage: /session load <id>".into(),
-                            ));
+                            self.entries
+                                .push(ChatEntry::System("Usage: /session load <id>".into()));
                         }
                     }
                     "new" => {
@@ -560,26 +553,31 @@ impl App {
                         "Tokens: in={input} out={output} total={total} ctx={ctx_pct}%"
                     )));
                 } else {
-                    self.entries.push(ChatEntry::System(
-                        "No token usage recorded yet.".into(),
-                    ));
+                    self.entries
+                        .push(ChatEntry::System("No token usage recorded yet.".into()));
                 }
             }
             "/undo" => {
                 let msgs = &self.agent_mut().state().messages;
-                if let Some(last_user_idx) = msgs.iter().rposition(|m| matches!(m, pi_core::AgentMessage::User(_))) {
+                if let Some(last_user_idx) = msgs
+                    .iter()
+                    .rposition(|m| matches!(m, pi_core::AgentMessage::User(_)))
+                {
                     let new_len = last_user_idx;
                     self.agent_mut().state_mut().messages.truncate(new_len);
                     // Also truncate entries to remove the last user+assistant+tools round
-                    if let Some(last_user_entry) =
-                        self.entries.iter().rposition(|e| matches!(e, ChatEntry::User(_)))
+                    if let Some(last_user_entry) = self
+                        .entries
+                        .iter()
+                        .rposition(|e| matches!(e, ChatEntry::User(_)))
                     {
                         self.entries.truncate(last_user_entry);
                     }
                     self.entries
                         .push(ChatEntry::System("Last turn undone.".into()));
                 } else {
-                    self.entries.push(ChatEntry::System("Nothing to undo.".into()));
+                    self.entries
+                        .push(ChatEntry::System("Nothing to undo.".into()));
                 }
             }
             _ => {
@@ -634,11 +632,7 @@ impl App {
         }
     }
 
-    fn stream_llm(
-        &mut self,
-        terminal: &mut ratatui::DefaultTerminal,
-        context: LlmContext,
-    ) {
+    fn stream_llm(&mut self, terminal: &mut ratatui::DefaultTerminal, context: LlmContext) {
         let projected = project(ProjectionInput {
             system_prompt: context.system_prompt.clone(),
             messages: context.messages.clone(),
@@ -697,8 +691,7 @@ impl App {
                             self.streaming_text = full_text.clone();
                             if let Some(ChatEntry::Assistant(_)) = self.entries.last() {
                                 let rendered = markdown::render(&full_text, 80);
-                                *self.entries.last_mut().unwrap() =
-                                    ChatEntry::Assistant(rendered);
+                                *self.entries.last_mut().unwrap() = ChatEntry::Assistant(rendered);
                             }
                         }
                         LlmChunk::Done => break,
@@ -745,8 +738,7 @@ impl App {
                     vec![Content::Text(pi_core::TextContent { text: full_text })]
                 };
 
-                let content: Vec<Content> =
-                    text_block.into_iter().chain(tool_use_blocks).collect();
+                let content: Vec<Content> = text_block.into_iter().chain(tool_use_blocks).collect();
                 let sr = if stop_reason == "tool_use" {
                     pi_core::StopReason::ToolUse
                 } else {
@@ -807,11 +799,7 @@ impl App {
         self.streaming_text.clear();
     }
 
-    fn execute_tools(
-        &mut self,
-        terminal: &mut ratatui::DefaultTerminal,
-        calls: Vec<ToolCall>,
-    ) {
+    fn execute_tools(&mut self, terminal: &mut ratatui::DefaultTerminal, calls: Vec<ToolCall>) {
         for call in calls {
             let args_summary = format_tool_args(&call.arguments);
             self.entries.push(ChatEntry::ToolStart {
@@ -949,7 +937,10 @@ impl App {
 
     fn poll_running_tasks(&mut self, terminal: &mut ratatui::DefaultTerminal) {
         let mut remaining = Vec::new();
-        let mut just_completed: Vec<(pi_core::ToolCallId, Result<pi_core::ToolResult, pi_core::ToolError>)> = Vec::new();
+        let mut just_completed: Vec<(
+            pi_core::ToolCallId,
+            Result<pi_core::ToolResult, pi_core::ToolError>,
+        )> = Vec::new();
 
         for mut task in std::mem::take(&mut self.running_tasks) {
             let mut done = false;
@@ -1206,8 +1197,7 @@ impl App {
         frame.render_widget(input, area);
 
         if !self.running {
-            let cursor_x =
-                area.x + 1 + (self.cursor_pos as u16).min(area.width.saturating_sub(3));
+            let cursor_x = area.x + 1 + (self.cursor_pos as u16).min(area.width.saturating_sub(3));
             let cursor_y = area.y + 1;
             frame.set_cursor_position((cursor_x, cursor_y));
         }
@@ -1235,7 +1225,11 @@ impl App {
 
             let list = List::new(items)
                 .block(Block::bordered().title(" commands "))
-                .highlight_style(Style::new().add_modifier(Modifier::REVERSED).fg(Color::Cyan))
+                .highlight_style(
+                    Style::new()
+                        .add_modifier(Modifier::REVERSED)
+                        .fg(Color::Cyan),
+                )
                 .highlight_symbol("> ");
 
             frame.render_stateful_widget(list, popup_area, &mut self.suggestion_state);

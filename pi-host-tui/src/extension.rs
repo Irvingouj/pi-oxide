@@ -292,6 +292,10 @@ mod tests {
         }
         assert!(done, "bash did not complete within 10s");
         let output = chunks.join("");
-        assert!(output.contains("hello"), "expected 'hello' in output, got: {:?}", output);
+        assert!(
+            output.contains("hello"),
+            "expected 'hello' in output, got: {:?}",
+            output
+        );
     }
 }

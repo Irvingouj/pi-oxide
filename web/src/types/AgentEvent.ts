@@ -11,4 +11,47 @@ import type { ToolResultMessage } from "./ToolResultMessage";
 /**
  * Events emitted by the core to notify the host of state changes.
  */
-export type AgentEvent = { "type": "agent_start" } | { "type": "agent_end", messages: Array<AgentMessage>, } | { "type": "turn_start" } | { "type": "turn_end", message: AgentMessage, tool_results: Array<ToolResultMessage>, } | { "type": "message_start", message: AgentMessage, } | { "type": "message_update", message: AgentMessage, delta: ContentDelta, } | { "type": "message_end", message: AgentMessage, } | { "type": "tool_execution_start", tool_call_id: ToolCallId, tool_name: ToolName, args: object | undefined, } | { "type": "tool_execution_update", tool_call_id: ToolCallId, stream: ToolOutputStream, chunk: string, sequence: bigint, timestamp: bigint, } | { "type": "tool_execution_end", tool_call_id: ToolCallId, result: ToolResult, is_error: boolean, } | { "type": "tool_execution_cancelled", tool_call_id: ToolCallId, reason: CancelReason, } | { "type": "queue_update", steer: Array<AgentMessage>, follow_up: Array<AgentMessage>, } | { "type": "save_point", had_pending_writes: boolean, } | { "type": "settled" };
+export type AgentEvent =
+	| { type: "agent_start" }
+	| { type: "agent_end"; messages: Array<AgentMessage> }
+	| { type: "turn_start" }
+	| {
+			type: "turn_end";
+			message: AgentMessage;
+			tool_results: Array<ToolResultMessage>;
+	  }
+	| { type: "message_start"; message: AgentMessage }
+	| { type: "message_update"; message: AgentMessage; delta: ContentDelta }
+	| { type: "message_end"; message: AgentMessage }
+	| {
+			type: "tool_execution_start";
+			tool_call_id: ToolCallId;
+			tool_name: ToolName;
+			args: object | undefined;
+	  }
+	| {
+			type: "tool_execution_update";
+			tool_call_id: ToolCallId;
+			stream: ToolOutputStream;
+			chunk: string;
+			sequence: bigint;
+			timestamp: bigint;
+	  }
+	| {
+			type: "tool_execution_end";
+			tool_call_id: ToolCallId;
+			result: ToolResult;
+			is_error: boolean;
+	  }
+	| {
+			type: "tool_execution_cancelled";
+			tool_call_id: ToolCallId;
+			reason: CancelReason;
+	  }
+	| {
+			type: "queue_update";
+			steer: Array<AgentMessage>;
+			follow_up: Array<AgentMessage>;
+	  }
+	| { type: "save_point"; had_pending_writes: boolean }
+	| { type: "settled" };

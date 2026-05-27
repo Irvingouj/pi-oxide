@@ -1,11 +1,13 @@
 import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
 export default defineConfig({
-  root: 'public',
+  plugins: [react()],
+  root: '.',
   envDir: '../',
   envPrefix: 'VITE_',
   build: {
-    outDir: '../dist',
+    outDir: 'dist',
   },
   server: {
     port: 5173,

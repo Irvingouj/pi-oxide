@@ -10,4 +10,13 @@ import type { WaitMode } from "./WaitMode";
 /**
  * Actions that the core requests the host to perform.
  */
-export type AgentAction = { "type": "stream_llm", context: LlmContext, session_id: SessionId | null, } | { "type": "execute_tools", calls: Array<ToolCall>, } | { "type": "cancel_tools", tool_call_ids: Array<ToolCallId>, reason: CancelReason, } | { "type": "wait_for_input", mode: WaitMode, } | { "type": "finished", messages: Array<AgentMessage>, };
+export type AgentAction =
+	| { type: "stream_llm"; context: LlmContext; session_id: SessionId | null }
+	| { type: "execute_tools"; calls: Array<ToolCall> }
+	| {
+			type: "cancel_tools";
+			tool_call_ids: Array<ToolCallId>;
+			reason: CancelReason;
+	  }
+	| { type: "wait_for_input"; mode: WaitMode }
+	| { type: "finished"; messages: Array<AgentMessage> };

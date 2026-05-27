@@ -7,4 +7,11 @@ import type { ToolRunMode } from "./ToolRunMode";
  * Metadata describing a tool available to the agent.
  * Hosts implement the actual execution; core only holds the schema.
  */
-export type ToolDefinition = { name: ToolName, label: string, description: string, parameters: object, execution_mode: ExecutionMode, tool_run_mode?: ToolRunMode, };
+export type ToolDefinition = {
+	name: ToolName;
+	label: string;
+	description: string;
+	parameters: object;
+	execution_mode: ExecutionMode;
+	tool_run_mode?: ToolRunMode;
+};

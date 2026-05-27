@@ -11,10 +11,10 @@ let initialized = false;
 
 /** Initialize the WASM module. Must be called before any other function. */
 export async function ensureInit(): Promise<void> {
-  if (!initialized) {
-    await init();
-    initialized = true;
-  }
+	if (!initialized) {
+		await init();
+		initialized = true;
+	}
 }
 
 /** Raw WASM exports — same shape as the Node rawBinding. */

@@ -7,4 +7,14 @@ import type { ToolDefinition } from "./ToolDefinition";
 /**
  * Public agent state.
  */
-export type AgentState = { system_prompt: string, model: Model, thinking_level: ThinkingLevel, tools: Array<ToolDefinition>, messages: Array<AgentMessage>, is_streaming: boolean, streaming_message: AgentMessage | null, pending_tool_calls: Array<string>, error_message: string | null, };
+export type AgentState = {
+	system_prompt: string;
+	model: Model;
+	thinking_level: ThinkingLevel;
+	tools: Array<ToolDefinition>;
+	messages: Array<AgentMessage>;
+	is_streaming: boolean;
+	streaming_message: AgentMessage | null;
+	pending_tool_calls: Array<string>;
+	error_message: string | null;
+};

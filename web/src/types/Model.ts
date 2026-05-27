@@ -9,4 +9,15 @@ import type { ProviderName } from "./ProviderName";
 /**
  * Describes a concrete LLM model and its provider.
  */
-export type Model = { id: ModelId, name: ModelName, api: ApiName, provider: ProviderName, base_url: string | null, reasoning: boolean, context_window: number, max_tokens: number, capabilities: ModelCapabilities, cost: ModelCost, };
+export type Model = {
+	id: ModelId;
+	name: ModelName;
+	api: ApiName;
+	provider: ProviderName;
+	base_url: string | null;
+	reasoning: boolean;
+	context_window: number;
+	max_tokens: number;
+	capabilities: ModelCapabilities;
+	cost: ModelCost;
+};

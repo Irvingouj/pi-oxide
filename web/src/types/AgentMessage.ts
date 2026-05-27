@@ -6,4 +6,7 @@ import type { UserMessage } from "./UserMessage";
 /**
  * Union of all message types visible to the core.
  */
-export type AgentMessage = { "role": "user" } & UserMessage | { "role": "assistant" } & AssistantMessage | { "role": "tool_result" } & ToolResultMessage;
+export type AgentMessage =
+	| ({ role: "user" } & UserMessage)
+	| ({ role: "assistant" } & AssistantMessage)
+	| ({ role: "tool_result" } & ToolResultMessage);

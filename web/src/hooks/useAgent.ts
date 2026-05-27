@@ -17,7 +17,7 @@ import {
 } from "../services/agentService.ts";
 import { createLlmProvider } from "../services/llmService.ts";
 import { runProjection } from "../services/projectionService.ts";
-import { createToolRegistry } from "../services/toolService.ts";
+import { BROWSER_TOOLS, createToolRegistry } from "../services/toolService.ts";
 import { useAgentStore } from "../stores/agentStore.ts";
 import { useSessionStore } from "../stores/sessionStore.ts";
 
@@ -67,7 +67,7 @@ function eventToStoreAction(
 				store.addMessage({
 					id: `steer-${Date.now()}`,
 					type: "steer",
-					text: `Steer queued: ${steer.length} message(s)`,
+					text: `Steer queued: ${event.steer.length} message(s)`,
 				});
 			}
 			break;
@@ -97,7 +97,11 @@ export function useAgent() {
 			await sessionStore.loadSession(SESSION_ID);
 			if (cancelled) return;
 
-			const a = await createAgent(SESSION_ID, sessionStore.restoredState);
+			const a = await createAgent(
+				SESSION_ID,
+				sessionStore.restoredState,
+				BROWSER_TOOLS,
+			);
 			if (cancelled) {
 				a.destroy();
 				return;

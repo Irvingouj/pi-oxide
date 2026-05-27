@@ -180,6 +180,9 @@ class DomRenderer {
       }
 
       case "message_end": {
+        if (this.currentTextDiv && !this.currentTextDiv.textContent) {
+          this.currentTextDiv.remove();
+        }
         this.currentTextDiv = null;
         break;
       }
@@ -269,9 +272,17 @@ export async function bootstrap(els: AppElements): Promise<{
   let restoredState: SessionState | undefined;
   try {
     const loaded = await sessionBackend.load(SESSION_ID);
-    if (loaded) {
+    if (loaded && Array.isArray((loaded as any).entries)) {
       restoredState = loaded;
       els.statusEl.textContent = "Session restored";
+    } else if (loaded) {
+      // Old/malformed state — clear it
+      console.warn("Session state missing entries field, clearing");
+      await sessionBackend.save(SESSION_ID, {
+        entries: [],
+        leaf_id: "",
+        name: "",
+      } as any);
     }
   } catch {
     // No previous session — start fresh

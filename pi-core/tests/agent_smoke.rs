@@ -1,7 +1,8 @@
 use pi_core::{
-    AgentAction, AgentEvent, AgentMessage, AgentOptions, AgentRuntime, AssistantMessage, Content,
-    ContentDelta, LlmChunk, LlmResult, Model, StopReason, ToolArguments, ToolCall, ToolCallId,
-    ToolName, ToolResult,
+    project, AgentAction, AgentEvent, AgentMessage, AgentOptions, AgentRuntime, AssistantMessage,
+    Content, ContentDelta, ContextProjectionBudget, ContextProjectionState, JsonSchema, LlmChunk,
+    LlmResult, Model, ProjectionInput, StopReason, ToolArguments, ToolCall, ToolCallId,
+    ToolDefinition, ToolExecutionUpdate, ToolName, ToolResult,
 };
 
 fn dummy_model() -> Model {
@@ -353,4 +354,509 @@ fn text_delta_is_incremental_not_accumulated() {
     assert!(actions
         .iter()
         .any(|a| matches!(a, AgentAction::Finished { .. })));
+}
+
+#[test]
+fn context_projection_integrates_with_state_machine() {
+    let mut options = dummy_options();
+    options.tools = vec![ToolDefinition {
+        name: ToolName::new("read"),
+        label: "read".into(),
+        description: "Read a file.".into(),
+        parameters: JsonSchema(serde_json::json!({})),
+        execution_mode: Default::default(),
+        tool_run_mode: Default::default(),
+    }];
+
+    let runtime = AgentRuntime::new(options);
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let t = idle.start_turn(AgentMessage::user("read file"));
+    let streaming = t.state;
+
+    // Finish LLM with a tool call
+    let transition =
+        streaming.finish_llm(LlmResult::Ok(assistant_with_tool_calls(vec![tool_call(
+            "call-1", "read",
+        )])));
+    let (_events, _actions, runtime) = transition.into_parts();
+
+    let AgentRuntime::WaitingTools(waiting) = runtime else {
+        panic!("expected WaitingTools");
+    };
+
+    // Submit a long tool result (longer than Head strategy's 2000-char limit for 'read')
+    let long_result = "a".repeat(3000);
+    let transition =
+        waiting.on_tool_done(ToolCallId::new("call-1"), Ok(ToolResult::text(long_result)));
+    let (_events, _actions, runtime) = transition.into_parts();
+
+    let AgentRuntime::ReadyToContinue(ready) = runtime else {
+        panic!("expected ReadyToContinue");
+    };
+    let t = ready.continue_turn();
+
+    // Extract LlmContext from the StreamLlm action
+    let context = match &t.actions[0] {
+        AgentAction::StreamLlm { context, .. } => context.clone(),
+        other => panic!("expected StreamLlm, got {other:?}"),
+    };
+
+    // Context should include user, assistant, and tool_result messages
+    assert_eq!(context.messages.len(), 3);
+
+    // Project with a tight budget to force tool-result budgeting
+    let projection = project(ProjectionInput {
+        system_prompt: context.system_prompt.clone(),
+        messages: context.messages.clone(),
+        budget: ContextProjectionBudget {
+            max_tool_result_chars: 100,
+            max_context_tokens: 1000,
+            default_preview_chars: 50,
+            microcompact_after_turns: 5,
+            compaction_threshold: 0.75,
+        },
+        state: ContextProjectionState::default(),
+    });
+
+    // Short context should not drop any messages
+    assert_eq!(projection.report.dropped_messages, 0);
+
+    // The tool result should be budgeted (previewed to Head max_chars 2000 + marker overhead)
+    let tool_result_msg = projection
+        .projected_messages
+        .iter()
+        .find_map(|m| match m {
+            AgentMessage::ToolResult(tr) => Some(tr),
+            _ => None,
+        })
+        .expect("projected messages should contain tool result");
+
+    let result_text = tool_result_msg
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Text(t) => Some(t.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    assert!(
+        result_text.len() < 3000,
+        "tool result should be budgeted, got {} chars",
+        result_text.len()
+    );
+    assert!(
+        result_text.contains("Preview:"),
+        "budgeted result should contain preview marker"
+    );
+
+    // Token estimate should be positive
+    assert!(projection.report.estimated_tokens > 0);
+}
+
+#[test]
+fn tool_done_unknown_id_is_noop() {
+    let runtime = AgentRuntime::new(dummy_options());
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let t = idle.start_turn(AgentMessage::user("use tools"));
+    let streaming = t.state;
+
+    let transition =
+        streaming.finish_llm(LlmResult::Ok(assistant_with_tool_calls(vec![tool_call(
+            "call-1", "read",
+        )])));
+    let (_events, _actions, runtime) = transition.into_parts();
+
+    let AgentRuntime::WaitingTools(waiting) = runtime else {
+        panic!("expected WaitingTools");
+    };
+
+    // Submit result for a different tool call ID
+    let transition = waiting.on_tool_done(
+        ToolCallId::new("unknown-call"),
+        Ok(ToolResult::text("result")),
+    );
+    let (_events, _actions, runtime) = transition.into_parts();
+
+    // Should still be WaitingTools with the original pending call
+    assert!(
+        matches!(runtime, AgentRuntime::WaitingTools(_)),
+        "unknown tool call id should not change phase"
+    );
+    assert_eq!(runtime.state().pending_tool_calls, vec!["call-1"]);
+}
+
+#[test]
+fn context_projection_keep_full_bypass() {
+    let mut options = dummy_options();
+    options.tools = vec![ToolDefinition {
+        name: ToolName::new("edit"),
+        label: "edit".into(),
+        description: "Edit a file.".into(),
+        parameters: JsonSchema(serde_json::json!({})),
+        execution_mode: Default::default(),
+        tool_run_mode: Default::default(),
+    }];
+
+    let runtime = AgentRuntime::new(options);
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let t = idle.start_turn(AgentMessage::user("edit file"));
+    let streaming = t.state;
+
+    let transition =
+        streaming.finish_llm(LlmResult::Ok(assistant_with_tool_calls(vec![tool_call(
+            "call-1", "edit",
+        )])));
+    let (_events, _actions, runtime) = transition.into_parts();
+
+    let AgentRuntime::WaitingTools(waiting) = runtime else {
+        panic!("expected WaitingTools");
+    };
+
+    // edit uses KeepFull strategy — a moderately large result should stay inline
+    let large_result = "x".repeat(300);
+    let transition = waiting.on_tool_done(
+        ToolCallId::new("call-1"),
+        Ok(ToolResult::text(large_result)),
+    );
+    let (_events, _actions, runtime) = transition.into_parts();
+
+    let AgentRuntime::ReadyToContinue(ready) = runtime else {
+        panic!("expected ReadyToContinue");
+    };
+    let t = ready.continue_turn();
+
+    let context = match &t.actions[0] {
+        AgentAction::StreamLlm { context, .. } => context.clone(),
+        other => panic!("expected StreamLlm, got {other:?}"),
+    };
+
+    let projection = project(ProjectionInput {
+        system_prompt: context.system_prompt.clone(),
+        messages: context.messages.clone(),
+        budget: ContextProjectionBudget {
+            max_tool_result_chars: 100,
+            max_context_tokens: 5000,
+            default_preview_chars: 50,
+            microcompact_after_turns: 5,
+            compaction_threshold: 0.75,
+        },
+        state: ContextProjectionState::default(),
+    });
+
+    let tool_result_msg = projection
+        .projected_messages
+        .iter()
+        .find_map(|m| match m {
+            AgentMessage::ToolResult(tr) => Some(tr),
+            _ => None,
+        })
+        .expect("projected messages should contain tool result");
+
+    let result_text = tool_result_msg
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Text(t) => Some(t.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    // KeepFull means the full text is preserved inline, not replaced with a preview marker
+    assert!(
+        !result_text.contains("Preview:"),
+        "KeepFull strategy should not insert preview marker, got: {result_text:.100}..."
+    );
+    assert!(
+        result_text.len() >= 300,
+        "KeepFull should preserve full result, got {} chars",
+        result_text.len()
+    );
+}
+
+#[test]
+fn agent_runtime_delegation_exercise() {
+    let mut runtime = AgentRuntime::new(dummy_options());
+
+    // Idle — exercise state, session_state, set_session_state, on_tool_started, on_tool_update
+    assert!(!runtime.state().is_streaming);
+    let mut state = runtime.session_state().clone();
+    state.name = "test-session".into();
+    runtime.set_session_state(state);
+    assert_eq!(runtime.session_state().name, "test-session");
+    assert!(runtime.on_tool_started(ToolCallId::new("x")).is_empty());
+    assert!(runtime
+        .on_tool_update(ToolExecutionUpdate {
+            tool_call_id: ToolCallId::new("x"),
+            stream: pi_core::ToolOutputStream::Stdout,
+            chunk: "test".into(),
+            sequence: 0,
+            timestamp: 0,
+        })
+        .is_empty());
+
+    // Streaming
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let t = idle.start_turn(AgentMessage::user("hello"));
+    runtime = t.state.into_runtime();
+    assert!(runtime.state().is_streaming);
+    assert!(runtime.on_tool_started(ToolCallId::new("x")).is_empty());
+
+    // WaitingTools — on_tool_started should emit event for pending tool
+    let AgentRuntime::Streaming(streaming) = runtime else {
+        panic!("expected Streaming");
+    };
+    let transition =
+        streaming.finish_llm(LlmResult::Ok(assistant_with_tool_calls(vec![tool_call(
+            "call-1", "read",
+        )])));
+    runtime = transition.into_parts().2;
+    assert!(!runtime.state().is_streaming);
+
+    let events = runtime.on_tool_started(ToolCallId::new("call-1"));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolExecutionUpdate { .. })),
+        "on_tool_started for pending tool should emit ToolExecutionUpdate"
+    );
+
+    // ReadyToContinue — state_mut should work
+    let AgentRuntime::WaitingTools(waiting) = runtime else {
+        panic!("expected WaitingTools");
+    };
+    let transition = waiting.on_tool_done(ToolCallId::new("call-1"), Ok(ToolResult::text("ok")));
+    runtime = transition.into_parts().2;
+    assert!(matches!(runtime, AgentRuntime::ReadyToContinue(_)));
+    runtime.state_mut().model.id = "changed".into();
+    assert_eq!(runtime.state().model.id.as_str(), "changed");
+
+    // Finished
+    let AgentRuntime::ReadyToContinue(ready) = runtime else {
+        panic!("expected ReadyToContinue");
+    };
+    let t = ready.continue_turn();
+    let streaming = t.state;
+    let transition = streaming.finish_llm(LlmResult::done());
+    runtime = transition.into_parts().2;
+    assert!(matches!(runtime, AgentRuntime::Finished(_)));
+    assert!(!runtime.state().is_streaming);
+
+    // Aborted
+    let AgentRuntime::Finished(finished) = runtime else {
+        panic!("expected Finished");
+    };
+    let t = finished.restart();
+    runtime = t.state.into_runtime();
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let t = idle.start_turn(AgentMessage::user("hello"));
+    let streaming = t.state;
+    let transition = streaming.abort();
+    runtime = transition.state.into_runtime();
+    assert!(matches!(runtime, AgentRuntime::Aborted(_)));
+    assert!(!runtime.state().is_streaming);
+}
+
+#[test]
+fn abort_during_streaming_clears_queues_and_emits_agent_end() {
+    let mut runtime = AgentRuntime::new(dummy_options());
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let t = idle.start_turn(AgentMessage::user("hello"));
+    let mut streaming = t.state;
+
+    // Feed a partial chunk so messages contain a streaming assistant
+    streaming.feed_llm_chunk(LlmChunk::Start {
+        partial: AssistantMessage::empty(),
+    });
+    let ev = streaming.feed_llm_chunk(LlmChunk::TextDelta {
+        text: "partial".into(),
+    });
+    assert!(
+        ev.iter().any(|e| matches!(e, AgentEvent::MessageUpdate { .. })),
+        "feeding a chunk should emit MessageUpdate"
+    );
+
+    let transition = streaming.abort();
+    let events = transition.events;
+    runtime = transition.state.into_runtime();
+
+    assert!(matches!(runtime, AgentRuntime::Aborted(_)));
+    assert!(!runtime.state().is_streaming);
+    assert!(
+        events.iter().any(|e| matches!(e, AgentEvent::AgentEnd { .. })),
+        "abort should emit AgentEnd"
+    );
+    // Partial message remains in transcript
+    assert_eq!(runtime.state().messages.len(), 2, "user + partial assistant");
+}
+
+#[test]
+fn abort_from_waiting_tools_clears_pending_tools() {
+    let tool = ToolDefinition {
+        name: ToolName::new("test_tool"),
+        label: "Test".into(),
+        description: "A test tool.".into(),
+        parameters: JsonSchema::new(serde_json::json!({})),
+        execution_mode: Default::default(),
+        tool_run_mode: Default::default(),
+    };
+    let mut options = dummy_options();
+    options.tools = vec![tool];
+    let mut runtime = AgentRuntime::new(options);
+
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let t = idle.start_turn(AgentMessage::user("run tool"));
+    let streaming = t.state;
+
+    let assistant = assistant_with_tool_calls(vec![tool_call("tc-1", "test_tool")]);
+    let transition = streaming.finish_llm(LlmResult::Ok(assistant));
+    runtime = transition.into_parts().2;
+    assert!(matches!(runtime, AgentRuntime::WaitingTools(_)));
+    assert_eq!(runtime.state().pending_tool_calls.len(), 1);
+
+    let AgentRuntime::WaitingTools(waiting) = runtime else {
+        panic!("expected WaitingTools");
+    };
+    let transition = waiting.abort();
+    runtime = transition.state.into_runtime();
+
+    assert!(matches!(runtime, AgentRuntime::Aborted(_)));
+    assert!(
+        runtime.state().pending_tool_calls.is_empty(),
+        "abort should clear pending tool calls"
+    );
+    assert!(!runtime.state().is_streaming);
+    assert!(
+        transition.events.iter().any(|e| matches!(e, AgentEvent::AgentEnd { .. })),
+        "abort should emit AgentEnd"
+    );
+}
+
+#[test]
+fn steer_in_idle_queues_message_and_emits_queue_update() {
+    let mut runtime = AgentRuntime::new(dummy_options());
+    let AgentRuntime::Idle(mut idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let events = idle.steer(AgentMessage::user(" steer me"));
+    assert!(
+        events.iter().any(|e| matches!(e, AgentEvent::QueueUpdate { .. })),
+        "steer should emit QueueUpdate"
+    );
+    runtime = idle.into_runtime();
+    assert!(matches!(runtime, AgentRuntime::Idle(_)));
+}
+
+#[test]
+fn steer_in_ready_to_continue_is_drained_on_next_turn() {
+    let mut runtime = AgentRuntime::new(dummy_options());
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let t = idle.start_turn(AgentMessage::user("hello"));
+    let streaming = t.state;
+
+    // Finish LLM with a tool call so we land in WaitingTools
+    let transition = streaming.finish_llm(LlmResult::Ok(assistant_with_tool_calls(vec![
+        tool_call("tc-1", "test_tool"),
+    ])));
+    runtime = transition.into_parts().2;
+    assert!(matches!(runtime, AgentRuntime::WaitingTools(_)));
+
+    // Complete the tool to reach ReadyToContinue
+    let AgentRuntime::WaitingTools(waiting) = runtime else {
+        panic!("expected WaitingTools");
+    };
+    let transition = waiting.on_tool_done(ToolCallId::new("tc-1"), Ok(ToolResult::text("ok")));
+    runtime = transition.into_parts().2;
+    assert!(matches!(runtime, AgentRuntime::ReadyToContinue(_)));
+
+    let AgentRuntime::ReadyToContinue(mut ready) = runtime else {
+        panic!("expected ReadyToContinue");
+    };
+    let steer_events = ready.steer(AgentMessage::user("steer while ready"));
+    assert!(
+        steer_events.iter().any(|e| matches!(e, AgentEvent::QueueUpdate { .. })),
+        "steer in ReadyToContinue should emit QueueUpdate"
+    );
+
+    // continue_turn drains steering and starts a new stream
+    let t = ready.continue_turn();
+    let next_streaming = t.state;
+    let transition = next_streaming.finish_llm(LlmResult::done());
+    runtime = transition.into_parts().2;
+
+    // After continuing, the steer message should have been drained into messages
+    assert!(
+        runtime.state().messages.iter().any(|m| {
+            if let AgentMessage::User(u) = m {
+                u.content.iter().any(|c| {
+                    if let Content::Text(t) = c { t.text.contains("steer while ready") } else { false }
+                })
+            } else { false }
+        }),
+        "steer message should appear in transcript after continue_turn"
+    );
+}
+
+#[test]
+fn cancel_tool_removes_pending_and_emits_cancellation() {
+    let tool = ToolDefinition {
+        name: ToolName::new("test_tool"),
+        label: "Test".into(),
+        description: "A test tool.".into(),
+        parameters: JsonSchema::new(serde_json::json!({})),
+        execution_mode: Default::default(),
+        tool_run_mode: Default::default(),
+    };
+    let mut options = dummy_options();
+    options.tools = vec![tool];
+    let mut runtime = AgentRuntime::new(options);
+
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let t = idle.start_turn(AgentMessage::user("run tool"));
+    let streaming = t.state;
+
+    let assistant = assistant_with_tool_calls(vec![tool_call("tc-1", "test_tool")]);
+    let transition = streaming.finish_llm(LlmResult::Ok(assistant));
+    runtime = transition.into_parts().2;
+    assert!(matches!(runtime, AgentRuntime::WaitingTools(_)));
+    assert_eq!(runtime.state().pending_tool_calls.len(), 1);
+
+    let AgentRuntime::WaitingTools(waiting) = runtime else {
+        panic!("expected WaitingTools");
+    };
+    let transition = waiting.cancel_tool(
+        ToolCallId::new("tc-1"),
+        pi_core::CancelReason::UserRequested,
+    );
+    let (events, _actions, new_runtime) = transition.into_parts();
+
+    assert!(
+        events.iter().any(|e| matches!(e, AgentEvent::ToolExecutionCancelled { .. })),
+        "cancel_tool should emit ToolExecutionCancelled"
+    );
+    assert!(
+        matches!(new_runtime, AgentRuntime::ReadyToContinue(_) | AgentRuntime::Idle(_)),
+        "canceling the only pending tool should leave ReadyToContinue or Idle"
+    );
+    assert!(new_runtime.state().pending_tool_calls.is_empty());
 }

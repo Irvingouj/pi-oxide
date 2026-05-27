@@ -39,8 +39,12 @@ function runProjection(systemPrompt: string, messages: unknown[]): unknown[] {
       budget: projectionBudget,
       state: projectionState,
     });
-    projectionState = result.updated_state;
-    return result.projected_messages;
+    if (!result.ok) {
+      console.warn("projection error:", result.error);
+      return messages;
+    }
+    projectionState = result.data.updated_state;
+    return result.data.projected_messages;
   } catch (e) {
     console.warn("projection error:", e);
     return messages;
@@ -84,6 +88,7 @@ interface BrowserLlmResponse {
 
 async function* buildStreamingChunks(
   data: BrowserLlmResponse,
+  signal?: AbortSignal,
 ): AsyncGenerator<LlmChunk> {
   // Start chunk
   yield {
@@ -92,7 +97,7 @@ async function* buildStreamingChunks(
     api: "anthropic",
     provider: "anthropic",
     model: "browser-model",
-    stop_reason: "end_turn",
+    stop_reason: data.stop_reason,
     error_message: null,
     timestamp: Date.now(),
     usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },
@@ -104,6 +109,7 @@ async function* buildStreamingChunks(
       const words = block.text.split(/(\s+)/);
       for (const word of words) {
         if (word) {
+          if (signal?.aborted) return;
           yield { kind: "text_delta", text: word };
           await new Promise((r) => setTimeout(r, 15));
         }
@@ -179,24 +185,44 @@ class DomRenderer {
       }
 
       case "tool_execution_start": {
-        const toolDiv = addMsg(
-          this.chatContainer,
-          "tool",
-          `<span class="tool-name">${(event as any).tool_name}</span> <span class="tool-id">${(event as any).tool_call_id}</span>`,
-        );
-        this.toolCards.set((event as any).tool_call_id, toolDiv);
+        const toolDiv = document.createElement("div");
+        toolDiv.className = "msg msg-tool";
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "tool-name";
+        nameSpan.textContent = event.tool_name;
+        const idSpan = document.createElement("span");
+        idSpan.className = "tool-id";
+        idSpan.textContent = event.tool_call_id;
+        toolDiv.appendChild(nameSpan);
+        toolDiv.appendChild(document.createTextNode(" "));
+        toolDiv.appendChild(idSpan);
+        this.chatContainer.appendChild(toolDiv);
+        this.chatContainer.scrollTop = this.chatContainer.scrollHeight;
+        this.toolCards.set(event.tool_call_id, toolDiv);
         break;
       }
 
       case "tool_execution_end": {
-        const toolDiv = this.toolCards.get((event as any).tool_call_id);
-        const result = (event as any).result as { content?: Array<{ text?: string }> };
+        const toolDiv = this.toolCards.get(event.tool_call_id);
+        const result = event.result as { content?: Array<{ text?: string }> };
         const text = result.content?.map((c) => c.text).join("\n") ?? "";
         if (toolDiv) {
           const resultDiv = document.createElement("div");
           resultDiv.className = "tool-result";
           resultDiv.textContent = text.slice(0, 500);
           toolDiv.appendChild(resultDiv);
+        }
+        break;
+      }
+
+      case "queue_update": {
+        const steer = (event as any).steer as string[] | undefined;
+        if (steer && steer.length > 0) {
+          const steerDiv = document.createElement("div");
+          steerDiv.className = "msg msg-steer";
+          steerDiv.textContent = `Steer queued: ${steer.length} message(s)`;
+          this.chatContainer.appendChild(steerDiv);
+          this.chatContainer.scrollTop = this.chatContainer.scrollHeight;
         }
         break;
       }
@@ -216,6 +242,8 @@ export interface AppElements {
   chatContainer: HTMLElement;
   userInput: HTMLTextAreaElement;
   sendBtn: HTMLButtonElement;
+  stopBtn: HTMLButtonElement;
+  steerBtn: HTMLButtonElement;
   statusEl: HTMLElement;
 }
 
@@ -223,6 +251,8 @@ const SESSION_ID = "browser-default-session";
 
 export async function bootstrap(els: AppElements): Promise<{
   sendPrompt: (text: string) => Promise<void>;
+  steerPrompt: (text: string) => Promise<void>;
+  stopPrompt: () => void;
 }> {
   initEnvDefaults();
 
@@ -270,18 +300,31 @@ export async function bootstrap(els: AppElements): Promise<{
   els.sendBtn.disabled = false;
 
   let running = false;
+  let abortController: AbortController | null = null;
+
+  function setRunningUI(active: boolean) {
+    running = active;
+    els.sendBtn.disabled = active;
+    els.stopBtn.style.display = active ? "inline-block" : "none";
+    els.steerBtn.style.display = active ? "inline-block" : "none";
+    if (!active) {
+      abortController = null;
+    }
+  }
 
   async function sendPrompt(text: string): Promise<void> {
     if (running || !text.trim()) return;
-    running = true;
-    els.sendBtn.disabled = true;
+    els.userInput.value = "";
+    setRunningUI(true);
 
     addText(els.chatContainer, "user", text);
+
+    abortController = new AbortController();
 
     try {
       await agent.run(text, {
         llm: {
-          async call(context) {
+          async call(context, signal) {
             const projected = runProjection(
               context.system_prompt,
               context.messages as unknown[],
@@ -290,28 +333,40 @@ export async function bootstrap(els: AppElements): Promise<{
               context.system_prompt,
               projected as Parameters<typeof callLlm>[1],
               context.tools as Parameters<typeof callLlm>[2],
+              signal,
             );
             return {
-              chunks: buildStreamingChunks(data),
+              chunks: buildStreamingChunks(data, signal),
               result: Promise.resolve(buildLlmResult(data) as any),
             };
           },
         },
-        tools: {
-          async [BROWSER_TOOLS[0].name](call: any) {
-            const result = executeBrowserTool(call, runtime);
-            if ("error" in result && result.error) {
-              return { error: result.error };
-            }
-            return toolResult(JSON.stringify(result, null, 2).slice(0, 500));
-          },
-        },
+        tools: Object.fromEntries(
+          BROWSER_TOOLS.map((t) => [
+            t.name,
+            async (call: any) => {
+              const result = executeBrowserTool(call, runtime);
+              if ("error" in result && result.error) {
+                return { error: result.error };
+              }
+              return toolResult(JSON.stringify(result, null, 2).slice(0, 500));
+            },
+          ])
+        ),
         onEvent: (event) => renderer.onEvent(event),
+        signal: abortController.signal,
       });
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      addText(els.chatContainer, "error", `Error: ${msg}`);
-      els.sendBtn.disabled = false;
+      const isUserAbort = (e as any).code === "user_aborted" ||
+        (e instanceof DOMException && e.name === "AbortError");
+      if (isUserAbort) {
+        addText(els.chatContainer, "assistant", "Stopped by user.");
+      } else {
+        const msg = e instanceof Error ? e.message : String(e);
+        addText(els.chatContainer, "error", `Error: ${msg}`);
+      }
+    } finally {
+      setRunningUI(false);
     }
 
     // Persist session state after the turn completes
@@ -321,9 +376,28 @@ export async function bootstrap(els: AppElements): Promise<{
     } catch (e) {
       console.warn("session save failed:", e);
     }
-
-    running = false;
   }
 
-  return { sendPrompt };
+  async function steerPrompt(text: string): Promise<void> {
+    if (!running || !text.trim()) return;
+    try {
+      const events = agent.steer({
+        role: "user",
+        content: [{ type: "text", text }],
+        timestamp: Date.now(),
+      });
+      for (const event of events) {
+        renderer.onEvent(event as any);
+      }
+      els.userInput.value = "";
+    } catch (e: unknown) {
+      console.warn("steer failed:", e);
+    }
+  }
+
+  function stopPrompt(): void {
+    abortController?.abort("user-requested");
+  }
+
+  return { sendPrompt, steerPrompt, stopPrompt };
 }

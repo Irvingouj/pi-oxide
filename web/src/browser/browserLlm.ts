@@ -88,6 +88,7 @@ export async function callLlm(
   systemPrompt: string,
   messages: AgentMessage[],
   tools: Array<{ name: string; label: string; description: string; parameters: unknown }>,
+  signal?: AbortSignal,
 ): Promise<LlmResponse> {
   const apiKey = getApiKey();
   const baseUrl = getApiBaseUrl();
@@ -120,6 +121,7 @@ export async function callLlm(
     method: "POST",
     headers,
     body: JSON.stringify(body),
+    signal,
   });
 
   if (!resp.ok) {

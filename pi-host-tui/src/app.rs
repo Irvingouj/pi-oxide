@@ -2,24 +2,19 @@ use std::path::Path;
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{
-    Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState, Wrap,
-};
+use ratatui::layout::{Constraint, Layout};
+use ratatui::text::Text;
+use ratatui::widgets::ListState;
 use ratatui::Frame;
 
 use pi_core::{
-    project, AgentAction, AgentMessage, AgentRuntime, Content, ContextProjectionBudget,
-    ContextProjectionState, LlmChunk, LlmContext, LlmResult, Model, ProjectionInput, ToolCall,
-    ToolTransition, UserInputDuringTools, WaitMode,
+    AgentAction, AgentMessage, AgentOptions, AgentRuntime, ApiName, ContextProjectionBudget,
+    ContextProjectionState, Model, ModelId, ModelName, ProviderName, QueueMode, SessionId,
+    SessionState, ThinkingLevel, ToolCallId, ToolExecutionMode, WaitMode,
 };
 
-use crate::extension::{BashExtension, BuiltinExtension, Extension, ExtensionContext, ToolEvent};
+use crate::extension::{BashExtension, BuiltinExtension, Extension};
 use crate::llm::LlmClient;
-use crate::markdown;
 use crate::session::FileSystemSessionBackend;
 
 // ---------------------------------------------------------------------------
@@ -43,7 +38,7 @@ const COMMANDS: &[&str] = &[
 // ---------------------------------------------------------------------------
 
 #[allow(dead_code)]
-enum ChatEntry {
+pub(crate) enum ChatEntry {
     User(String),
     Assistant(Text<'static>),
     ToolStart {
@@ -64,55 +59,54 @@ enum ChatEntry {
 // ---------------------------------------------------------------------------
 
 pub struct App {
-    agent: Option<AgentRuntime>,
-    entries: Vec<ChatEntry>,
-    input: String,
-    cursor_pos: usize,
-    scroll_offset: u16,
-    auto_scroll: bool,
-    should_quit: bool,
-    running: bool,
-    streaming_text: String,
+    pub(crate) agent: Option<AgentRuntime>,
+    pub(crate) entries: Vec<ChatEntry>,
+    pub(crate) input: String,
+    pub(crate) cursor_pos: usize,
+    pub(crate) scroll_offset: u16,
+    pub(crate) auto_scroll: bool,
+    pub(crate) should_quit: bool,
+    pub(crate) running: bool,
+    pub(crate) streaming_text: String,
     #[allow(dead_code)]
-    current_tools: Vec<(String, String)>,
-    llm_client: LlmClient,
-    projection_state: ContextProjectionState,
-    budget: ContextProjectionBudget,
-    last_usage: Option<(u32, u32, u32)>,
-    session_id: Option<String>,
-    session_backend: FileSystemSessionBackend,
-    cwd: std::path::PathBuf,
+    pub(crate) current_tools: Vec<(String, String)>,
+    pub(crate) llm_client: LlmClient,
+    pub(crate) projection_state: ContextProjectionState,
+    pub(crate) budget: ContextProjectionBudget,
+    pub(crate) last_usage: Option<(u32, u32, u32)>,
+    pub(crate) session_id: Option<String>,
+    pub(crate) session_backend: FileSystemSessionBackend,
+    pub(crate) cwd: std::path::PathBuf,
 
     // New: cancellation
-    cancelled: bool,
+    pub(crate) cancelled: bool,
 
     // New: history recall
-    history: Vec<String>,
-    history_index: Option<usize>,
-    original_input: String,
+    pub(crate) history: Vec<String>,
+    pub(crate) history_index: Option<usize>,
+    pub(crate) original_input: String,
 
     // New: command autocomplete
-    suggestions: Vec<String>,
-    show_suggestions: bool,
-    suggestion_state: ListState,
+    pub(crate) suggestions: Vec<String>,
+    pub(crate) show_suggestions: bool,
+    pub(crate) suggestion_state: ListState,
 
     // Extension-based tool execution
-    extensions: Vec<Box<dyn Extension>>,
-    running_tasks: Vec<RunningTask>,
+    pub(crate) extensions: Vec<Box<dyn Extension>>,
+    pub(crate) running_tasks: Vec<RunningTask>,
 }
 
-struct RunningTask {
-    tool_call_id: pi_core::ToolCallId,
-    tool_name: String,
-    stream: Box<dyn crate::extension::ToolEventStream>,
+pub(crate) struct RunningTask {
+    pub(crate) tool_call_id: ToolCallId,
+    pub(crate) stream: Box<dyn crate::extension::ToolEventStream>,
 }
 
 impl App {
-    fn agent(&self) -> &AgentRuntime {
+    pub(crate) fn agent(&self) -> &AgentRuntime {
         self.agent.as_ref().unwrap()
     }
 
-    fn agent_mut(&mut self) -> &mut AgentRuntime {
+    pub(crate) fn agent_mut(&mut self) -> &mut AgentRuntime {
         self.agent.as_mut().unwrap()
     }
 
@@ -122,14 +116,14 @@ impl App {
         api_key: &str,
         base_url: &str,
         session_id: Option<String>,
-        session_state: Option<pi_core::SessionState>,
+        session_state: Option<SessionState>,
         cwd: &Path,
     ) -> Self {
         let model = Model {
-            id: pi_core::ModelId::new(model_id),
-            name: pi_core::ModelName::new(model_id),
-            api: pi_core::ApiName::new("anthropic"),
-            provider: pi_core::ProviderName::new("anthropic"),
+            id: ModelId::new(model_id),
+            name: ModelName::new(model_id),
+            api: ApiName::new("anthropic"),
+            provider: ProviderName::new("anthropic"),
             base_url: Some(base_url.to_string()),
             reasoning: false,
             context_window: 200_000,
@@ -146,15 +140,15 @@ impl App {
         for ext in &extensions {
             tool_defs.extend(ext.tools());
         }
-        let agent = AgentRuntime::new(pi_core::AgentOptions {
+        let agent = AgentRuntime::new(AgentOptions {
             system_prompt: system_prompt.to_string(),
             model,
             tools: tool_defs,
-            thinking_level: pi_core::ThinkingLevel::Off,
-            steering_mode: pi_core::QueueMode::OneAtATime,
-            follow_up_mode: pi_core::QueueMode::OneAtATime,
-            tool_execution_mode: pi_core::ToolExecutionMode::Parallel,
-            session_id: session_id.as_ref().map(|id| pi_core::SessionId::new(id)),
+            thinking_level: ThinkingLevel::Off,
+            steering_mode: QueueMode::OneAtATime,
+            follow_up_mode: QueueMode::OneAtATime,
+            tool_execution_mode: ToolExecutionMode::Parallel,
+            session_id: session_id.as_ref().map(SessionId::new),
             messages: Vec::new(),
             session_state,
         });
@@ -487,8 +481,8 @@ impl App {
                 if parts.len() >= 2 {
                     let model_id = parts[1];
                     self.llm_client.set_model(model_id);
-                    self.agent_mut().state_mut().model.id = pi_core::ModelId::new(model_id);
-                    self.agent_mut().state_mut().model.name = pi_core::ModelName::new(model_id);
+                    self.agent_mut().state_mut().model.id = ModelId::new(model_id);
+                    self.agent_mut().state_mut().model.name = ModelName::new(model_id);
                     self.entries
                         .push(ChatEntry::System(format!("Model switched to {model_id}")));
                 } else {
@@ -514,6 +508,9 @@ impl App {
                                 let agent = self.agent.take().unwrap().reset();
                                 self.agent = Some(agent);
                                 self.agent_mut().set_session_state(state);
+                                // Rebuild messages from the loaded session tree so the LLM sees the full transcript
+                                let messages = self.agent().session_state().build_context();
+                                self.agent_mut().state_mut().messages = messages;
                                 self.session_id = Some(id.to_string());
                                 self.entries.clear();
                                 self.entries
@@ -558,13 +555,17 @@ impl App {
                 }
             }
             "/undo" => {
-                let msgs = &self.agent_mut().state().messages;
+                let msgs = &self.agent_mut().state().messages.clone();
                 if let Some(last_user_idx) = msgs
                     .iter()
-                    .rposition(|m| matches!(m, pi_core::AgentMessage::User(_)))
+                    .rposition(|m| matches!(m, AgentMessage::User(_)))
                 {
                     let new_len = last_user_idx;
                     self.agent_mut().state_mut().messages.truncate(new_len);
+                    // Rebuild session tree from truncated messages so it stays in sync
+                    let truncated = self.agent().state().messages.clone();
+                    self.agent_mut()
+                        .set_session_state(pi_core::SessionState::from_messages(&truncated));
                     // Also truncate entries to remove the last user+assistant+tools round
                     if let Some(last_user_entry) = self
                         .entries
@@ -590,7 +591,7 @@ impl App {
         let _ = terminal.draw(|f| self.render(f));
     }
 
-    fn handle_actions(
+    pub(crate) fn handle_actions(
         &mut self,
         terminal: &mut ratatui::DefaultTerminal,
         actions: Vec<AgentAction>,
@@ -632,408 +633,11 @@ impl App {
         }
     }
 
-    fn stream_llm(&mut self, terminal: &mut ratatui::DefaultTerminal, context: LlmContext) {
-        let projected = project(ProjectionInput {
-            system_prompt: context.system_prompt.clone(),
-            messages: context.messages.clone(),
-            budget: self.budget.clone(),
-            state: self.projection_state.clone(),
-        });
-        self.projection_state = projected.updated_state;
-        let projected_messages = projected.projected_messages;
-
-        self.entries.push(ChatEntry::Assistant(Text::raw("...")));
-        self.streaming_text.clear();
-        let _ = terminal.draw(|f| self.render(f));
-
-        match self.llm_client.stream_sync(
-            &context.system_prompt,
-            &projected_messages,
-            &context.tools,
-        ) {
-            Ok(mut stream) => {
-                let mut full_text = String::new();
-
-                for chunk in stream.by_ref() {
-                    // Cooperative cancellation: poll keyboard without blocking
-                    if crossterm::event::poll(Duration::from_millis(0)).unwrap_or(false) {
-                        if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
-                            if key.kind == KeyEventKind::Press {
-                                if key.code == KeyCode::Char('c')
-                                    && key.modifiers.contains(KeyModifiers::CONTROL)
-                                {
-                                    self.cancelled = true;
-                                } else if key.code == KeyCode::Esc {
-                                    self.should_quit = true;
-                                    self.cancelled = true;
-                                }
-                            }
-                        }
-                    }
-                    if self.cancelled {
-                        let runtime = self.agent.take().unwrap();
-                        let (_events, new_runtime) = match runtime {
-                            AgentRuntime::Streaming(streaming) => {
-                                let t = streaming.abort();
-                                (t.events, t.state.into_runtime())
-                            }
-                            other => (vec![], other),
-                        };
-                        self.agent = Some(new_runtime);
-                        self.running = false;
-                        self.entries.push(ChatEntry::System("Cancelled.".into()));
-                        let _ = terminal.draw(|f| self.render(f));
-                        return;
-                    }
-                    match chunk {
-                        LlmChunk::TextDelta { text } => {
-                            full_text.push_str(&text);
-                            self.streaming_text = full_text.clone();
-                            if let Some(ChatEntry::Assistant(_)) = self.entries.last() {
-                                let rendered = markdown::render(&full_text, 80);
-                                *self.entries.last_mut().unwrap() = ChatEntry::Assistant(rendered);
-                            }
-                        }
-                        LlmChunk::Done => break,
-                        LlmChunk::Error { message } => {
-                            self.entries
-                                .push(ChatEntry::System(format!("LLM Error: {message}")));
-                            break;
-                        }
-                        _ => {}
-                    }
-                    let _ = terminal.draw(|f| self.render(f));
-                }
-
-                let usage = stream.usage();
-                if let Some((input, output, total)) = usage {
-                    self.last_usage = Some((input, output, total));
-                    self.projection_state.last_api_usage = Some(pi_core::ApiUsageSnapshot {
-                        estimated_tokens: projected.report.estimated_tokens,
-                        actual_input_tokens: input as usize,
-                    });
-                }
-
-                let stop_reason = stream.stop_reason().unwrap_or("end_turn");
-
-                let tool_use_blocks: Vec<Content> = stream
-                    .tool_calls()
-                    .into_iter()
-                    .map(|tc| {
-                        Content::ToolCall(pi_core::ToolCall {
-                            id: pi_core::ToolCallId::new(&tc.id),
-                            name: pi_core::ToolName::new(&tc.name),
-                            arguments: pi_core::ToolArguments::new(tc.input),
-                        })
-                    })
-                    .collect();
-
-                let text_block = if full_text.is_empty() && tool_use_blocks.is_empty() {
-                    vec![Content::Text(pi_core::TextContent {
-                        text: String::new(),
-                    })]
-                } else if full_text.is_empty() {
-                    vec![]
-                } else {
-                    vec![Content::Text(pi_core::TextContent { text: full_text })]
-                };
-
-                let content: Vec<Content> = text_block.into_iter().chain(tool_use_blocks).collect();
-                let sr = if stop_reason == "tool_use" {
-                    pi_core::StopReason::ToolUse
-                } else {
-                    pi_core::StopReason::EndTurn
-                };
-
-                let assistant_msg = pi_core::AssistantMessage {
-                    content,
-                    api: pi_core::ApiName::new("anthropic"),
-                    provider: pi_core::ProviderName::new("anthropic"),
-                    model: pi_core::ModelId::new(self.llm_client.model_id()),
-                    stop_reason: sr,
-                    error_message: None,
-                    timestamp: pi_core::timestamp::current_timestamp(),
-                    usage: pi_core::message::TokenUsage {
-                        input: self.last_usage.map(|(i, _, _)| i).unwrap_or(0),
-                        output: self.last_usage.map(|(_, o, _)| o).unwrap_or(0),
-                        cache_read: 0,
-                        cache_write: 0,
-                        total_tokens: self.last_usage.map(|(_, _, t)| t).unwrap_or(0),
-                    },
-                };
-
-                let result = LlmResult::Ok(assistant_msg);
-                let runtime = self.agent.take().unwrap();
-                let (_events, actions, new_runtime) = match runtime {
-                    AgentRuntime::Streaming(streaming) => {
-                        let transition = streaming.finish_llm(result);
-                        transition.into_parts()
-                    }
-                    other => (vec![], vec![], other),
-                };
-                self.agent = Some(new_runtime);
-                self.handle_actions(terminal, actions);
-            }
-            Err(e) => {
-                let err_result = LlmResult::Err {
-                    error: pi_core::LlmError {
-                        code: "call_failed".into(),
-                        message: e.to_string(),
-                        details: None,
-                    },
-                    aborted: false,
-                };
-                let runtime = self.agent.take().unwrap();
-                let (_events, actions, new_runtime) = match runtime {
-                    AgentRuntime::Streaming(streaming) => {
-                        let transition = streaming.finish_llm(err_result);
-                        transition.into_parts()
-                    }
-                    other => (vec![], vec![], other),
-                };
-                self.agent = Some(new_runtime);
-                self.handle_actions(terminal, actions);
-            }
-        }
-
-        self.streaming_text.clear();
-    }
-
-    fn execute_tools(&mut self, terminal: &mut ratatui::DefaultTerminal, calls: Vec<ToolCall>) {
-        for call in calls {
-            let args_summary = format_tool_args(&call.arguments);
-            self.entries.push(ChatEntry::ToolStart {
-                name: call.name.as_str().to_string(),
-                args_summary: args_summary.clone(),
-            });
-            let _ = terminal.draw(|f| self.render(f));
-
-            // Find the extension that handles this tool
-            let ext_idx = self
-                .extensions
-                .iter()
-                .position(|ext| ext.tools().iter().any(|def| def.name == call.name));
-
-            let ctx = ExtensionContext {
-                cwd: self.cwd.clone(),
-            };
-
-            if let Some(idx) = ext_idx {
-                let outcome = self.extensions[idx].execute(&call, &ctx);
-                match outcome {
-                    crate::extension::ExtensionOutcome::Complete(result) => {
-                        self.on_tool_result(terminal, call.id, result);
-                    }
-                    crate::extension::ExtensionOutcome::Running(stream) => {
-                        self.running_tasks.push(RunningTask {
-                            tool_call_id: call.id.clone(),
-                            tool_name: call.name.as_str().to_string(),
-                            stream,
-                        });
-                    }
-                }
-            } else {
-                self.on_tool_result(
-                    terminal,
-                    call.id,
-                    Err(pi_core::ToolError::new(
-                        "unknown_tool",
-                        format!("No extension provides tool: {}", call.name.as_str()),
-                    )),
-                );
-            }
-        }
-
-        // If async tools are running, let the user keep typing
-        if !self.running_tasks.is_empty() {
-            self.running = false;
-        }
-
-        // If all tools were sync and are now done, auto-continue
-        if self.agent().state().pending_tool_calls.is_empty() && self.running_tasks.is_empty() {
-            let runtime = self.agent.take().unwrap();
-            let (_events, actions, new_runtime) = match runtime {
-                AgentRuntime::ReadyToContinue(ready) => {
-                    let t = ready.continue_turn();
-                    (t.events, t.actions, t.state.into_runtime())
-                }
-                other => (vec![], vec![], other),
-            };
-            self.agent = Some(new_runtime);
-            self.handle_actions(terminal, actions);
-        }
-    }
-
-    fn on_tool_result(
-        &mut self,
-        terminal: &mut ratatui::DefaultTerminal,
-        tool_call_id: pi_core::ToolCallId,
-        result: Result<pi_core::ToolResult, pi_core::ToolError>,
-    ) {
-        match result {
-            Ok(tool_result) => {
-                let output_text = tool_result
-                    .content
-                    .iter()
-                    .filter_map(|c| {
-                        if let Content::Text(t) = c {
-                            Some(t.text.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                let display = if output_text.len() > 500 {
-                    format!(
-                        "{}...\n({} chars total)",
-                        &output_text[..500],
-                        output_text.len()
-                    )
-                } else {
-                    output_text
-                };
-
-                self.entries.push(ChatEntry::ToolResult {
-                    name: tool_call_id.as_str().to_string(),
-                    output: display,
-                    is_error: false,
-                });
-                let _ = terminal.draw(|f| self.render(f));
-
-                let runtime = self.agent.take().unwrap();
-                let (_events, actions, new_runtime) = match runtime {
-                    AgentRuntime::WaitingTools(waiting) => {
-                        let transition = waiting.on_tool_done(tool_call_id, Ok(tool_result));
-                        transition.into_parts()
-                    }
-                    other => (vec![], vec![], other),
-                };
-                self.agent = Some(new_runtime);
-                self.handle_actions(terminal, actions);
-            }
-            Err(err) => {
-                self.entries.push(ChatEntry::ToolResult {
-                    name: tool_call_id.as_str().to_string(),
-                    output: err.message.clone(),
-                    is_error: true,
-                });
-                let _ = terminal.draw(|f| self.render(f));
-
-                let runtime = self.agent.take().unwrap();
-                let (_events, actions, new_runtime) = match runtime {
-                    AgentRuntime::WaitingTools(waiting) => {
-                        let transition = waiting.on_tool_done(tool_call_id, Err(err));
-                        transition.into_parts()
-                    }
-                    other => (vec![], vec![], other),
-                };
-                self.agent = Some(new_runtime);
-                self.handle_actions(terminal, actions);
-            }
-        }
-    }
-
-    fn poll_running_tasks(&mut self, terminal: &mut ratatui::DefaultTerminal) {
-        let mut remaining = Vec::new();
-        let mut just_completed: Vec<(
-            pi_core::ToolCallId,
-            Result<pi_core::ToolResult, pi_core::ToolError>,
-        )> = Vec::new();
-
-        for mut task in std::mem::take(&mut self.running_tasks) {
-            let mut done = false;
-            while let Some(event) = task.stream.try_recv() {
-                match event {
-                    ToolEvent::Update(update) => {
-                        let _events = self.agent_mut().on_tool_update(update);
-                    }
-                    ToolEvent::Done(result) => {
-                        just_completed.push((task.tool_call_id.clone(), result));
-                        done = true;
-                        break;
-                    }
-                }
-            }
-            if !done {
-                remaining.push(task);
-            }
-        }
-        self.running_tasks = remaining;
-
-        // Process completed tasks — UI first, then typestate transitions
-        for (tool_call_id, result) in &just_completed {
-            let output_text = match result {
-                Ok(r) => r
-                    .content
-                    .iter()
-                    .filter_map(|c| {
-                        if let Content::Text(t) = c {
-                            Some(t.text.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                Err(e) => e.message.clone(),
-            };
-            self.entries.push(ChatEntry::ToolResult {
-                name: tool_call_id.as_str().to_string(),
-                output: output_text,
-                is_error: result.is_err(),
-            });
-            let _ = terminal.draw(|f| self.render(f));
-        }
-
-        // Apply typestate transitions for all completed async tools
-        let mut runtime = self.agent.take().unwrap();
-        for (tool_call_id, result) in just_completed {
-            runtime = match runtime {
-                AgentRuntime::WaitingTools(waiting) => {
-                    let transition = waiting.on_tool_done(tool_call_id, result);
-                    match transition {
-                        ToolTransition::WaitingTools(t) => t.state.into_runtime(),
-                        ToolTransition::Ready(t) => t.state.into_runtime(),
-                        ToolTransition::Finished(t) => t.state.into_runtime(),
-                    }
-                }
-                other => other,
-            };
-        }
-
-        // Auto-continue if all pending tools are done and phase is Ready
-        match runtime {
-            AgentRuntime::ReadyToContinue(ready) => {
-                let transition = ready.continue_turn();
-                self.agent = Some(transition.state.into_runtime());
-                self.handle_actions(terminal, transition.actions);
-            }
-            other => {
-                self.agent = Some(other);
-            }
-        }
-    }
-
     // -----------------------------------------------------------------------
-    // Session persistence
+    // Rendering coordinator
     // -----------------------------------------------------------------------
 
-    fn save_session(&self) {
-        if let Some(ref id) = self.session_id {
-            let state = self.agent().session_state();
-            if let Err(e) = self.session_backend.save(id, state) {
-                tracing::warn!(session_id = id.as_str(), error = ?e, "failed to save session");
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Rendering
-    // -----------------------------------------------------------------------
-
-    fn render(&mut self, frame: &mut Frame) {
+    pub(crate) fn render(&mut self, frame: &mut Frame) {
         let [chat_area, input_area, status_area] = Layout::vertical([
             Constraint::Fill(1),
             Constraint::Length(3),
@@ -1045,271 +649,4 @@ impl App {
         self.render_input(frame, input_area);
         self.render_status(frame, status_area);
     }
-
-    fn render_chat(&self, frame: &mut Frame, area: Rect) {
-        let mut lines: Vec<Line> = Vec::new();
-
-        for entry in &self.entries {
-            match entry {
-                ChatEntry::User(text) => {
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            "You",
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(": "),
-                    ]));
-                    for line in text.lines() {
-                        lines.push(Line::from(Span::styled(
-                            line.to_string(),
-                            Style::default().fg(Color::White),
-                        )));
-                    }
-                    lines.push(Line::raw(""));
-                }
-                ChatEntry::Assistant(text) => {
-                    for line in text.lines.iter().cloned() {
-                        lines.push(line);
-                    }
-                    lines.push(Line::raw(""));
-                }
-                ChatEntry::ToolStart { name, args_summary } => {
-                    lines.push(Line::from(vec![
-                        Span::styled(" ┌─ ", Style::default().fg(Color::Yellow)),
-                        Span::styled(
-                            name.as_str(),
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            format!(" {args_summary}"),
-                            Style::default().fg(Color::DarkGray),
-                        ),
-                    ]));
-                }
-                ChatEntry::ToolResult {
-                    name: _,
-                    output,
-                    is_error,
-                } => {
-                    let color = if *is_error { Color::Red } else { Color::Green };
-                    let border = if *is_error { " ┃ " } else { " │ " };
-                    for line in output.lines() {
-                        lines.push(Line::from(vec![
-                            Span::styled(border, Style::default().fg(color)),
-                            Span::styled(line.to_string(), Style::default().fg(color)),
-                        ]));
-                    }
-                    lines.push(Line::styled(
-                        format!(" └{}─", if *is_error { "─" } else { "─" }),
-                        Style::default().fg(color),
-                    ));
-                    lines.push(Line::raw(""));
-                }
-                ChatEntry::System(text) => {
-                    lines.push(Line::styled(
-                        format!("  {text}"),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                    lines.push(Line::raw(""));
-                }
-            }
-        }
-
-        // Streaming indicator (only when LLM is actually streaming, not waiting for async tools)
-        if self.running && self.streaming_text.is_empty() && self.running_tasks.is_empty() {
-            lines.push(Line::styled(
-                "  ● Thinking...",
-                Style::default().fg(Color::DarkGray),
-            ));
-        }
-
-        let total_lines = lines.len() as u16;
-        let visible = area.height.saturating_sub(2);
-
-        let scroll = if total_lines > visible {
-            if self.auto_scroll {
-                total_lines - visible
-            } else {
-                self.scroll_offset.min(total_lines - visible)
-            }
-        } else {
-            0
-        };
-
-        let paragraph = Paragraph::new(Text::from(lines))
-            .scroll((scroll, 0))
-            .block(Block::new().borders(Borders::NONE))
-            .wrap(Wrap { trim: false });
-
-        frame.render_widget(paragraph, area);
-
-        if total_lines > visible {
-            let mut scrollbar_state =
-                ScrollbarState::new(total_lines as usize).position(scroll as usize);
-            frame.render_stateful_widget(
-                Scrollbar::new(ScrollbarOrientation::VerticalRight).thumb_symbol("█"),
-                area,
-                &mut scrollbar_state,
-            );
-        }
-    }
-
-    fn render_input(&mut self, frame: &mut Frame, area: Rect) {
-        let style = if self.running {
-            Style::default().fg(Color::DarkGray)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        let input = Paragraph::new(self.input.as_str())
-            .style(style)
-            .block(
-                Block::new()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(if self.running {
-                        Color::DarkGray
-                    } else if self.show_suggestions {
-                        Color::Yellow
-                    } else {
-                        Color::Cyan
-                    }))
-                    .title(if self.running {
-                        " thinking... "
-                    } else if self.show_suggestions {
-                        " commands "
-                    } else {
-                        " > "
-                    })
-                    .title_style(Style::default().fg(if self.running {
-                        Color::Yellow
-                    } else if self.show_suggestions {
-                        Color::Yellow
-                    } else {
-                        Color::Cyan
-                    })),
-            )
-            .wrap(Wrap { trim: false });
-
-        frame.render_widget(input, area);
-
-        if !self.running {
-            let cursor_x = area.x + 1 + (self.cursor_pos as u16).min(area.width.saturating_sub(3));
-            let cursor_y = area.y + 1;
-            frame.set_cursor_position((cursor_x, cursor_y));
-        }
-
-        // Suggestion popup
-        if self.show_suggestions && !self.suggestions.is_empty() {
-            let max_visible = 5u16;
-            let list_height = (self.suggestions.len() as u16).min(max_visible);
-            let popup_height = list_height + 2;
-
-            let popup_area = Rect {
-                x: area.x,
-                y: area.y.saturating_sub(popup_height),
-                width: area.width,
-                height: popup_height,
-            };
-
-            frame.render_widget(Clear, popup_area);
-
-            let items: Vec<ListItem> = self
-                .suggestions
-                .iter()
-                .map(|s| ListItem::new(s.as_str()))
-                .collect();
-
-            let list = List::new(items)
-                .block(Block::bordered().title(" commands "))
-                .highlight_style(
-                    Style::new()
-                        .add_modifier(Modifier::REVERSED)
-                        .fg(Color::Cyan),
-                )
-                .highlight_symbol("> ");
-
-            frame.render_stateful_widget(list, popup_area, &mut self.suggestion_state);
-        }
-    }
-
-    fn render_status(&self, frame: &mut Frame, area: Rect) {
-        let model_name = self.llm_client.model_id();
-        let parts = vec![Span::styled(
-            format!(" {model_name}"),
-            Style::default().fg(Color::DarkGray),
-        )];
-
-        let mut spans = parts;
-
-        if let Some((input, output, _total)) = self.last_usage {
-            let ctx_pct = if self.budget.max_context_tokens > 0 {
-                let est = (input as f64 / self.budget.max_context_tokens as f64 * 100.0) as u16;
-                est.min(100)
-            } else {
-                0
-            };
-            let ctx_color = if ctx_pct > 90 {
-                Color::Red
-            } else if ctx_pct > 70 {
-                Color::Yellow
-            } else {
-                Color::Green
-            };
-            let bar_full = ctx_pct / 10;
-            let bar_empty = 10 - bar_full;
-            let bar = "█".repeat(bar_full as usize) + &"░".repeat(bar_empty as usize);
-
-            spans.push(Span::raw(" │ "));
-            spans.push(Span::styled(
-                format!("in:{:.1}k", input as f64 / 1000.0),
-                Style::default().fg(Color::DarkGray),
-            ));
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(
-                format!("out:{:.1}k", output as f64 / 1000.0),
-                Style::default().fg(Color::DarkGray),
-            ));
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(
-                format!("ctx:{ctx_pct}% {bar}"),
-                Style::default().fg(ctx_color),
-            ));
-        }
-
-        if !self.running_tasks.is_empty() {
-            let count = self.running_tasks.len();
-            spans.push(Span::styled(
-                format!(" ● {count} tools"),
-                Style::default().fg(Color::Yellow),
-            ));
-        } else if self.running {
-            spans.push(Span::styled(" ●", Style::default().fg(Color::Yellow)));
-        }
-
-        let status = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::DarkGray));
-        frame.render_widget(status, area);
-    }
-}
-
-fn format_tool_args(args: &pi_core::ToolArguments) -> String {
-    let obj = match args.0.as_object() {
-        Some(o) => o,
-        None => return serde_json::to_string(&args.0).unwrap_or_default(),
-    };
-    obj.iter()
-        .take(3)
-        .map(|(k, v)| {
-            let s = match v.as_str() {
-                Some(s) => s.to_string(),
-                None => v.to_string(),
-            };
-            let truncated = if s.len() > 60 { &s[..60] } else { &s };
-            format!("{k}={truncated}")
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
 }

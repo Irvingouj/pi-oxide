@@ -88,8 +88,11 @@ impl SessionState {
 
     /// Get the full branch from root to leaf.
     pub fn get_branch(&self) -> Vec<&SessionEntry> {
+        let index: std::collections::HashMap<&str, &SessionEntry> =
+            self.entries.iter().map(|e| (e.id.as_str(), e)).collect();
+
         let mut branch = Vec::new();
-        let mut current = self.entries.iter().find(|e| e.id == self.leaf_id);
+        let mut current = index.get(self.leaf_id.as_str()).copied();
         trace!(
             leaf_id = self.leaf_id,
             total_entries = self.entries.len(),
@@ -98,11 +101,11 @@ impl SessionState {
 
         while let Some(entry) = current {
             branch.push(entry);
-            if let Some(pid) = &entry.parent_id {
-                current = self.entries.iter().find(|e| e.id == *pid);
-            } else {
-                break;
-            }
+            current = entry
+                .parent_id
+                .as_ref()
+                .and_then(|pid| index.get(pid.as_str()))
+                .copied();
         }
 
         branch.reverse();

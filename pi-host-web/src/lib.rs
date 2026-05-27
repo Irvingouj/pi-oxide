@@ -10,11 +10,10 @@ use wasm_bindgen::prelude::*;
 
 use pi_core::{
     estimate_tokens, estimate_tokens_for_text, fallback_strategy, AgentRuntime, Transition,
-    UserInputDuringTools,
 };
 use tracing::info;
-use tracing_subscriber::layer::{Context, Layer};
-use tracing_subscriber::prelude::*;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 fn project_context(input: pi_core::ProjectionInput) -> pi_core::ProjectionOutput {
     pi_core::project(input)
@@ -24,9 +23,9 @@ mod dto;
 use dto::*;
 
 thread_local! {
-    static AGENT_SLOTS: RefCell<Vec<Option<AgentRuntime>>> = RefCell::new(Vec::new());
-    static TRACING_INIT: Cell<bool> = Cell::new(false);
-    static LOG_LEVEL: Cell<tracing::Level> = Cell::new(tracing::Level::INFO);
+    static AGENT_SLOTS: RefCell<Vec<Option<AgentRuntime>>> = const { RefCell::new(Vec::new()) };
+    static TRACING_INIT: Cell<bool> = const { Cell::new(false) };
+    static LOG_LEVEL: Cell<tracing::Level> = const { Cell::new(tracing::Level::INFO) };
 }
 
 fn init_tracing() {
@@ -34,8 +33,9 @@ fn init_tracing() {
         if !init.get() {
             #[cfg(target_arch = "wasm32")]
             {
-                let layer = DynamicLevelFilter::new(tracing_wasm::WASMLayer::default());
-                let _ = tracing_subscriber::registry().with(layer).try_init();
+                let _ = tracing_subscriber::registry()
+                    .with(tracing_wasm::WASMLayer::default())
+                    .try_init();
             }
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -59,72 +59,6 @@ pub fn set_log_level(level: String) {
         _ => tracing::Level::INFO,
     };
     LOG_LEVEL.with(|c| c.set(parsed));
-}
-
-struct DynamicLevelFilter<L> {
-    inner: L,
-}
-
-impl<L> DynamicLevelFilter<L> {
-    fn new(inner: L) -> Self {
-        Self { inner }
-    }
-}
-
-impl<S, L> Layer<S> for DynamicLevelFilter<L>
-where
-    S: tracing::Subscriber,
-    L: Layer<S>,
-{
-    fn enabled(&self, metadata: &tracing::Metadata<'_>, ctx: Context<'_, S>) -> bool {
-        let level = LOG_LEVEL.with(|c| c.get());
-        if metadata.level() > &level {
-            return false;
-        }
-        self.inner.enabled(metadata, ctx)
-    }
-
-    fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
-        self.inner.on_event(event, ctx)
-    }
-
-    fn on_new_span(
-        &self,
-        attrs: &tracing::span::Attributes<'_>,
-        id: &tracing::Id,
-        ctx: Context<'_, S>,
-    ) {
-        self.inner.on_new_span(attrs, id, ctx)
-    }
-
-    fn on_record(
-        &self,
-        span: &tracing::Id,
-        values: &tracing::span::Record<'_>,
-        ctx: Context<'_, S>,
-    ) {
-        self.inner.on_record(span, values, ctx)
-    }
-
-    fn on_follows_from(&self, span: &tracing::Id, follows: &tracing::Id, ctx: Context<'_, S>) {
-        self.inner.on_follows_from(span, follows, ctx)
-    }
-
-    fn on_enter(&self, id: &tracing::Id, ctx: Context<'_, S>) {
-        self.inner.on_enter(id, ctx)
-    }
-
-    fn on_exit(&self, id: &tracing::Id, ctx: Context<'_, S>) {
-        self.inner.on_exit(id, ctx)
-    }
-
-    fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
-        self.inner.on_close(id, ctx)
-    }
-
-    fn on_id_change(&self, old: &tracing::span::Id, new: &tracing::span::Id, ctx: Context<'_, S>) {
-        self.inner.on_id_change(old, new, ctx)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +206,26 @@ pub fn prompt(handle: u32, prompt: PromptRequest) -> StepResult {
             put_runtime(state.into_runtime());
             Ok((events, actions))
         }
+        AgentRuntime::Finished(finished) => {
+            let idle = finished.into_idle();
+            let Transition {
+                events,
+                actions,
+                state,
+            } = idle.start_turn(core_prompt);
+            put_runtime(state.into_runtime());
+            Ok((events, actions))
+        }
+        AgentRuntime::Aborted(aborted) => {
+            let idle = aborted.into_idle();
+            let Transition {
+                events,
+                actions,
+                state,
+            } = idle.start_turn(core_prompt);
+            put_runtime(state.into_runtime());
+            Ok((events, actions))
+        }
         AgentRuntime::WaitingTools(mut waiting) => {
             let (events, actions) = waiting
                 .submit_user_message(core_prompt)
@@ -283,7 +237,7 @@ pub fn prompt(handle: u32, prompt: PromptRequest) -> StepResult {
             let actual = runtime_phase_name(&other);
             put_runtime(other);
             Err(HostError::WrongPhase {
-                expected: "Idle or WaitingTools",
+                expected: "Idle, Finished, Aborted, or WaitingTools",
                 actual,
             })
         }
@@ -510,6 +464,102 @@ pub fn on_tool_cancelled(handle: u32, tool_call_id: String, reason: CancelReason
             put_runtime(other);
             Err(HostError::WrongPhase {
                 expected: "WaitingTools",
+                actual,
+            })
+        }
+    };
+
+    match result {
+        Ok((events, actions)) => ok(StepOutput {
+            events: events.into_iter().map(|e| e.into()).collect(),
+            actions: actions.into_iter().map(|a| a.into()).collect(),
+        }),
+        Err(e) => err(&e),
+    }
+}
+
+#[wasm_bindgen(js_name = "abort")]
+pub fn abort(handle: u32) -> StepResult {
+    console_error_panic_hook::set_once();
+    info!(handle, "abort called");
+
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+
+    let result = match runtime {
+        AgentRuntime::Streaming(streaming) => {
+            let Transition {
+                events,
+                actions,
+                state,
+            } = streaming.abort();
+            put_runtime(state.into_runtime());
+            Ok((events, actions))
+        }
+        AgentRuntime::WaitingTools(waiting) => {
+            let Transition {
+                events,
+                actions,
+                state,
+            } = waiting.abort();
+            put_runtime(state.into_runtime());
+            Ok((events, actions))
+        }
+        AgentRuntime::ReadyToContinue(ready) => {
+            let Transition {
+                events,
+                actions,
+                state,
+            } = ready.abort();
+            put_runtime(state.into_runtime());
+            Ok((events, actions))
+        }
+        other => {
+            let actual = runtime_phase_name(&other);
+            put_runtime(other);
+            Err(HostError::WrongPhase {
+                expected: "Streaming, WaitingTools, or ReadyToContinue",
+                actual,
+            })
+        }
+    };
+
+    match result {
+        Ok((events, actions)) => ok(StepOutput {
+            events: events.into_iter().map(|e| e.into()).collect(),
+            actions: actions.into_iter().map(|a| a.into()).collect(),
+        }),
+        Err(e) => err(&e),
+    }
+}
+
+#[wasm_bindgen(js_name = "continueTurn")]
+pub fn continue_turn(handle: u32) -> StepResult {
+    console_error_panic_hook::set_once();
+    info!(handle, "continueTurn called");
+
+    let runtime = match take_runtime(handle) {
+        Ok(r) => r,
+        Err(e) => return err(&e),
+    };
+
+    let result = match runtime {
+        AgentRuntime::ReadyToContinue(ready) => {
+            let Transition {
+                events,
+                actions,
+                state,
+            } = ready.continue_turn();
+            put_runtime(state.into_runtime());
+            Ok((events, actions))
+        }
+        other => {
+            let actual = runtime_phase_name(&other);
+            put_runtime(other);
+            Err(HostError::WrongPhase {
+                expected: "ReadyToContinue",
                 actual,
             })
         }
@@ -1028,5 +1078,138 @@ mod tests {
     fn fallback_strategy_returns_strategy() {
         let strategy = fallback_strategy_export("ls".to_string());
         assert!(matches!(strategy, ContextStrategy::Head { .. }));
+    }
+
+    #[test]
+    fn abort_from_streaming_returns_aborted() {
+        create_agent(dummy_options());
+        prompt(
+            0,
+            PromptRequest::Text {
+                text: "hello".to_string(),
+            },
+        );
+
+        let abort_resp = abort(0);
+        assert!(abort_resp.ok);
+        let actions = abort_resp.data.unwrap().actions;
+        assert!(actions.is_empty());
+
+        // After abort, state should not be streaming
+        let state_resp = state(0);
+        assert!(state_resp.ok);
+        assert!(!state_resp.data.unwrap().state.is_streaming);
+
+        destroy_agent(0);
+    }
+
+    #[test]
+    fn abort_from_idle_returns_wrong_phase() {
+        create_agent(dummy_options());
+        let abort_resp = abort(0);
+        assert!(!abort_resp.ok);
+        assert_eq!(abort_resp.error.as_ref().unwrap().code, "wrong_phase");
+        destroy_agent(0);
+    }
+
+    #[test]
+    fn abort_from_waiting_tools_clears_pending() {
+        create_agent(dummy_options());
+        prompt(
+            0,
+            PromptRequest::Text {
+                text: "use tool".to_string(),
+            },
+        );
+
+        let assistant = AssistantMessage {
+            content: vec![Content::ToolCall(ToolCall {
+                id: ToolCallId("tc-1".to_string()),
+                name: ToolName("test_tool".to_string()),
+                arguments: ToolArguments(serde_json::json!({})),
+            })],
+            api: ApiName("test".to_string()),
+            provider: ProviderName("test".to_string()),
+            model: ModelId("test".to_string()),
+            stop_reason: StopReason::ToolUse,
+            error_message: None,
+            timestamp: 1,
+            usage: TokenUsage::default(),
+        };
+        let done_resp = on_llm_done(0, LlmResult::Ok(assistant));
+        assert!(done_resp.ok);
+        let state_resp = state(0);
+        assert!(state_resp.ok);
+        assert!(!state_resp.data.unwrap().state.pending_tool_calls.is_empty());
+
+        let abort_resp = abort(0);
+        assert!(abort_resp.ok);
+        let state_resp = state(0);
+        assert!(state_resp.ok);
+        let state = state_resp.data.unwrap().state;
+        assert!(
+            state.pending_tool_calls.is_empty(),
+            "abort from WaitingTools should clear pending tool calls"
+        );
+        assert!(!state.is_streaming);
+
+        destroy_agent(0);
+    }
+
+    #[test]
+    fn abort_from_ready_to_continue_is_allowed() {
+        create_agent(dummy_options());
+        prompt(
+            0,
+            PromptRequest::Text {
+                text: "use tool".to_string(),
+            },
+        );
+
+        let assistant = AssistantMessage {
+            content: vec![Content::ToolCall(ToolCall {
+                id: ToolCallId("tc-1".to_string()),
+                name: ToolName("test_tool".to_string()),
+                arguments: ToolArguments(serde_json::json!({})),
+            })],
+            api: ApiName("test".to_string()),
+            provider: ProviderName("test".to_string()),
+            model: ModelId("test".to_string()),
+            stop_reason: StopReason::ToolUse,
+            error_message: None,
+            timestamp: 1,
+            usage: TokenUsage::default(),
+        };
+        let done_resp = on_llm_done(0, LlmResult::Ok(assistant));
+        assert!(done_resp.ok);
+
+        // Complete the tool to reach ReadyToContinue
+        let tool_done = on_tool_done(
+            0,
+            "tc-1".to_string(),
+            ToolDonePayload::Success {
+                result: ToolResult {
+                    content: vec![Content::Text(TextContent {
+                        text: "ok".to_string(),
+                    })],
+                    details: None,
+                    terminate: None,
+                },
+            },
+        );
+        assert!(tool_done.ok);
+        let state_resp = state(0);
+        assert!(state_resp.ok);
+        let agent_state = state_resp.data.unwrap().state;
+        assert!(agent_state.pending_tool_calls.is_empty());
+
+        // Abort from ReadyToContinue should succeed
+        let abort_resp = abort(0);
+        assert!(abort_resp.ok);
+        let state_resp = state(0);
+        assert!(state_resp.ok);
+        assert!(!state_resp.data.unwrap().state.is_streaming);
+
+        destroy_agent(0);
     }
 }

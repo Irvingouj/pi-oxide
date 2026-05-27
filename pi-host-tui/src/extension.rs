@@ -155,8 +155,9 @@ impl Extension for BashExtension {
             let stdout = child.stdout.take().unwrap();
             let stderr = child.stderr.take().unwrap();
             let seq = std::sync::Arc::new(std::sync::Mutex::new(0u64));
-            let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-            let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+            // Accumulate raw bytes to avoid corrupting multi-byte UTF-8 at buffer boundaries
+            let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 
             let tx_stdout = tx.clone();
             let seq_stdout = seq.clone();
@@ -169,8 +170,11 @@ impl Extension for BashExtension {
                     match std::io::Read::read(&mut reader, &mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
+                            stdout_buf_clone
+                                .lock()
+                                .unwrap()
+                                .extend_from_slice(&buf[..n]);
                             let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
-                            stdout_buf_clone.lock().unwrap().push_str(&chunk);
                             let mut seq = seq_stdout.lock().unwrap();
                             let update = ToolExecutionUpdate {
                                 tool_call_id: tool_call_id_stdout.clone(),
@@ -200,8 +204,11 @@ impl Extension for BashExtension {
                     match std::io::Read::read(&mut reader, &mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
+                            stderr_buf_clone
+                                .lock()
+                                .unwrap()
+                                .extend_from_slice(&buf[..n]);
                             let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
-                            stderr_buf_clone.lock().unwrap().push_str(&chunk);
                             let mut seq = seq_stderr.lock().unwrap();
                             let update = ToolExecutionUpdate {
                                 tool_call_id: tool_call_id_stderr.clone(),
@@ -223,11 +230,12 @@ impl Extension for BashExtension {
             let _ = stdout_handle.join();
             let _ = stderr_handle.join();
 
-            // Wait for exit and build final result from accumulated buffers
+            // Wait for exit and build final result from accumulated raw bytes
             let result = match child.wait() {
                 Ok(status) => {
-                    let mut text = stdout_buf.lock().unwrap().clone();
-                    let stderr_text = stderr_buf.lock().unwrap().clone();
+                    let mut text = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
+                    let stderr_text =
+                        String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
                     if !stderr_text.is_empty() {
                         if !text.is_empty() {
                             text.push('\n');

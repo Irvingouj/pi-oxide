@@ -173,28 +173,36 @@ impl AgentRuntime {
         Self::from_agent(Agent::new(options))
     }
 
+    fn as_agent(&self) -> &Agent {
+        match self {
+            AgentRuntime::Idle(a) => &a.agent,
+            AgentRuntime::Streaming(a) => &a.agent,
+            AgentRuntime::WaitingTools(a) => &a.agent,
+            AgentRuntime::ReadyToContinue(a) => &a.agent,
+            AgentRuntime::Finished(a) => &a.agent,
+            AgentRuntime::Aborted(a) => &a.agent,
+        }
+    }
+
+    fn as_agent_mut(&mut self) -> &mut Agent {
+        match self {
+            AgentRuntime::Idle(a) => &mut a.agent,
+            AgentRuntime::Streaming(a) => &mut a.agent,
+            AgentRuntime::WaitingTools(a) => &mut a.agent,
+            AgentRuntime::ReadyToContinue(a) => &mut a.agent,
+            AgentRuntime::Finished(a) => &mut a.agent,
+            AgentRuntime::Aborted(a) => &mut a.agent,
+        }
+    }
+
     /// Read-only access to public agent state.
     pub fn state(&self) -> &crate::agent::AgentState {
-        match self {
-            AgentRuntime::Idle(a) => a.agent.state(),
-            AgentRuntime::Streaming(a) => a.agent.state(),
-            AgentRuntime::WaitingTools(a) => a.agent.state(),
-            AgentRuntime::ReadyToContinue(a) => a.agent.state(),
-            AgentRuntime::Finished(a) => a.agent.state(),
-            AgentRuntime::Aborted(a) => a.agent.state(),
-        }
+        self.as_agent().state()
     }
 
     /// Mutable access to public agent state (use sparingly).
     pub fn state_mut(&mut self) -> &mut crate::agent::AgentState {
-        match self {
-            AgentRuntime::Idle(a) => a.agent.state_mut(),
-            AgentRuntime::Streaming(a) => a.agent.state_mut(),
-            AgentRuntime::WaitingTools(a) => a.agent.state_mut(),
-            AgentRuntime::ReadyToContinue(a) => a.agent.state_mut(),
-            AgentRuntime::Finished(a) => a.agent.state_mut(),
-            AgentRuntime::Aborted(a) => a.agent.state_mut(),
-        }
+        self.as_agent_mut().state_mut()
     }
 
     /// Consume the runtime and return the underlying agent.
@@ -218,42 +226,22 @@ impl AgentRuntime {
 
     /// Read-only access to the session tree.
     pub fn session_state(&self) -> &SessionState {
-        match self {
-            AgentRuntime::Idle(a) => a.agent.session_state(),
-            AgentRuntime::Streaming(a) => a.agent.session_state(),
-            AgentRuntime::WaitingTools(a) => a.agent.session_state(),
-            AgentRuntime::ReadyToContinue(a) => a.agent.session_state(),
-            AgentRuntime::Finished(a) => a.agent.session_state(),
-            AgentRuntime::Aborted(a) => a.agent.session_state(),
-        }
+        self.as_agent().session_state()
     }
 
     /// Replace the in-memory session tree.
     pub fn set_session_state(&mut self, state: SessionState) {
-        match self {
-            AgentRuntime::Idle(a) => a.agent.set_session_state(state),
-            AgentRuntime::Streaming(a) => a.agent.set_session_state(state),
-            AgentRuntime::WaitingTools(a) => a.agent.set_session_state(state),
-            AgentRuntime::ReadyToContinue(a) => a.agent.set_session_state(state),
-            AgentRuntime::Finished(a) => a.agent.set_session_state(state),
-            AgentRuntime::Aborted(a) => a.agent.set_session_state(state),
-        }
+        self.as_agent_mut().set_session_state(state)
     }
 
-    /// Forward a tool execution update if in the WaitingTools phase.
+    /// Forward a tool execution update.
     pub fn on_tool_update(&mut self, update: ToolExecutionUpdate) -> Vec<AgentEvent> {
-        match self {
-            AgentRuntime::WaitingTools(a) => a.on_tool_update(update),
-            _ => vec![],
-        }
+        self.as_agent_mut().on_tool_update(update)
     }
 
-    /// Forward a tool started notification if in the WaitingTools phase.
+    /// Forward a tool started notification.
     pub fn on_tool_started(&mut self, id: ToolCallId) -> Vec<AgentEvent> {
-        match self {
-            AgentRuntime::WaitingTools(a) => a.on_tool_started(id),
-            _ => vec![],
-        }
+        self.as_agent_mut().on_tool_started(id)
     }
 }
 
@@ -479,6 +467,15 @@ impl WaitingToolsAgent {
         UserInputDuringTools::QueuedFollowUp(vec![])
     }
 
+    pub fn abort(mut self) -> Transition<AbortedAgent> {
+        let events = self.agent.abort();
+        Transition {
+            events,
+            actions: vec![],
+            state: AbortedAgent { agent: self.agent },
+        }
+    }
+
     pub fn into_runtime(self) -> AgentRuntime {
         AgentRuntime::WaitingTools(self)
     }
@@ -511,6 +508,15 @@ impl ReadyAgent {
             events: vec![],
             actions: vec![],
             state: IdleAgent { agent: self.agent },
+        }
+    }
+
+    pub fn abort(mut self) -> Transition<AbortedAgent> {
+        let events = self.agent.abort();
+        Transition {
+            events,
+            actions: vec![],
+            state: AbortedAgent { agent: self.agent },
         }
     }
 
@@ -549,6 +555,12 @@ impl FinishedAgent {
         }
     }
 
+    /// Transition back to Idle without clearing conversation history.
+    /// Used when the host wants to start a new turn after the previous one finished.
+    pub fn into_idle(self) -> IdleAgent {
+        IdleAgent { agent: self.agent }
+    }
+
     pub fn into_runtime(self) -> AgentRuntime {
         AgentRuntime::Finished(self)
     }
@@ -574,6 +586,12 @@ impl AbortedAgent {
             actions: vec![],
             state: IdleAgent { agent: self.agent },
         }
+    }
+
+    /// Transition back to Idle without clearing conversation history.
+    /// Used when the host wants to start a new turn after an abort/error.
+    pub fn into_idle(self) -> IdleAgent {
+        IdleAgent { agent: self.agent }
     }
 
     pub fn into_runtime(self) -> AgentRuntime {

@@ -11,7 +11,7 @@ pub fn json_schema_for(desc: &str, required: &[&str], properties: &[(String, Val
         "type": "object",
         "description": desc,
         "properties": serde_json::Map::from_iter(
-            properties.iter().cloned().map(|(k, v)| (k, v))
+            properties.iter().cloned()
         ),
         "required": required,
     })

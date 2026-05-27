@@ -11,7 +11,7 @@ use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
 pub fn render(input: &str, _width: u16) -> Text<'static> {
-    let mut parser = pulldown_cmark::Parser::new(input);
+    let parser = pulldown_cmark::Parser::new(input);
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
     let mut code_lang = String::new();
@@ -19,7 +19,7 @@ pub fn render(input: &str, _width: u16) -> Text<'static> {
     let mut current_spans: Vec<Span<'static>> = Vec::new();
     let mut list_depth: usize = 0;
 
-    while let Some(event) = parser.next() {
+    for event in parser {
         match event {
             pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(kind)) => {
                 flush_spans(&mut current_spans, &mut lines);
@@ -116,7 +116,7 @@ pub fn render(input: &str, _width: u16) -> Text<'static> {
 
 fn flush_spans(spans: &mut Vec<Span<'static>>, lines: &mut Vec<Line<'static>>) {
     if !spans.is_empty() {
-        lines.push(Line::from(spans.drain(..).collect::<Vec<_>>()));
+        lines.push(Line::from(std::mem::take(spans)));
     }
 }
 
@@ -131,8 +131,8 @@ fn render_code_block(lang: &str, code_lines: &[String], lines: &mut Vec<Line<'st
     static SS: OnceLock<SyntaxSet> = OnceLock::new();
     static TS: OnceLock<ThemeSet> = OnceLock::new();
 
-    let ss = SS.get_or_init(|| SyntaxSet::load_defaults_newlines());
-    let ts = TS.get_or_init(|| ThemeSet::load_defaults());
+    let ss = SS.get_or_init(SyntaxSet::load_defaults_newlines);
+    let ts = TS.get_or_init(ThemeSet::load_defaults);
     let syntax = ss
         .find_syntax_by_token(lang)
         .unwrap_or_else(|| ss.find_syntax_plain_text());
@@ -166,10 +166,10 @@ mod tests {
     #[test]
     fn test_render_paragraph() {
         let text = render("Hello world", 80);
-        assert!(text.lines.len() > 0);
+        assert!(!text.lines.is_empty());
         // Should have the text line + empty line after paragraph
         let first_line = &text.lines[0];
-        assert!(first_line.spans.len() > 0);
+        assert!(!first_line.spans.is_empty());
     }
 
     #[test]
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn test_render_inline_code() {
         let text = render("Use `cargo build` to compile", 80);
-        assert!(text.lines.len() > 0);
+        assert!(!text.lines.is_empty());
         // Should contain yellow-styled code span
         let has_yellow = text
             .lines

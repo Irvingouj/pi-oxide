@@ -125,17 +125,17 @@ pub struct ProjectionOutput {
 /// Estimate tokens for a list of messages using chars/4 heuristic.
 pub fn estimate_tokens(messages: &[AgentMessage]) -> usize {
     let chars = count_message_chars(messages);
-    (chars + 3) / 4
+    chars.div_ceil(4)
 }
 
 /// Estimate tokens for a string.
 pub fn estimate_tokens_for_text(text: &str) -> usize {
-    (text.chars().count() + 3) / 4
+    text.chars().count().div_ceil(4)
 }
 
 /// Calibrated token estimate using actual API usage when available.
 fn calibrated_estimate(chars: usize, state: &ContextProjectionState) -> usize {
-    let raw = (chars + 3) / 4;
+    let raw = chars.div_ceil(4);
     if let Some(ref api) = state.last_api_usage {
         if api.estimated_tokens > 0 {
             let ratio = api.actual_input_tokens as f64 / api.estimated_tokens as f64;
@@ -161,9 +161,9 @@ fn count_message_chars(messages: &[AgentMessage]) -> usize {
                     match block {
                         Content::Text(t) => total += t.text.chars().count(),
                         Content::ToolCall(tc) => {
-                            total += tc.name.as_str().len();
+                            total += tc.name.as_str().chars().count();
                             total += serde_json::to_string(&tc.arguments)
-                                .map(|s| s.len())
+                                .map(|s| s.chars().count())
                                 .unwrap_or(0);
                         }
                         Content::Image(_) => {}
@@ -225,7 +225,7 @@ fn tool_result_context(details: &Option<crate::types::ToolDetails>) -> Option<To
 }
 
 /// Apply the given strategy to text, returning the preview portion.
-fn apply_strategy(text: &str, strategy: &ContextStrategy, _default_preview_chars: usize) -> String {
+fn apply_strategy(text: &str, strategy: &ContextStrategy) -> String {
     match strategy {
         ContextStrategy::KeepFull => text.to_string(),
         ContextStrategy::Head { max_chars } => {
@@ -331,8 +331,7 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
                 // Check prior state
                 if let Some(prior) = updated_state.replacements.get(&tool_call_id_str) {
                     // Reuse prior replacement
-                    let preview =
-                        apply_strategy(&text, &prior.strategy, input.budget.default_preview_chars);
+                    let preview = apply_strategy(&text, &prior.strategy);
                     let marker = build_preview_text(
                         &prior.artifact_id,
                         &tool_name_str,
@@ -382,7 +381,7 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
                     continue;
                 }
 
-                let preview = apply_strategy(&text, &strategy, input.budget.default_preview_chars);
+                let preview = apply_strategy(&text, &strategy);
                 let artifact_id = format!("tool-result-{tool_call_id_str}");
                 let sname = strategy_name(&strategy);
 
@@ -435,8 +434,8 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
         for turn_idx in 0..cutoff_turn {
             let start = turn_boundaries[turn_idx];
             let end = turn_boundaries[turn_idx + 1];
-            for i in start..end {
-                if let AgentMessage::ToolResult(tr) = &projected[i] {
+            for msg in &mut projected[start..end] {
+                if let AgentMessage::ToolResult(tr) = msg {
                     let tcid = tr.tool_call_id.as_str().to_string();
                     // Skip if already replaced by artifact budgeting or prior microcompact
                     if updated_state.replacements.contains_key(&tcid) {
@@ -461,7 +460,7 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
                     updated_state.replacements.insert(tcid, replacement.clone());
                     replacements.push(replacement);
 
-                    projected[i] = AgentMessage::ToolResult(crate::message::ToolResultMessage {
+                    *msg = AgentMessage::ToolResult(crate::message::ToolResultMessage {
                         role: "tool_result".to_string(),
                         tool_call_id: tr.tool_call_id.clone(),
                         tool_name: tr.tool_name.clone(),
@@ -581,26 +580,11 @@ fn trim_to_budget(
     let kept = &messages[start_idx..];
 
     // Safety: ensure no orphan tool_result at the front
-    let adjusted_start = if !kept.is_empty() {
-        match &kept[0] {
-            AgentMessage::ToolResult(_) => {
-                // Find the previous assistant message
-                if start_idx > 0 {
-                    // Walk backward to find the assistant that owns this tool_result
-                    let mut adj = start_idx;
-                    while adj > 0 {
-                        adj -= 1;
-                        if matches!(messages[adj], AgentMessage::Assistant(_)) {
-                            break;
-                        }
-                    }
-                    adj
-                } else {
-                    start_idx
-                }
-            }
-            _ => start_idx,
-        }
+    let adjusted_start = if !kept.is_empty() && matches!(kept[0], AgentMessage::ToolResult(_)) {
+        messages[..start_idx]
+            .iter()
+            .rposition(|m| matches!(m, AgentMessage::Assistant(_)))
+            .unwrap_or(0)
     } else {
         start_idx
     };
@@ -724,7 +708,7 @@ mod tests {
     #[test]
     fn token_estimate_counts_user_text() {
         let msgs = vec![user_msg("Hello, world!")]; // 13 chars -> (13+3)/4 = 4
-        assert_eq!(estimate_tokens(&msgs), (13 + 3) / 4);
+        assert_eq!(estimate_tokens(&msgs), 13_usize.div_ceil(4));
     }
 
     #[test]
@@ -735,7 +719,7 @@ mod tests {
         let args_str =
             serde_json::to_string(&ToolArguments::new(serde_json::json!({"command":"ls"})))
                 .unwrap();
-        let expected = (4 + args_str.len() + 3) / 4;
+        let expected = (4 + args_str.len()).div_ceil(4);
         assert_eq!(tokens, expected);
     }
 
@@ -743,7 +727,7 @@ mod tests {
     fn token_estimate_counts_tool_result_text() {
         let text = "file contents here"; // 19 chars -> (19+3)/4 = 5
         let msgs = vec![tool_result_msg("tc-1", "read", text)];
-        assert_eq!(estimate_tokens(&msgs), (19 + 3) / 4);
+        assert_eq!(estimate_tokens(&msgs), 19_usize.div_ceil(4));
     }
 
     // --- Strategy tests ---

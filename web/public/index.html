@@ -179,6 +179,15 @@
     color: #888;
     font-style: italic;
   }
+  .msg-steer {
+    background: #1a0a2e;
+    border: 1px dashed #533483;
+    color: #888;
+    font-size: 12px;
+    font-style: italic;
+    margin-left: auto;
+    border-bottom-right-radius: 2px;
+  }
 
   /* --- Input bar --- */
   #input-bar {
@@ -211,6 +220,32 @@
   }
   #send-btn:hover { background: #c73850; }
   #send-btn:disabled { background: #555; cursor: not-allowed; }
+
+  #stop-btn {
+    background: #e94560;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    display: none;
+  }
+  #stop-btn:hover { background: #c73850; }
+  #stop-btn:disabled { background: #555; cursor: not-allowed; }
+
+  #steer-btn {
+    background: #533483;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    display: none;
+  }
+  #steer-btn:hover { background: #e94560; }
+  #steer-btn:disabled { background: #555; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -267,6 +302,8 @@
     <div id="chat-messages"></div>
     <div id="input-bar">
       <textarea id="user-input" rows="2" placeholder="Ask the agent to inspect or interact with this page..."></textarea>
+      <button id="steer-btn">Steer</button>
+      <button id="stop-btn">Stop</button>
       <button id="send-btn" disabled>Send</button>
     </div>
   </div>
@@ -275,11 +312,22 @@
 <script type="module">
   import { bootstrap } from "../src/browser/app.ts";
 
-  const { sendPrompt } = await bootstrap({
+  const { sendPrompt, steerPrompt, stopPrompt } = await bootstrap({
     chatContainer: document.getElementById("chat-messages"),
     userInput: document.getElementById("user-input"),
     sendBtn: document.getElementById("send-btn"),
+    stopBtn: document.getElementById("stop-btn"),
+    steerBtn: document.getElementById("steer-btn"),
     statusEl: document.getElementById("wasm-status"),
+  });
+
+  document.getElementById("stop-btn").addEventListener("click", () => {
+    stopPrompt();
+  });
+
+  document.getElementById("steer-btn").addEventListener("click", () => {
+    const text = document.getElementById("user-input").value.trim();
+    if (text) steerPrompt(text);
   });
 
   // Demo area event handlers (kept inline — trivial DOM wiring)
@@ -315,7 +363,6 @@
   sendBtn.addEventListener("click", () => {
     const text = userInput.value.trim();
     if (!text) return;
-    userInput.value = "";
     sendPrompt(text);
   });
   userInput.addEventListener("keydown", (e) => {

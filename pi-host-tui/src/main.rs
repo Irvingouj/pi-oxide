@@ -7,6 +7,7 @@ mod markdown;
 mod session;
 mod smoke_test;
 mod tools;
+mod tui;
 
 #[derive(Parser)]
 #[command(name = "pi", about = "Terminal coding agent")]

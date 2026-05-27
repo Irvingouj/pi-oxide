@@ -9,9 +9,7 @@
  */
 
 import {
-  abort,
   createAgent,
-  continueTurn,
   destroyAgent,
   feedLlmChunk,
   followUp,
@@ -111,41 +109,28 @@ export class Agent {
    * @param {LlmProvider} config.llm
    * @param {Record<string, (call: ToolCall) => Promise<ToolResult> | ToolResult>} config.tools
    * @param {(event: AgentEvent) => void} [config.onEvent]
-   * @param {AbortSignal} [config.signal] — abort to stop mid-stream or mid-tool
    * @returns {Promise<AgentAction>} terminal action (finished or wait_for_input)
    */
   async run(promptText, config) {
-    const signal = config.signal;
-    const checkAbort = () => {
-      if (signal?.aborted) {
-        this.stop();
-        throw new HostError("user_aborted", "Turn stopped by user");
-      }
-    };
-
     let step = unwrap(prompt(this.#handle, { text: promptText }));
     for (const event of step.events) {
       config.onEvent?.(event);
     }
 
     while (true) {
-      checkAbort();
       let actions = step.actions ?? [];
       if (actions.length === 0) {
         return { type: "finished", messages: [] };
       }
 
       for (const action of actions) {
-        checkAbort();
         switch (action.type) {
           case "stream_llm": {
-            const stream = await config.llm.call(action.context, signal);
+            const stream = await config.llm.call(action.context);
             for await (const chunk of stream.chunks) {
-              checkAbort();
               const ev = unwrap(feedLlmChunk(this.#handle, chunk));
               for (const e of ev.events) config.onEvent?.(e);
             }
-            checkAbort();
             const result = await stream.result;
             step = unwrap(onLlmDone(this.#handle, result));
             for (const e of step.events) config.onEvent?.(e);
@@ -154,7 +139,6 @@ export class Agent {
 
           case "execute_tools": {
             for (const call of action.calls) {
-              checkAbort();
               const started = unwrap(onToolStarted(this.#handle, call.id));
               for (const e of started.events) config.onEvent?.(e);
 
@@ -166,10 +150,6 @@ export class Agent {
                 result = toolError("unknown_tool", `No handler for ${call.name}`);
               }
               step = unwrap(onToolDone(this.#handle, call.id, result));
-              for (const e of step.events) config.onEvent?.(e);
-            }
-            if ((step.actions ?? []).length === 0) {
-              step = unwrap(continueTurn(this.#handle));
               for (const e of step.events) config.onEvent?.(e);
             }
             break;
@@ -195,15 +175,6 @@ export class Agent {
             return action;
         }
       }
-    }
-  }
-
-  /** Abort a running turn mid-stream or mid-tool. */
-  stop() {
-    try {
-      unwrap(abort(this.#handle));
-    } catch (e) {
-      if (e.code !== "wrong_phase") throw e;
     }
   }
 

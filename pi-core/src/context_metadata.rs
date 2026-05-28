@@ -55,8 +55,6 @@ pub struct ToolResultContext {
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub smart_extract_prompt: Option<String>,
 }
 
 /// Fallback strategy when metadata is missing, keyed by tool name.

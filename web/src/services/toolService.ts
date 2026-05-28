@@ -34,16 +34,20 @@ export function createToolRegistry(
 							? details.original_chars
 							: text.length;
 					if (prompt && originalChars > SMART_EXTRACT_THRESHOLD) {
-						const summary = await smartExtract(text, prompt);
-						return {
-							content: [{ type: "text", text: summary }],
-							details: {
-								content_kind: "generic_text",
-								strategy: { type: "keep_full" },
-								original_chars: originalChars,
-								truncated_by_tool: false,
-							},
-						};
+						try {
+							const summary = await smartExtract(text, prompt);
+							return {
+								content: [{ type: "text", text: summary }],
+								details: {
+									content_kind: "generic_text",
+									strategy: { type: "keep_full" },
+									original_chars: originalChars,
+									truncated_by_tool: false,
+								},
+							};
+						} catch {
+							/* smart extract is best-effort; degrade to original result */
+						}
 					}
 				}
 				return result;

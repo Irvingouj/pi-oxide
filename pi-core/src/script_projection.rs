@@ -29,9 +29,7 @@ pub struct ScriptContext {
 /// - `lines(text)` – split into line array
 /// - `join(lines, sep)` – join line array
 /// - `contains(text, pattern)` – bool
-/// - `regex(text, pattern)` – extract all matches (joined by newline)
 /// - `length(text)` – char count
-/// - `format(fmt, ...)` – string formatting
 ///
 /// Built-in variables:
 /// - `text`, `tool_name`, `tool_call_id`
@@ -229,5 +227,13 @@ mod tests {
         "#;
         let result = run_rhai_script(&ctx, script).unwrap();
         assert_eq!(result, "a ver");
+    }
+
+    #[test]
+    fn test_fallback_on_bad_script() {
+        let ctx = test_ctx("hello world");
+        let result =
+            apply_rhai_script_or_fallback(&ctx, "bad_syntax!!!", || "fallback".to_string());
+        assert_eq!(result, "fallback");
     }
 }

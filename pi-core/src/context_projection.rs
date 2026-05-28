@@ -1380,4 +1380,84 @@ mod tests {
             tc_small_replacement.strategy,
         );
     }
+
+    #[test]
+    fn script_strategy_runs_rhai_and_falls_back_on_error() {
+        let big = "A".repeat(5000);
+        let details = serde_json::json!({
+            "content_kind": "generic_text",
+            "strategy": { "type": "script", "script": "head(text, 5)" },
+            "original_chars": 5000,
+            "truncated_by_tool": false,
+        });
+        let msgs = vec![tool_result_msg_with_details(
+            "tc-script",
+            "read",
+            &big,
+            details,
+        )];
+
+        let output = project(ProjectionInput {
+            system_prompt: "test".into(),
+            messages: msgs,
+            budget: default_budget(),
+            state: ContextProjectionState::default(),
+        });
+
+        assert_eq!(output.report.replacements.len(), 1);
+        assert!(matches!(
+            output.report.replacements[0].strategy,
+            ContextStrategy::Script { .. }
+        ));
+        // preview should be "AAAAA" (first 5 chars) inside the preview marker
+        let projected = if let AgentMessage::ToolResult(tr) = &output.projected_messages[0] {
+            extract_text(&tr.content)
+        } else {
+            panic!("expected tool result at index 0")
+        };
+        assert!(
+            projected.contains("AAAAA"),
+            "expected Rhai head(5) in preview: {}",
+            projected
+        );
+    }
+
+    #[test]
+    fn script_strategy_fallback_on_bad_rhai() {
+        let big = "A".repeat(5000);
+        let details = serde_json::json!({
+            "content_kind": "generic_text",
+            "strategy": { "type": "script", "script": "BAD SYNTAX !!!" },
+            "original_chars": 5000,
+            "truncated_by_tool": false,
+        });
+        let msgs = vec![tool_result_msg_with_details(
+            "tc-bad", "read", &big, details,
+        )];
+
+        let output = project(ProjectionInput {
+            system_prompt: "test".into(),
+            messages: msgs,
+            budget: default_budget(),
+            state: ContextProjectionState::default(),
+        });
+
+        assert_eq!(output.report.replacements.len(), 1);
+        // fallback should be head 2000 (hardcoded in apply_strategy)
+        let projected = if let AgentMessage::ToolResult(tr) = &output.projected_messages[0] {
+            extract_text(&tr.content)
+        } else {
+            panic!("expected tool result at index 0")
+        };
+        assert!(
+            projected.contains("Strategy: script"),
+            "expected script strategy marker: {}",
+            projected
+        );
+        assert!(
+            projected.contains("Preview:"),
+            "expected preview marker: {}",
+            projected
+        );
+    }
 }

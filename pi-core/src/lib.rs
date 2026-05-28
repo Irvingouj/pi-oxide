@@ -12,6 +12,7 @@ pub mod context_projection;
 pub mod events;
 pub mod llm;
 pub mod message;
+pub mod script_projection;
 pub mod session;
 pub mod timestamp;
 pub mod tool;

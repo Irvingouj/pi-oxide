@@ -41,7 +41,7 @@ describe("createToolRegistry", () => {
 		const registry = createToolRegistry(runtime);
 
 		const getPage = registry["browser_get_page"];
-		const result = getPage({
+		const result = await getPage({
 			name: "browser_get_page",
 			arguments: {},
 			id: "1",

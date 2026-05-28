@@ -167,6 +167,12 @@ export const BROWSER_TOOLS: ToolDefinition[] = [
 	BROWSER_CONSOLE,
 ];
 
+const DEFAULT_SCRIPTS: Record<string, string> = {
+	browser_get_page: `head(text, 3000)`,
+	browser_console: `let all = lines(text);\nlet errs = [];\nfor line in all {\n  if contains(line, "ERROR") || contains(line, "FATAL") {\n    errs.push(line);\n  }\n}\njoin(errs, "\\n")`,
+	browser_eval_js: `head(text, 5000)`,
+};
+
 // ========================================================================
 // Tool execution
 // ========================================================================
@@ -176,7 +182,7 @@ const MAX_ELEMENT_TEXT = 500;
 
 /** Discriminated result returned by browser tool handlers. */
 export type BrowserToolResult =
-	| { content: Array<{ type: "text"; text: string }> }
+	| { content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }
 	| { error: { code: string; message: string } };
 
 function truncateText(
@@ -185,6 +191,22 @@ function truncateText(
 ): { text: string; truncated: boolean } {
 	if (text.length <= max) return { text, truncated: false };
 	return { text: `${text.slice(0, max)}...`, truncated: true };
+}
+
+function makeDetails(
+	toolName: string,
+	text: string,
+	truncatedByTool: boolean = false,
+): Record<string, unknown> {
+	return {
+		content_kind: "generic_text",
+		strategy: {
+			type: "script",
+			script: DEFAULT_SCRIPTS[toolName] || "head(text, 2000)",
+		},
+		original_chars: text.length,
+		truncated_by_tool: truncatedByTool,
+	};
 }
 
 function formatElement(el: BrowserElementSnapshot): object {
@@ -224,9 +246,17 @@ function formatConsoleEntries(
 }
 
 /** Wrap a tool function in a try-catch that produces a typed error result. */
-function tryTool<T>(fn: () => T, errorCode: string): BrowserToolResult {
+function tryTool<T>(
+	fn: () => T,
+	errorCode: string,
+	toolName: string,
+): BrowserToolResult {
 	try {
-		return { content: [{ type: "text", text: JSON.stringify(fn(), null, 2) }] };
+		const text = JSON.stringify(fn(), null, 2);
+		return {
+			content: [{ type: "text", text }],
+			details: makeDetails(toolName, text, false),
+		};
 	} catch (err: unknown) {
 		const message = err instanceof Error ? err.message : String(err);
 		return { error: { code: errorCode, message } };
@@ -245,24 +275,24 @@ export function executeBrowserTool(
 	switch (call.name) {
 		case "browser_get_page": {
 			const page = runtime.getPage();
+			const text = JSON.stringify(
+				{
+					url: page.url,
+					title: page.title,
+					readyState: page.readyState,
+					focusedElement: page.focusedElement
+						? formatElement(page.focusedElement)
+						: null,
+				},
+				null,
+				2,
+			);
 			return {
-				content: [
-					{
-						type: "text",
-						text: JSON.stringify(
-							{
-								url: page.url,
-								title: page.title,
-								readyState: page.readyState,
-								focusedElement: page.focusedElement
-									? formatElement(page.focusedElement)
-									: null,
-							},
-							null,
-							2,
-						),
-					},
-				],
+				content: [{ type: "text", text }],
+				details: {
+					...makeDetails("browser_get_page", text, false),
+					smart_extract_prompt: "Summarize the key interactive elements and page structure from this JSON. Keep the URL and title. Focus on buttons, links, forms, and inputs.",
+				},
 			};
 		}
 
@@ -279,6 +309,7 @@ export function executeBrowserTool(
 			return tryTool(
 				() => ({ ok: true, result: runtime.evalJs(source) }),
 				"eval_error",
+				"browser_eval_js",
 			);
 		}
 
@@ -301,7 +332,7 @@ export function executeBrowserTool(
 				}
 				const el = runtime.querySelector(selector);
 				return { selector, found: el ? formatElement(el) : null };
-			}, "selector_error");
+			}, "selector_error", "browser_query_selector");
 		}
 
 		case "browser_click": {
@@ -317,7 +348,7 @@ export function executeBrowserTool(
 					throw new Error(result.error.message);
 				}
 				return { ok: true, action: "click", selector };
-			}, "click_error");
+			}, "click_error", "browser_click");
 		}
 
 		case "browser_type": {
@@ -344,7 +375,7 @@ export function executeBrowserTool(
 					selector,
 					textLength: text.length,
 				};
-			}, "type_error");
+			}, "type_error", "browser_type");
 		}
 
 		case "browser_console": {
@@ -352,13 +383,10 @@ export function executeBrowserTool(
 			const limit = call.arguments.limit as number | undefined;
 			const entries = runtime.getConsole();
 			const formatted = formatConsoleEntries(entries, level, limit);
+			const text = JSON.stringify(formatted, null, 2);
 			return {
-				content: [
-					{
-						type: "text",
-						text: JSON.stringify(formatted, null, 2),
-					},
-				],
+				content: [{ type: "text", text }],
+				details: makeDetails("browser_console", text, false),
 			};
 		}
 

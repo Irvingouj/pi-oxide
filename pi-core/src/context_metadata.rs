@@ -38,6 +38,10 @@ pub enum ContextStrategy {
     /// Applied by microcompact: old tool result replaced with a one-line summary.
     #[serde(rename = "microcompacted")]
     Microcompacted,
+    /// Run a Rhai script to transform the tool result.
+    /// The script receives the full text plus global context variables.
+    #[serde(rename = "script")]
+    Script { script: String },
 }
 
 /// Typed metadata that a host can attach to tool results for projection.
@@ -51,6 +55,8 @@ pub struct ToolResultContext {
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smart_extract_prompt: Option<String>,
 }
 
 /// Fallback strategy when metadata is missing, keyed by tool name.

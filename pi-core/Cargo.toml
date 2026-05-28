@@ -15,6 +15,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 ts-rs = { workspace = true }
+rhai = { version = "1.18", default-features = false, features = ["only_i64", "no_float", "no_closure", "no_module"] }
 
 [features]
 default = []

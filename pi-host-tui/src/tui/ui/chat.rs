@@ -143,7 +143,11 @@ impl App {
             };
             let bar_full = ctx_pct / 10;
             let bar_empty = 10 - bar_full;
-            let bar = "█".repeat(bar_full as usize) + &"░".repeat(bar_empty as usize);
+            let bar = format!(
+                "{}{}",
+                "█".repeat(bar_full as usize),
+                "░".repeat(bar_empty as usize)
+            );
 
             spans.push(Span::raw(" │ "));
             spans.push(Span::styled(

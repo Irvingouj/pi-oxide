@@ -12,8 +12,8 @@ export declare function continueTurn(handle: number): StepResult;
 
 export declare function toolResult(
   text: string,
-  opts?: { terminate?: boolean }
-): { content: Array<{ type: "text"; text: string }>; terminate?: boolean };
+  opts?: { terminate?: boolean; details?: object }
+): { content: Array<{ type: "text"; text: string }>; terminate?: boolean; details?: object };
 
 export declare function toolError(
   code: string,

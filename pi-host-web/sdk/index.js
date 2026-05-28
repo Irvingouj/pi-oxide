@@ -72,6 +72,9 @@ export function toolResult(text, opts = {}) {
   if (opts.terminate) {
     payload.terminate = true;
   }
+  if (opts.details) {
+    payload.details = opts.details;
+  }
   return payload;
 }
 

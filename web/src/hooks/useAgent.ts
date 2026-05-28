@@ -15,7 +15,7 @@ import {
 	steerAgent,
 	stopAgent,
 } from "../services/agentService.ts";
-import { createLlmProvider } from "../services/llmService.ts";
+import { createLlmProvider, smartExtract } from "../services/llmService.ts";
 import { runProjection } from "../services/projectionService.ts";
 import { BROWSER_TOOLS, createToolRegistry } from "../services/toolService.ts";
 import { useAgentStore } from "../stores/agentStore.ts";
@@ -151,7 +151,9 @@ export function useAgent() {
 			const abortController = new AbortController();
 			abortControllerRef.current = abortController;
 
-			const tools = createToolRegistry(runtimeRef.current);
+			const tools = createToolRegistry(runtimeRef.current, (text, prompt) =>
+				smartExtract(text, prompt, abortController.signal),
+			);
 			const llmProvider = createLlmProvider(abortController.signal);
 
 			const result = await runTurn(agent, text, {

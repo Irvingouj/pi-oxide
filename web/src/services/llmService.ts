@@ -274,3 +274,20 @@ export function createLlmProvider(signal?: AbortSignal): {
 		},
 	};
 }
+
+export async function smartExtract(
+	text: string,
+	prompt: string,
+	signal?: AbortSignal,
+): Promise<string> {
+	const data = await callLlm(
+		prompt,
+		[{ role: "user", content: [{ type: "text", text }] }],
+		[],
+		signal,
+	);
+	return data.content
+		.filter((b): b is typeof b & { text: string } => b.type === "text" && !!b.text)
+		.map((b) => b.text)
+		.join("\n");
+}

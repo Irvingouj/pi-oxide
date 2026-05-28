@@ -17,6 +17,7 @@ use ts_rs::TS;
 
 use crate::context_metadata::{fallback_strategy, ContextStrategy, ToolResultContext};
 use crate::message::{AgentMessage, Content, TextContent};
+use crate::script_projection::{apply_rhai_script_or_fallback, ScriptContext};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -225,7 +226,12 @@ fn tool_result_context(details: &Option<crate::types::ToolDetails>) -> Option<To
 }
 
 /// Apply the given strategy to text, returning the preview portion.
-fn apply_strategy(text: &str, strategy: &ContextStrategy) -> String {
+/// `script_ctx` is required when the strategy is `Script`.
+fn apply_strategy(
+    text: &str,
+    strategy: &ContextStrategy,
+    script_ctx: Option<&ScriptContext>,
+) -> String {
     match strategy {
         ContextStrategy::KeepFull => text.to_string(),
         ContextStrategy::Head { max_chars } => {
@@ -267,6 +273,14 @@ fn apply_strategy(text: &str, strategy: &ContextStrategy) -> String {
             // Microcompact produces a one-line summary; actual replacement done in project()
             text.to_string()
         }
+        ContextStrategy::Script { script } => {
+            if let Some(ctx) = script_ctx {
+                apply_rhai_script_or_fallback(ctx, script, || take_head_chars(text, 2000))
+            } else {
+                warn!("Script strategy without ScriptContext; falling back to head 2000");
+                take_head_chars(text, 2000)
+            }
+        }
     }
 }
 
@@ -297,6 +311,7 @@ fn strategy_name(strategy: &ContextStrategy) -> &'static str {
         ContextStrategy::HeadTail { .. } => "head_tail",
         ContextStrategy::DropIfOld => "drop_if_old",
         ContextStrategy::Microcompacted => "microcompacted",
+        ContextStrategy::Script { .. } => "script",
     }
 }
 
@@ -320,8 +335,25 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
         "context projection started"
     );
 
+    // Compute turn boundaries up front so Script strategies know their turn index.
+    let turn_boundaries = find_turn_boundaries(&input.messages);
+    let total_turns = turn_boundaries.len().saturating_sub(1);
+
+    // Helper: which turn (0-based) does message index `i` belong to?
+    fn turn_index_for(i: usize, boundaries: &[usize]) -> usize {
+        for (t, &start) in boundaries.iter().enumerate().skip(1) {
+            if i < start {
+                return t.saturating_sub(1);
+            }
+        }
+        boundaries.len().saturating_sub(2)
+    }
+
+    // Pre-compute token estimates for the *original* messages so scripts can see them.
+    let raw_tokens = estimate_tokens(&input.messages);
+
     // Step 1: Tool-result budgeting
-    for msg in &input.messages {
+    for (msg_idx, msg) in input.messages.iter().enumerate() {
         match msg {
             AgentMessage::ToolResult(tr) => {
                 let text = extract_text(&tr.content);
@@ -330,8 +362,19 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
 
                 // Check prior state
                 if let Some(prior) = updated_state.replacements.get(&tool_call_id_str) {
-                    // Reuse prior replacement
-                    let preview = apply_strategy(&text, &prior.strategy);
+                    let script_ctx = ScriptContext {
+                        text: text.clone(),
+                        tool_name: tool_name_str.clone(),
+                        tool_call_id: tool_call_id_str.clone(),
+                        turn_index: turn_index_for(msg_idx, &turn_boundaries),
+                        total_turns,
+                        total_tokens: raw_tokens,
+                        max_context_tokens: input.budget.max_context_tokens,
+                        max_tool_result_chars: input.budget.max_tool_result_chars,
+                        turns_since_compaction: updated_state.turns_since_compaction,
+                        was_replaced_before: true,
+                    };
+                    let preview = apply_strategy(&text, &prior.strategy, Some(&script_ctx));
                     let marker = build_preview_text(
                         &prior.artifact_id,
                         &tool_name_str,
@@ -381,7 +424,20 @@ pub fn project(input: ProjectionInput) -> ProjectionOutput {
                     continue;
                 }
 
-                let preview = apply_strategy(&text, &strategy);
+                let script_ctx = ScriptContext {
+                    text: text.clone(),
+                    tool_name: tool_name_str.clone(),
+                    tool_call_id: tool_call_id_str.clone(),
+                    turn_index: turn_index_for(msg_idx, &turn_boundaries),
+                    total_turns,
+                    total_tokens: raw_tokens,
+                    max_context_tokens: input.budget.max_context_tokens,
+                    max_tool_result_chars: input.budget.max_tool_result_chars,
+                    turns_since_compaction: updated_state.turns_since_compaction,
+                    was_replaced_before: false,
+                };
+
+                let preview = apply_strategy(&text, &strategy, Some(&script_ctx));
                 let artifact_id = format!("tool-result-{tool_call_id_str}");
                 let sname = strategy_name(&strategy);
 
@@ -762,7 +818,7 @@ mod tests {
 
     #[test]
     fn bash_uses_tail_preview() {
-        let big = "A".repeat(3000) + &"B".repeat(2000);
+        let big = format!("{}{}", "A".repeat(3000), "B".repeat(2000));
         let msgs = vec![tool_result_msg("tc-2", "bash", &big)];
         let output = project(ProjectionInput {
             system_prompt: "test".into(),
@@ -800,7 +856,7 @@ mod tests {
 
     #[test]
     fn metadata_strategy_overrides_tool_name_fallback() {
-        let big = "A".repeat(3000) + &"B".repeat(2000);
+        let big = format!("{}{}", "A".repeat(3000), "B".repeat(2000));
         let details = serde_json::json!({
             "content_kind": "file_read",
             "strategy": { "type": "tail", "max_chars": 200 },
@@ -837,7 +893,7 @@ mod tests {
 
     #[test]
     fn nested_context_metadata_strategy_overrides_tool_name_fallback() {
-        let big = "A".repeat(3000) + &"B".repeat(2000);
+        let big = format!("{}{}", "A".repeat(3000), "B".repeat(2000));
         let details = serde_json::json!({
             "exitCode": 0,
             "context": {

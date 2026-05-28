@@ -182,14 +182,16 @@ pub fn create_agent(options: AgentOptions) -> CreateAgentResult {
 }
 
 #[wasm_bindgen(js_name = "prompt")]
-pub fn prompt(handle: u32, prompt: PromptRequest) -> StepResult {
+pub fn prompt(handle: u32, input: PromptInput) -> StepResult {
     console_error_panic_hook::set_once();
     info!(handle, "prompt called");
 
-    let core_prompt: pi_core::AgentMessage = match prompt {
+    let core_prompt: pi_core::AgentMessage = match input.prompt {
         PromptRequest::Message(m) => m.into(),
         PromptRequest::Text { text } => pi_core::AgentMessage::user(text),
     };
+    let core_tools: Vec<pi_core::ToolDefinition> =
+        input.tools.into_iter().map(|t| t.into()).collect();
 
     let runtime = match take_runtime(handle) {
         Ok(r) => r,
@@ -202,7 +204,7 @@ pub fn prompt(handle: u32, prompt: PromptRequest) -> StepResult {
                 events,
                 actions,
                 state,
-            } = idle.start_turn(core_prompt);
+            } = idle.start_turn(core_prompt, core_tools);
             put_runtime(state.into_runtime());
             Ok((events, actions))
         }
@@ -212,7 +214,7 @@ pub fn prompt(handle: u32, prompt: PromptRequest) -> StepResult {
                 events,
                 actions,
                 state,
-            } = idle.start_turn(core_prompt);
+            } = idle.start_turn(core_prompt, core_tools);
             put_runtime(state.into_runtime());
             Ok((events, actions))
         }
@@ -222,7 +224,7 @@ pub fn prompt(handle: u32, prompt: PromptRequest) -> StepResult {
                 events,
                 actions,
                 state,
-            } = idle.start_turn(core_prompt);
+            } = idle.start_turn(core_prompt, core_tools);
             put_runtime(state.into_runtime());
             Ok((events, actions))
         }
@@ -336,7 +338,6 @@ pub fn on_tool_done(handle: u32, tool_call_id: String, payload: ToolDonePayload)
     let core_result: Result<pi_core::ToolResult, pi_core::ToolError> = match payload {
         ToolDonePayload::Failure { error } => Err(error.into()),
         ToolDonePayload::Success { result } => Ok(result.into()),
-        ToolDonePayload::BareSuccess(result) => Ok(result.into()),
     };
 
     let runtime = match take_runtime(handle) {
@@ -829,7 +830,6 @@ mod tests {
                 cost: Default::default(),
             },
             thinking_level: Default::default(),
-            tools: vec![],
             steering_mode: Default::default(),
             follow_up_mode: Default::default(),
             tool_execution_mode: Default::default(),
@@ -852,8 +852,11 @@ mod tests {
         create_agent(dummy_options());
         let resp = prompt(
             0,
-            PromptRequest::Text {
-                text: "hello".to_string(),
+            PromptInput {
+                prompt: PromptRequest::Text {
+                    text: "hello".to_string(),
+                },
+                tools: vec![],
             },
         );
         assert!(resp.ok);
@@ -868,8 +871,11 @@ mod tests {
     fn bad_handle_returns_error() {
         let resp = prompt(
             9999,
-            PromptRequest::Text {
-                text: "hi".to_string(),
+            PromptInput {
+                prompt: PromptRequest::Text {
+                    text: "hi".to_string(),
+                },
+                tools: vec![],
             },
         );
         assert!(!resp.ok);
@@ -881,8 +887,11 @@ mod tests {
         create_agent(dummy_options());
         prompt(
             0,
-            PromptRequest::Text {
-                text: "hello".to_string(),
+            PromptInput {
+                prompt: PromptRequest::Text {
+                    text: "hello".to_string(),
+                },
+                tools: vec![],
             },
         );
 
@@ -915,8 +924,11 @@ mod tests {
         create_agent(dummy_options());
         prompt(
             0,
-            PromptRequest::Text {
-                text: "hello".to_string(),
+            PromptInput {
+                prompt: PromptRequest::Text {
+                    text: "hello".to_string(),
+                },
+                tools: vec![],
             },
         );
 
@@ -1039,8 +1051,11 @@ mod tests {
         create_agent(dummy_options());
         prompt(
             0,
-            PromptRequest::Text {
-                text: "hello".to_string(),
+            PromptInput {
+                prompt: PromptRequest::Text {
+                    text: "hello".to_string(),
+                },
+                tools: vec![],
             },
         );
 
@@ -1085,8 +1100,11 @@ mod tests {
         create_agent(dummy_options());
         prompt(
             0,
-            PromptRequest::Text {
-                text: "hello".to_string(),
+            PromptInput {
+                prompt: PromptRequest::Text {
+                    text: "hello".to_string(),
+                },
+                tools: vec![],
             },
         );
 
@@ -1117,8 +1135,11 @@ mod tests {
         create_agent(dummy_options());
         prompt(
             0,
-            PromptRequest::Text {
-                text: "use tool".to_string(),
+            PromptInput {
+                prompt: PromptRequest::Text {
+                    text: "use tool".to_string(),
+                },
+                tools: vec![],
             },
         );
 
@@ -1161,8 +1182,11 @@ mod tests {
         create_agent(dummy_options());
         prompt(
             0,
-            PromptRequest::Text {
-                text: "use tool".to_string(),
+            PromptInput {
+                prompt: PromptRequest::Text {
+                    text: "use tool".to_string(),
+                },
+                tools: vec![],
             },
         );
 
@@ -1210,6 +1234,150 @@ mod tests {
         assert!(state_resp.ok);
         assert!(!state_resp.data.unwrap().state.is_streaming);
 
+        destroy_agent(0);
+    }
+
+    #[test]
+    fn prompt_with_tools_passes_them_through() {
+        create_agent(dummy_options());
+        let tool = ToolDefinition {
+            name: ToolName("test_tool".to_string()),
+            label: "Test".to_string(),
+            description: "A test tool.".to_string(),
+            parameters: JsonSchema(serde_json::json!({})),
+            execution_mode: Default::default(),
+        };
+        let resp = prompt(
+            0,
+            PromptInput {
+                prompt: PromptRequest::Text {
+                    text: "use tool".to_string(),
+                },
+                tools: vec![tool],
+            },
+        );
+        assert!(resp.ok);
+        let actions = resp.data.unwrap().actions;
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, AgentAction::StreamLlm { .. })));
+        let context = match &actions[0] {
+            AgentAction::StreamLlm { context, .. } => context,
+            other => panic!("expected StreamLlm, got {other:?}"),
+        };
+        assert!(
+            !context.tools.is_empty(),
+            "prompt should pass tools through to StreamLlm context"
+        );
+        assert_eq!(context.tools[0].name, ToolName("test_tool".to_string()));
+        destroy_agent(0);
+    }
+
+    #[test]
+    fn prompt_from_finished_with_tools_passes_them() {
+        create_agent(dummy_options());
+        // First turn: finish without tools
+        prompt(
+            0,
+            PromptInput {
+                prompt: PromptRequest::Text {
+                    text: "hello".to_string(),
+                },
+                tools: vec![],
+            },
+        );
+        let done_resp = on_llm_done(
+            0,
+            LlmResult::Ok(AssistantMessage {
+                content: vec![Content::Text(TextContent {
+                    text: "hi".to_string(),
+                })],
+                api: ApiName("test".to_string()),
+                provider: ProviderName("test".to_string()),
+                model: ModelId("test".to_string()),
+                stop_reason: StopReason::EndTurn,
+                error_message: None,
+                timestamp: 1,
+                usage: TokenUsage::default(),
+            }),
+        );
+        assert!(done_resp.ok);
+
+        // Second turn with tools from Finished state
+        let tool = ToolDefinition {
+            name: ToolName("test_tool".to_string()),
+            label: "Test".to_string(),
+            description: "A test tool.".to_string(),
+            parameters: JsonSchema(serde_json::json!({})),
+            execution_mode: Default::default(),
+        };
+        let resp = prompt(
+            0,
+            PromptInput {
+                prompt: PromptRequest::Text {
+                    text: "use tool".to_string(),
+                },
+                tools: vec![tool],
+            },
+        );
+        assert!(resp.ok);
+        let actions = resp.data.unwrap().actions;
+        let context = match &actions[0] {
+            AgentAction::StreamLlm { context, .. } => context,
+            other => panic!("expected StreamLlm, got {other:?}"),
+        };
+        assert!(
+            !context.tools.is_empty(),
+            "prompt from Finished should pass tools through"
+        );
+        assert_eq!(context.tools[0].name, ToolName("test_tool".to_string()));
+        destroy_agent(0);
+    }
+
+    #[test]
+    fn prompt_from_aborted_with_tools_passes_them() {
+        create_agent(dummy_options());
+        // Start a turn then abort
+        prompt(
+            0,
+            PromptInput {
+                prompt: PromptRequest::Text {
+                    text: "hello".to_string(),
+                },
+                tools: vec![],
+            },
+        );
+        let abort_resp = abort(0);
+        assert!(abort_resp.ok);
+
+        // Prompt from Aborted state with tools
+        let tool = ToolDefinition {
+            name: ToolName("test_tool".to_string()),
+            label: "Test".to_string(),
+            description: "A test tool.".to_string(),
+            parameters: JsonSchema(serde_json::json!({})),
+            execution_mode: Default::default(),
+        };
+        let resp = prompt(
+            0,
+            PromptInput {
+                prompt: PromptRequest::Text {
+                    text: "use tool".to_string(),
+                },
+                tools: vec![tool],
+            },
+        );
+        assert!(resp.ok);
+        let actions = resp.data.unwrap().actions;
+        let context = match &actions[0] {
+            AgentAction::StreamLlm { context, .. } => context,
+            other => panic!("expected StreamLlm, got {other:?}"),
+        };
+        assert!(
+            !context.tools.is_empty(),
+            "prompt from Aborted should pass tools through"
+        );
+        assert_eq!(context.tools[0].name, ToolName("test_tool".to_string()));
         destroy_agent(0);
     }
 }

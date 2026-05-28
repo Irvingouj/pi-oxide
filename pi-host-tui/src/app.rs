@@ -10,7 +10,7 @@ use ratatui::Frame;
 use pi_core::{
     AgentAction, AgentMessage, AgentOptions, AgentRuntime, ApiName, ContextProjectionBudget,
     ContextProjectionState, Model, ModelId, ModelName, ProviderName, QueueMode, SessionId,
-    SessionState, ThinkingLevel, ToolCallId, ToolExecutionMode, WaitMode,
+    SessionState, ThinkingLevel, ToolCallId, ToolDefinition, ToolExecutionMode, WaitMode,
 };
 
 use crate::extension::{BashExtension, BuiltinExtension, Extension};
@@ -70,6 +70,7 @@ pub struct App {
     pub(crate) streaming_text: String,
     #[allow(dead_code)]
     pub(crate) current_tools: Vec<(String, String)>,
+    pub(crate) tool_definitions: Vec<ToolDefinition>,
     pub(crate) llm_client: LlmClient,
     pub(crate) projection_state: ContextProjectionState,
     pub(crate) budget: ContextProjectionBudget,
@@ -143,7 +144,6 @@ impl App {
         let agent = AgentRuntime::new(AgentOptions {
             system_prompt: system_prompt.to_string(),
             model,
-            tools: tool_defs,
             thinking_level: ThinkingLevel::Off,
             steering_mode: QueueMode::OneAtATime,
             follow_up_mode: QueueMode::OneAtATime,
@@ -180,6 +180,7 @@ impl App {
             running: false,
             streaming_text: String::new(),
             current_tools: Vec::new(),
+            tool_definitions: tool_defs,
             llm_client,
             projection_state: ContextProjectionState::default(),
             budget: ContextProjectionBudget::default(),
@@ -420,24 +421,25 @@ impl App {
         let _ = terminal.draw(|f| self.render(f));
 
         let runtime = self.agent.take().unwrap();
+        let tool_defs = self.tool_definitions.clone();
         let (_events, actions, new_runtime) = match runtime {
             AgentRuntime::Idle(idle) => {
-                let t = idle.start_turn(AgentMessage::user(text));
+                let t = idle.start_turn(AgentMessage::user(text), tool_defs);
                 (t.events, t.actions, t.state.into_runtime())
             }
             AgentRuntime::ReadyToContinue(ready) => {
                 let t1 = ready.wait_for_input();
-                let t2 = t1.state.start_turn(AgentMessage::user(text));
+                let t2 = t1.state.start_turn(AgentMessage::user(text), tool_defs);
                 (t2.events, t2.actions, t2.state.into_runtime())
             }
             AgentRuntime::Finished(finished) => {
                 let t1 = finished.restart();
-                let t2 = t1.state.start_turn(AgentMessage::user(text));
+                let t2 = t1.state.start_turn(AgentMessage::user(text), tool_defs);
                 (t2.events, t2.actions, t2.state.into_runtime())
             }
             AgentRuntime::Aborted(aborted) => {
                 let t1 = aborted.restart();
-                let t2 = t1.state.start_turn(AgentMessage::user(text));
+                let t2 = t1.state.start_turn(AgentMessage::user(text), tool_defs);
                 (t2.events, t2.actions, t2.state.into_runtime())
             }
             AgentRuntime::WaitingTools(mut waiting) => {

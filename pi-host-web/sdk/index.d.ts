@@ -37,6 +37,7 @@ export type ToolMap = Record<
 export interface AgentRunConfig {
   llm: LlmProvider;
   tools: ToolMap;
+  llmTools?: ToolDefinition[];
   onEvent?: (event: AgentEvent) => void;
   signal?: AbortSignal;
 }

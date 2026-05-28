@@ -8,8 +8,7 @@
  * Host-owned — no browser APIs in pi-core.
  */
 
-import type { ToolDefinition } from "../tools/schemas.ts";
-import type { ToolCall } from "../wasmBinding.ts";
+import type { ToolCall, ToolDefinition } from "@pi-oxide/pi-host-web";
 import type {
 	BrowserConsoleEntry,
 	BrowserElementSnapshot,
@@ -175,6 +174,11 @@ export const BROWSER_TOOLS: ToolDefinition[] = [
 /** Max text preview length in element snapshots. */
 const MAX_ELEMENT_TEXT = 500;
 
+/** Discriminated result returned by browser tool handlers. */
+export type BrowserToolResult =
+	| { content: Array<{ type: "text"; text: string }> }
+	| { error: { code: string; message: string } };
+
 function truncateText(
 	text: string,
 	max: number,
@@ -219,6 +223,16 @@ function formatConsoleEntries(
 	};
 }
 
+/** Wrap a tool function in a try-catch that produces a typed error result. */
+function tryTool<T>(fn: () => T, errorCode: string): BrowserToolResult {
+	try {
+		return { content: [{ type: "text", text: JSON.stringify(fn(), null, 2) }] };
+	} catch (err: unknown) {
+		const message = err instanceof Error ? err.message : String(err);
+		return { error: { code: errorCode, message } };
+	}
+}
+
 /**
  * Execute a browser tool call against a BrowserRuntime.
  *
@@ -227,7 +241,7 @@ function formatConsoleEntries(
 export function executeBrowserTool(
 	call: ToolCall,
 	runtime: BrowserRuntime,
-): object {
+): BrowserToolResult {
 	switch (call.name) {
 		case "browser_get_page": {
 			const page = runtime.getPage();
@@ -262,22 +276,10 @@ export function executeBrowserTool(
 					},
 				};
 			}
-			try {
-				const result = runtime.evalJs(source);
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify({ ok: true, result }, null, 2),
-						},
-					],
-				};
-			} catch (err: unknown) {
-				const message = err instanceof Error ? err.message : String(err);
-				return {
-					error: { code: "eval_error", message },
-				};
-			}
+			return tryTool(
+				() => ({ ok: true, result: runtime.evalJs(source) }),
+				"eval_error",
+			);
 		}
 
 		case "browser_query_selector": {
@@ -288,41 +290,18 @@ export function executeBrowserTool(
 					error: { code: "invalid_argument", message: "selector is required" },
 				};
 			}
-			if (all) {
-				const elements = runtime.querySelectorAll(selector);
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify(
-								{
-									selector,
-									matchCount: elements.length,
-									elements: elements.map(formatElement),
-								},
-								null,
-								2,
-							),
-						},
-					],
-				};
-			}
-			const el = runtime.querySelector(selector);
-			return {
-				content: [
-					{
-						type: "text",
-						text: JSON.stringify(
-							{
-								selector,
-								found: el ? formatElement(el) : null,
-							},
-							null,
-							2,
-						),
-					},
-				],
-			};
+			return tryTool(() => {
+				if (all) {
+					const elements = runtime.querySelectorAll(selector);
+					return {
+						selector,
+						matchCount: elements.length,
+						elements: elements.map(formatElement),
+					};
+				}
+				const el = runtime.querySelector(selector);
+				return { selector, found: el ? formatElement(el) : null };
+			}, "selector_error");
 		}
 
 		case "browser_click": {
@@ -332,18 +311,13 @@ export function executeBrowserTool(
 					error: { code: "invalid_argument", message: "selector is required" },
 				};
 			}
-			const result = runtime.click(selector);
-			if (!result.ok) {
-				return { error: result.error };
-			}
-			return {
-				content: [
-					{
-						type: "text",
-						text: JSON.stringify({ ok: true, action: "click", selector }),
-					},
-				],
-			};
+			return tryTool(() => {
+				const result = runtime.click(selector);
+				if (!result.ok) {
+					throw new Error(result.error.message);
+				}
+				return { ok: true, action: "click", selector };
+			}, "click_error");
 		}
 
 		case "browser_type": {
@@ -359,23 +333,18 @@ export function executeBrowserTool(
 					error: { code: "invalid_argument", message: "text must be a string" },
 				};
 			}
-			const result = runtime.type(selector, text);
-			if (!result.ok) {
-				return { error: result.error };
-			}
-			return {
-				content: [
-					{
-						type: "text",
-						text: JSON.stringify({
-							ok: true,
-							action: "type",
-							selector,
-							textLength: text.length,
-						}),
-					},
-				],
-			};
+			return tryTool(() => {
+				const result = runtime.type(selector, text);
+				if (!result.ok) {
+					throw new Error(result.error.message);
+				}
+				return {
+					ok: true,
+					action: "type",
+					selector,
+					textLength: text.length,
+				};
+			}, "type_error");
 		}
 
 		case "browser_console": {
@@ -400,27 +369,5 @@ export function executeBrowserTool(
 					message: `no browser tool handler for: ${call.name}`,
 				},
 			};
-	}
-}
-
-// ========================================================================
-// Browser tool registry (implements ToolRegistry)
-// ========================================================================
-
-import type { ToolRegistry } from "../fakeTools.ts";
-
-export class BrowserToolRegistry implements ToolRegistry {
-	readonly log: string[] = [];
-	private readonly runtime: BrowserRuntime;
-
-	constructor(runtime: BrowserRuntime) {
-		this.runtime = runtime;
-	}
-
-	execute(call: ToolCall): object {
-		const result = executeBrowserTool(call, this.runtime);
-		const isError = "error" in result;
-		this.log.push(`${call.name}${isError ? " [ERROR]" : ""}`);
-		return result;
 	}
 }

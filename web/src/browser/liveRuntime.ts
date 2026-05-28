@@ -118,13 +118,25 @@ export class LiveBrowserRuntime implements BrowserRuntime {
 	}
 
 	type(selector: string, text: string): BrowserToolResult {
-		const el = document.querySelector(selector) as HTMLInputElement | null;
+		const el = document.querySelector(selector);
 		if (!el) {
 			return {
 				ok: false,
 				error: {
 					code: "element_not_found",
 					message: `No element matches: ${selector}`,
+				},
+			};
+		}
+		if (
+			!(el instanceof HTMLInputElement) &&
+			!(el instanceof HTMLTextAreaElement)
+		) {
+			return {
+				ok: false,
+				error: {
+					code: "not_input",
+					message: `Element is not an input or textarea: ${selector}`,
 				},
 			};
 		}

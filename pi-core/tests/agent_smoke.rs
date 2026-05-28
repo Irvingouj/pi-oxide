@@ -25,7 +25,6 @@ fn dummy_options() -> AgentOptions {
         system_prompt: "You are a test agent.".to_string(),
         model: dummy_model(),
         thinking_level: pi_core::ThinkingLevel::Off,
-        tools: vec![],
         steering_mode: pi_core::QueueMode::OneAtATime,
         follow_up_mode: pi_core::QueueMode::OneAtATime,
         tool_execution_mode: pi_core::ToolExecutionMode::Parallel,
@@ -46,6 +45,13 @@ fn assistant_with_tool_calls(calls: Vec<ToolCall>) -> AssistantMessage {
         timestamp: 1,
         usage: Default::default(),
     }
+}
+
+fn start_user_turn(
+    idle: pi_core::IdleAgent,
+    text: &str,
+) -> pi_core::Transition<pi_core::StreamingAgent> {
+    idle.start_turn(AgentMessage::user(text), vec![])
 }
 
 fn tool_call(id: &str, name: &str) -> ToolCall {
@@ -69,7 +75,7 @@ fn start_turn_returns_stream_action() {
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("hello"));
+    let t = idle.start_turn(AgentMessage::user("hello"), vec![]);
 
     let runtime = t.state.into_runtime();
     assert!(runtime.state().is_streaming);
@@ -88,7 +94,7 @@ fn on_llm_done_with_no_tools_finishes() {
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("hello"));
+    let t = idle.start_turn(AgentMessage::user("hello"), vec![]);
     let streaming = t.state;
 
     let transition = streaming.finish_llm(LlmResult::done());
@@ -106,7 +112,7 @@ fn reset_clears_state() {
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("hello"));
+    let t = idle.start_turn(AgentMessage::user("hello"), vec![]);
     let runtime = t.state.into_runtime();
 
     let runtime = runtime.reset();
@@ -127,7 +133,7 @@ fn tool_calls_update_public_pending_state() {
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("use tools"));
+    let t = idle.start_turn(AgentMessage::user("use tools"), vec![]);
     let streaming = t.state;
 
     let transition = streaming.finish_llm(LlmResult::Ok(assistant_with_tool_calls(vec![
@@ -153,7 +159,7 @@ fn turn_end_after_tools_reports_assistant_and_tool_results() {
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("use tool"));
+    let t = idle.start_turn(AgentMessage::user("use tool"), vec![]);
     let streaming = t.state;
 
     let transition =
@@ -195,7 +201,7 @@ fn tool_batch_terminates_only_when_all_results_terminate() {
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("use tools"));
+    let t = idle.start_turn(AgentMessage::user("use tools"), vec![]);
     let streaming = t.state;
 
     let transition = streaming.finish_llm(LlmResult::Ok(assistant_with_tool_calls(vec![
@@ -234,7 +240,7 @@ fn continue_turn_after_tools_resumes_llm() {
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("use tool"));
+    let t = idle.start_turn(AgentMessage::user("use tool"), vec![]);
     let streaming = t.state;
 
     let transition =
@@ -265,7 +271,7 @@ fn tool_batch_terminates_when_all_terminate() {
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("use tools"));
+    let t = idle.start_turn(AgentMessage::user("use tools"), vec![]);
     let streaming = t.state;
 
     let transition = streaming.finish_llm(LlmResult::Ok(assistant_with_tool_calls(vec![
@@ -300,7 +306,7 @@ fn text_delta_is_incremental_not_accumulated() {
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("hello"));
+    let t = idle.start_turn(AgentMessage::user("hello"), vec![]);
     let mut streaming = t.state;
 
     // Feed Start chunk to initialize the assistant message
@@ -358,21 +364,13 @@ fn text_delta_is_incremental_not_accumulated() {
 
 #[test]
 fn context_projection_integrates_with_state_machine() {
-    let mut options = dummy_options();
-    options.tools = vec![ToolDefinition {
-        name: ToolName::new("read"),
-        label: "read".into(),
-        description: "Read a file.".into(),
-        parameters: JsonSchema(serde_json::json!({})),
-        execution_mode: Default::default(),
-        tool_run_mode: Default::default(),
-    }];
+    let options = dummy_options();
 
     let runtime = AgentRuntime::new(options);
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("read file"));
+    let t = idle.start_turn(AgentMessage::user("read file"), vec![]);
     let streaming = t.state;
 
     // Finish LLM with a tool call
@@ -463,7 +461,7 @@ fn tool_done_unknown_id_is_noop() {
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("use tools"));
+    let t = idle.start_turn(AgentMessage::user("use tools"), vec![]);
     let streaming = t.state;
 
     let transition =
@@ -493,21 +491,13 @@ fn tool_done_unknown_id_is_noop() {
 
 #[test]
 fn context_projection_keep_full_bypass() {
-    let mut options = dummy_options();
-    options.tools = vec![ToolDefinition {
-        name: ToolName::new("edit"),
-        label: "edit".into(),
-        description: "Edit a file.".into(),
-        parameters: JsonSchema(serde_json::json!({})),
-        execution_mode: Default::default(),
-        tool_run_mode: Default::default(),
-    }];
+    let options = dummy_options();
 
     let runtime = AgentRuntime::new(options);
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("edit file"));
+    let t = idle.start_turn(AgentMessage::user("edit file"), vec![]);
     let streaming = t.state;
 
     let transition =
@@ -607,7 +597,7 @@ fn agent_runtime_delegation_exercise() {
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("hello"));
+    let t = idle.start_turn(AgentMessage::user("hello"), vec![]);
     runtime = t.state.into_runtime();
     assert!(runtime.state().is_streaming);
     assert!(runtime.on_tool_started(ToolCallId::new("x")).is_empty());
@@ -661,7 +651,7 @@ fn agent_runtime_delegation_exercise() {
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("hello"));
+    let t = idle.start_turn(AgentMessage::user("hello"), vec![]);
     let streaming = t.state;
     let transition = streaming.abort();
     runtime = transition.state.into_runtime();
@@ -675,7 +665,7 @@ fn abort_during_streaming_clears_queues_and_emits_agent_end() {
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("hello"));
+    let t = idle.start_turn(AgentMessage::user("hello"), vec![]);
     let mut streaming = t.state;
 
     // Feed a partial chunk so messages contain a streaming assistant
@@ -686,7 +676,8 @@ fn abort_during_streaming_clears_queues_and_emits_agent_end() {
         text: "partial".into(),
     });
     assert!(
-        ev.iter().any(|e| matches!(e, AgentEvent::MessageUpdate { .. })),
+        ev.iter()
+            .any(|e| matches!(e, AgentEvent::MessageUpdate { .. })),
         "feeding a chunk should emit MessageUpdate"
     );
 
@@ -697,31 +688,27 @@ fn abort_during_streaming_clears_queues_and_emits_agent_end() {
     assert!(matches!(runtime, AgentRuntime::Aborted(_)));
     assert!(!runtime.state().is_streaming);
     assert!(
-        events.iter().any(|e| matches!(e, AgentEvent::AgentEnd { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::AgentEnd { .. })),
         "abort should emit AgentEnd"
     );
     // Partial message remains in transcript
-    assert_eq!(runtime.state().messages.len(), 2, "user + partial assistant");
+    assert_eq!(
+        runtime.state().messages.len(),
+        2,
+        "user + partial assistant"
+    );
 }
 
 #[test]
 fn abort_from_waiting_tools_clears_pending_tools() {
-    let tool = ToolDefinition {
-        name: ToolName::new("test_tool"),
-        label: "Test".into(),
-        description: "A test tool.".into(),
-        parameters: JsonSchema::new(serde_json::json!({})),
-        execution_mode: Default::default(),
-        tool_run_mode: Default::default(),
-    };
-    let mut options = dummy_options();
-    options.tools = vec![tool];
-    let mut runtime = AgentRuntime::new(options);
+    let mut runtime = AgentRuntime::new(dummy_options());
 
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("run tool"));
+    let t = idle.start_turn(AgentMessage::user("run tool"), vec![]);
     let streaming = t.state;
 
     let assistant = assistant_with_tool_calls(vec![tool_call("tc-1", "test_tool")]);
@@ -743,7 +730,10 @@ fn abort_from_waiting_tools_clears_pending_tools() {
     );
     assert!(!runtime.state().is_streaming);
     assert!(
-        transition.events.iter().any(|e| matches!(e, AgentEvent::AgentEnd { .. })),
+        transition
+            .events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::AgentEnd { .. })),
         "abort should emit AgentEnd"
     );
 }
@@ -756,7 +746,9 @@ fn steer_in_idle_queues_message_and_emits_queue_update() {
     };
     let events = idle.steer(AgentMessage::user(" steer me"));
     assert!(
-        events.iter().any(|e| matches!(e, AgentEvent::QueueUpdate { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::QueueUpdate { .. })),
         "steer should emit QueueUpdate"
     );
     runtime = idle.into_runtime();
@@ -769,13 +761,15 @@ fn steer_in_ready_to_continue_is_drained_on_next_turn() {
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("hello"));
+    let t = idle.start_turn(AgentMessage::user("hello"), vec![]);
     let streaming = t.state;
 
     // Finish LLM with a tool call so we land in WaitingTools
-    let transition = streaming.finish_llm(LlmResult::Ok(assistant_with_tool_calls(vec![
-        tool_call("tc-1", "test_tool"),
-    ])));
+    let transition =
+        streaming.finish_llm(LlmResult::Ok(assistant_with_tool_calls(vec![tool_call(
+            "tc-1",
+            "test_tool",
+        )])));
     runtime = transition.into_parts().2;
     assert!(matches!(runtime, AgentRuntime::WaitingTools(_)));
 
@@ -792,7 +786,9 @@ fn steer_in_ready_to_continue_is_drained_on_next_turn() {
     };
     let steer_events = ready.steer(AgentMessage::user("steer while ready"));
     assert!(
-        steer_events.iter().any(|e| matches!(e, AgentEvent::QueueUpdate { .. })),
+        steer_events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::QueueUpdate { .. })),
         "steer in ReadyToContinue should emit QueueUpdate"
     );
 
@@ -807,9 +803,15 @@ fn steer_in_ready_to_continue_is_drained_on_next_turn() {
         runtime.state().messages.iter().any(|m| {
             if let AgentMessage::User(u) = m {
                 u.content.iter().any(|c| {
-                    if let Content::Text(t) = c { t.text.contains("steer while ready") } else { false }
+                    if let Content::Text(t) = c {
+                        t.text.contains("steer while ready")
+                    } else {
+                        false
+                    }
                 })
-            } else { false }
+            } else {
+                false
+            }
         }),
         "steer message should appear in transcript after continue_turn"
     );
@@ -817,22 +819,12 @@ fn steer_in_ready_to_continue_is_drained_on_next_turn() {
 
 #[test]
 fn cancel_tool_removes_pending_and_emits_cancellation() {
-    let tool = ToolDefinition {
-        name: ToolName::new("test_tool"),
-        label: "Test".into(),
-        description: "A test tool.".into(),
-        parameters: JsonSchema::new(serde_json::json!({})),
-        execution_mode: Default::default(),
-        tool_run_mode: Default::default(),
-    };
-    let mut options = dummy_options();
-    options.tools = vec![tool];
-    let mut runtime = AgentRuntime::new(options);
+    let mut runtime = AgentRuntime::new(dummy_options());
 
     let AgentRuntime::Idle(idle) = runtime else {
         panic!("expected Idle");
     };
-    let t = idle.start_turn(AgentMessage::user("run tool"));
+    let t = idle.start_turn(AgentMessage::user("run tool"), vec![]);
     let streaming = t.state;
 
     let assistant = assistant_with_tool_calls(vec![tool_call("tc-1", "test_tool")]);
@@ -851,12 +843,147 @@ fn cancel_tool_removes_pending_and_emits_cancellation() {
     let (events, _actions, new_runtime) = transition.into_parts();
 
     assert!(
-        events.iter().any(|e| matches!(e, AgentEvent::ToolExecutionCancelled { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolExecutionCancelled { .. })),
         "cancel_tool should emit ToolExecutionCancelled"
     );
     assert!(
-        matches!(new_runtime, AgentRuntime::ReadyToContinue(_) | AgentRuntime::Idle(_)),
+        matches!(
+            new_runtime,
+            AgentRuntime::ReadyToContinue(_) | AgentRuntime::Idle(_)
+        ),
         "canceling the only pending tool should leave ReadyToContinue or Idle"
     );
     assert!(new_runtime.state().pending_tool_calls.is_empty());
+}
+
+#[test]
+fn start_turn_tools_appear_in_stream_llm_context() {
+    let runtime = AgentRuntime::new(dummy_options());
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let tool = ToolDefinition {
+        name: ToolName::new("read"),
+        label: "Read".into(),
+        description: "Read a file.".into(),
+        parameters: JsonSchema::new(serde_json::json!({})),
+        execution_mode: Default::default(),
+        tool_run_mode: Default::default(),
+    };
+    let t = idle.start_turn(AgentMessage::user("read file"), vec![tool.clone()]);
+
+    assert_eq!(t.actions.len(), 1);
+    let context = match &t.actions[0] {
+        AgentAction::StreamLlm { context, .. } => context,
+        other => panic!("expected StreamLlm, got {other:?}"),
+    };
+    assert_eq!(context.tools.len(), 1);
+    assert_eq!(context.tools[0].name, tool.name);
+}
+
+#[test]
+fn continue_turn_preserves_tools_from_start_turn() {
+    let mut runtime = AgentRuntime::new(dummy_options());
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let tool = ToolDefinition {
+        name: ToolName::new("test_tool"),
+        label: "Test".into(),
+        description: "A test tool.".into(),
+        parameters: JsonSchema::new(serde_json::json!({})),
+        execution_mode: Default::default(),
+        tool_run_mode: Default::default(),
+    };
+    let t = idle.start_turn(AgentMessage::user("use tool"), vec![tool.clone()]);
+    let streaming = t.state;
+
+    let assistant = assistant_with_tool_calls(vec![tool_call("tc-1", "test_tool")]);
+    let transition = streaming.finish_llm(LlmResult::Ok(assistant));
+    runtime = transition.into_parts().2;
+    assert!(matches!(runtime, AgentRuntime::WaitingTools(_)));
+
+    let AgentRuntime::WaitingTools(waiting) = runtime else {
+        panic!("expected WaitingTools");
+    };
+    let transition = waiting.on_tool_done(ToolCallId::new("tc-1"), Ok(ToolResult::text("ok")));
+    runtime = transition.into_parts().2;
+    assert!(matches!(runtime, AgentRuntime::ReadyToContinue(_)));
+
+    let AgentRuntime::ReadyToContinue(ready) = runtime else {
+        panic!("expected ReadyToContinue");
+    };
+    let t = ready.continue_turn();
+    assert_eq!(t.actions.len(), 1);
+    let context = match &t.actions[0] {
+        AgentAction::StreamLlm { context, .. } => context,
+        other => panic!("expected StreamLlm, got {other:?}"),
+    };
+    assert_eq!(context.tools.len(), 1);
+    assert_eq!(context.tools[0].name, tool.name);
+}
+
+#[test]
+fn abort_clears_current_turn_tools() {
+    let mut runtime = AgentRuntime::new(dummy_options());
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let tool = ToolDefinition {
+        name: ToolName::new("test_tool"),
+        label: "Test".into(),
+        description: "A test tool.".into(),
+        parameters: JsonSchema::new(serde_json::json!({})),
+        execution_mode: Default::default(),
+        tool_run_mode: Default::default(),
+    };
+    let t = idle.start_turn(AgentMessage::user("use tool"), vec![tool]);
+    let streaming = t.state;
+
+    let transition = streaming.abort();
+    runtime = transition.state.into_runtime();
+    assert!(matches!(runtime, AgentRuntime::Aborted(_)));
+
+    let AgentRuntime::Aborted(aborted) = runtime else {
+        panic!("expected Aborted");
+    };
+    let transition = aborted.restart();
+    let idle = transition.state;
+    let t = idle.start_turn(AgentMessage::user("hello again"), vec![]);
+    let context = match &t.actions[0] {
+        AgentAction::StreamLlm { context, .. } => context,
+        other => panic!("expected StreamLlm, got {other:?}"),
+    };
+    assert!(context.tools.is_empty(), "abort should clear turn_tools");
+}
+
+#[test]
+fn reset_clears_current_turn_tools() {
+    let mut runtime = AgentRuntime::new(dummy_options());
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let tool = ToolDefinition {
+        name: ToolName::new("test_tool"),
+        label: "Test".into(),
+        description: "A test tool.".into(),
+        parameters: JsonSchema::new(serde_json::json!({})),
+        execution_mode: Default::default(),
+        tool_run_mode: Default::default(),
+    };
+    let t = idle.start_turn(AgentMessage::user("use tool"), vec![tool]);
+    runtime = t.state.into_runtime();
+
+    runtime = runtime.reset();
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let t = idle.start_turn(AgentMessage::user("hello again"), vec![]);
+    let context = match &t.actions[0] {
+        AgentAction::StreamLlm { context, .. } => context,
+        other => panic!("expected StreamLlm, got {other:?}"),
+    };
+    assert!(context.tools.is_empty(), "reset should clear turn_tools");
 }

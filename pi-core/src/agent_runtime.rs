@@ -10,7 +10,7 @@ use crate::events::{AgentAction, AgentEvent, CancelReason, ToolExecutionUpdate};
 use crate::llm::{LlmChunk, LlmResult};
 use crate::message::AgentMessage;
 use crate::session::SessionState;
-use crate::tool::{ToolError, ToolResult};
+use crate::tool::{ToolDefinition, ToolError, ToolResult};
 use crate::types::ToolCallId;
 
 // ---------------------------------------------------------------------------
@@ -258,8 +258,12 @@ impl IdleAgent {
         self.agent
     }
 
-    pub fn start_turn(mut self, msg: AgentMessage) -> Transition<StreamingAgent> {
-        let (events, actions) = self.agent.start_turn(msg);
+    pub fn start_turn(
+        mut self,
+        msg: AgentMessage,
+        tools: Vec<ToolDefinition>,
+    ) -> Transition<StreamingAgent> {
+        let (events, actions) = self.agent.start_turn(msg, tools);
         Transition {
             events,
             actions,
@@ -558,7 +562,9 @@ impl FinishedAgent {
     /// Transition back to Idle without clearing conversation history.
     /// Used when the host wants to start a new turn after the previous one finished.
     pub fn into_idle(self) -> IdleAgent {
-        IdleAgent { agent: self.agent }
+        let mut agent = self.agent;
+        agent.turn_tools.clear();
+        IdleAgent { agent }
     }
 
     pub fn into_runtime(self) -> AgentRuntime {
@@ -591,7 +597,9 @@ impl AbortedAgent {
     /// Transition back to Idle without clearing conversation history.
     /// Used when the host wants to start a new turn after an abort/error.
     pub fn into_idle(self) -> IdleAgent {
-        IdleAgent { agent: self.agent }
+        let mut agent = self.agent;
+        agent.turn_tools.clear();
+        IdleAgent { agent }
     }
 
     pub fn into_runtime(self) -> AgentRuntime {

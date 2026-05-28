@@ -5,7 +5,7 @@
  * tree that mirrors the Rust core session model.
  */
 
-import type { SessionState } from "../wasmBinding.ts";
+import type { SessionState } from "@pi-oxide/pi-host-web";
 
 export interface SessionBackend {
 	save(sessionId: string, state: SessionState): Promise<void>;

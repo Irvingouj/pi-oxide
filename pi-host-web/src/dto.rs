@@ -654,7 +654,6 @@ pub struct AgentState {
     pub system_prompt: String,
     pub model: Model,
     pub thinking_level: ThinkingLevel,
-    pub tools: Vec<ToolDefinition>,
     pub messages: Vec<AgentMessage>,
     pub is_streaming: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -813,8 +812,6 @@ pub struct AgentOptions {
     #[serde(default)]
     pub thinking_level: ThinkingLevel,
     #[serde(default)]
-    pub tools: Vec<ToolDefinition>,
-    #[serde(default)]
     pub steering_mode: QueueMode,
     #[serde(default)]
     pub follow_up_mode: QueueMode,
@@ -851,11 +848,18 @@ pub enum PromptRequest {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct PromptInput {
+    pub prompt: PromptRequest,
+    #[serde(default)]
+    pub tools: Vec<ToolDefinition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(untagged)]
 pub enum ToolDonePayload {
     Failure { error: ToolError },
     Success { result: ToolResult },
-    BareSuccess(ToolResult),
 }
 
 // ---------------------------------------------------------------------------

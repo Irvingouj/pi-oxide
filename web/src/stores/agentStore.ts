@@ -69,3 +69,9 @@ export const useAgentStore = create<AgentStore>((set) => ({
 	setError: (e) => set({ error: e }),
 	clearMessages: () => set({ messages: [], error: null }),
 }));
+
+// Expose for test/debug scripts
+if (typeof window !== "undefined") {
+	(window as unknown as Record<string, unknown>).__useAgentStore =
+		useAgentStore;
+}

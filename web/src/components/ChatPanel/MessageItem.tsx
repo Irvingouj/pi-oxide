@@ -56,7 +56,7 @@ export default function MessageItem({ message }: MessageItemProps) {
 	switch (message.type) {
 		case "tool":
 			return (
-				<div style={styles.tool}>
+				<div className="msg-tool" style={styles.tool}>
 					<span style={{ color: "#e94560", fontWeight: "bold" }}>
 						{message.toolName}
 					</span>{" "}
@@ -78,7 +78,12 @@ export default function MessageItem({ message }: MessageItemProps) {
 			);
 		default:
 			return (
-				<div style={styles[message.type] || baseStyle}>{message.text}</div>
+				<div
+					className={`msg-${message.type}`}
+					style={styles[message.type] || baseStyle}
+				>
+					{message.text}
+				</div>
 			);
 	}
 }

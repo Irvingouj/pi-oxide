@@ -41,6 +41,7 @@ export default function InputBar({
 			}}
 		>
 			<textarea
+				id="user-input"
 				rows={2}
 				placeholder="Ask the agent to inspect or interact with this page..."
 				value={text}
@@ -101,6 +102,7 @@ export default function InputBar({
 				</>
 			)}
 			<button
+				id="send-btn"
 				type="button"
 				onClick={handleSend}
 				disabled={isRunning || !text.trim()}

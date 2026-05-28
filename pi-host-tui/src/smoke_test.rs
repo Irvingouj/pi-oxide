@@ -56,7 +56,6 @@ mod tests {
             system_prompt: "You are a helpful coding assistant. Use tools when needed.".to_string(),
             model: dummy_model(),
             thinking_level: Default::default(),
-            tools: build_tools(),
             steering_mode: Default::default(),
             follow_up_mode: Default::default(),
             tool_execution_mode: Default::default(),
@@ -64,6 +63,7 @@ mod tests {
             messages: vec![],
             session_state: None,
         };
+        let tools = build_tools();
 
         let mut runtime = AgentRuntime::new(options);
 
@@ -71,7 +71,10 @@ mod tests {
         let AgentRuntime::Idle(idle) = runtime else {
             panic!("expected Idle");
         };
-        let t = idle.start_turn(AgentMessage::user("run 'sleep 1 && echo hello from bash'"));
+        let t = idle.start_turn(
+            AgentMessage::user("run 'sleep 1 && echo hello from bash'"),
+            tools,
+        );
         println!("start_turn events: {:?}", t.events);
         println!("start_turn actions: {:?}", t.actions);
         runtime = t.state.into_runtime();

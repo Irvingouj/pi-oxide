@@ -32,3 +32,9 @@ export const useConfigStore = create<ConfigStore>()(
 		},
 	),
 );
+
+// Expose for test/debug scripts
+if (typeof window !== "undefined") {
+	(window as unknown as Record<string, unknown>).__useConfigStore =
+		useConfigStore;
+}

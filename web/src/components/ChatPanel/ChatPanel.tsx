@@ -16,6 +16,7 @@ export default function ChatPanel({
 }: ChatPanelProps) {
 	return (
 		<div
+			data-running={isRunning}
 			style={{
 				width: "50%",
 				display: "flex",

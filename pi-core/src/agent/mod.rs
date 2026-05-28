@@ -18,7 +18,6 @@ pub struct AgentState {
     pub system_prompt: String,
     pub model: Model,
     pub thinking_level: ThinkingLevel,
-    pub tools: Vec<ToolDefinition>,
     pub messages: Vec<AgentMessage>,
     pub is_streaming: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -35,8 +34,6 @@ pub struct AgentOptions {
     pub model: Model,
     #[serde(default)]
     pub thinking_level: ThinkingLevel,
-    #[serde(default)]
-    pub tools: Vec<ToolDefinition>,
     #[serde(default)]
     pub steering_mode: QueueMode,
     #[serde(default)]
@@ -75,6 +72,7 @@ pub struct Agent {
     pub(crate) follow_up_mode: QueueMode,
     pub(crate) session_id: Option<SessionId>,
     pub(crate) session_state: SessionState,
+    pub(crate) turn_tools: Vec<ToolDefinition>,
 }
 
 impl Agent {
@@ -88,7 +86,6 @@ impl Agent {
                 system_prompt: options.system_prompt,
                 model: options.model,
                 thinking_level: options.thinking_level,
-                tools: options.tools,
                 messages: options.messages,
                 is_streaming: false,
                 streaming_message: None,
@@ -105,6 +102,7 @@ impl Agent {
             follow_up_mode: options.follow_up_mode,
             session_id: options.session_id,
             session_state,
+            turn_tools: Vec::new(),
         }
     }
 
@@ -119,6 +117,7 @@ impl Agent {
         self.state.pending_tool_calls.clear();
         self.state.is_streaming = false;
         self.state.streaming_message = None;
+        self.turn_tools.clear();
         self.phase = Phase::Idle;
 
         vec![
@@ -166,6 +165,7 @@ impl Agent {
         self.completed_tool_results.clear();
         self.session_state = SessionState::default();
         self.completed_tool_terminations.clear();
+        self.turn_tools.clear();
         self.phase = Phase::Idle;
     }
 
@@ -175,7 +175,7 @@ impl Agent {
         LlmContext {
             system_prompt: self.state.system_prompt.clone(),
             messages: self.state.messages.clone(),
-            tools: self.state.tools.clone(),
+            tools: self.turn_tools.clone(),
         }
     }
 

@@ -123,17 +123,20 @@ export class Agent {
       }
     };
 
-    let step = unwrap(prompt(this.#handle, { text: promptText }));
+    const llmTools = config.llmTools ?? [];
+    let step = unwrap(
+      prompt(this.#handle, {
+        prompt: { text: promptText },
+        tools: llmTools,
+      })
+    );
     for (const event of step.events) {
       config.onEvent?.(event);
     }
 
     while (true) {
       checkAbort();
-      let actions = step.actions ?? [];
-      if (actions.length === 0) {
-        return { type: "finished", messages: [] };
-      }
+      const actions = step.actions ?? [];
 
       for (const action of actions) {
         checkAbort();
@@ -192,7 +195,7 @@ export class Agent {
             return action;
 
           default:
-            return action;
+            throw new HostError("unknown_action", `Unknown action type: ${action.type}`);
         }
       }
     }

@@ -1,6 +1,6 @@
+import type { SessionState } from "@pi-oxide/pi-host-web";
 import { create } from "zustand";
 import { IndexedDBSessionBackend } from "../browser/persistence.ts";
-import type { SessionState } from "../browser/wasmBinding.ts";
 
 interface SessionStore {
 	restoredState: SessionState | undefined;

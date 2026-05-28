@@ -29,11 +29,15 @@ function eventToStoreAction(
 ) {
 	switch (event.type) {
 		case "message_start": {
-			store.addMessage({
-				id: `msg-${Date.now()}`,
-				type: "assistant",
-				text: "",
-			});
+			// Only create an empty assistant message slot for assistant messages.
+			// MessageStart fires for user, tool_result, and assistant messages.
+			if (event.message?.role === "assistant") {
+				store.addMessage({
+					id: `msg-${Date.now()}`,
+					type: "assistant",
+					text: "",
+				});
+			}
 			break;
 		}
 		case "message_update": {
@@ -97,11 +101,7 @@ export function useAgent() {
 			await sessionStore.loadSession(SESSION_ID);
 			if (cancelled) return;
 
-			const a = await createAgent(
-				SESSION_ID,
-				sessionStore.restoredState,
-				BROWSER_TOOLS,
-			);
+			const a = await createAgent(SESSION_ID, sessionStore.restoredState);
 			if (cancelled) {
 				a.destroy();
 				return;
@@ -166,6 +166,7 @@ export function useAgent() {
 					},
 				},
 				tools,
+				llmTools: BROWSER_TOOLS,
 				onEvent: (event) => eventToStoreAction(event, store),
 				signal: abortController.signal,
 			});
@@ -200,14 +201,19 @@ export function useAgent() {
 
 	const steerPrompt = useCallback(
 		async (text: string) => {
-			if (!agent || !store.isRunning || !text.trim()) return;
+			if (!agent || !text.trim()) return;
 			try {
 				const events = steerAgent(agent, text);
 				for (const event of events) {
 					eventToStoreAction(event, store);
 				}
 			} catch (e: unknown) {
-				console.warn("steer failed:", e);
+				const code = (e as { code?: string }).code;
+				if (code === "wrong_phase") {
+					console.warn("steer ignored: agent is not in a steerable phase");
+				} else {
+					console.warn("steer failed:", e);
+				}
 			}
 		},
 		[agent, store],

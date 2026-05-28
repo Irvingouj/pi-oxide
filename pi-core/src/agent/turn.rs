@@ -1,6 +1,7 @@
 use super::{Agent, Phase};
 use crate::events::{AgentAction, AgentEvent, WaitMode};
 use crate::message::AgentMessage;
+use crate::tool::ToolDefinition;
 use tracing::{debug, warn};
 
 impl Agent {
@@ -8,6 +9,7 @@ impl Agent {
     pub(crate) fn start_turn(
         &mut self,
         prompt: AgentMessage,
+        tools: Vec<ToolDefinition>,
     ) -> (Vec<AgentEvent>, Vec<AgentAction>) {
         if self.phase == Phase::Streaming {
             warn!(phase = ?self.phase, "start_turn requested while LLM is streaming");
@@ -21,6 +23,7 @@ impl Agent {
 
         self.state.messages.push(prompt.clone());
         self.append_session_message(&prompt);
+        self.turn_tools = tools;
         debug!(
             message_count = self.state.messages.len(),
             "agent turn started"

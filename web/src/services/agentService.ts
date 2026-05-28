@@ -59,17 +59,10 @@ export const DEFAULT_MODEL: AgentModelConfig = {
 export async function createAgent(
 	sessionId: string,
 	sessionState?: SessionState,
-	tools?: Array<{
-		name: string;
-		label: string;
-		description: string;
-		parameters: unknown;
-	}>,
 ): Promise<Agent> {
 	return Agent.create({
 		system_prompt: SYSTEM_PROMPT,
 		model: DEFAULT_MODEL,
-		tools: tools ?? [],
 		session_id: sessionId,
 		session_state: sessionState,
 	});

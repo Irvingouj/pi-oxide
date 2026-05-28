@@ -19,6 +19,7 @@ import { createLlmProvider } from "../services/llmService.ts";
 import { runProjection } from "../services/projectionService.ts";
 import { BROWSER_TOOLS, createToolRegistry } from "../services/toolService.ts";
 import { useAgentStore } from "../stores/agentStore.ts";
+import { useConfigStore } from "../stores/configStore.ts";
 import { useSessionStore } from "../stores/sessionStore.ts";
 
 const SESSION_ID = "browser-default-session";
@@ -90,6 +91,7 @@ export function useAgent() {
 	const runtimeRef = useRef(new LiveBrowserRuntime());
 
 	const store = useAgentStore();
+	const configStore = useConfigStore();
 	const sessionStore = useSessionStore();
 
 	// Create agent on mount
@@ -158,6 +160,7 @@ export function useAgent() {
 						const projected = runProjection(
 							context.system_prompt,
 							context.messages,
+							{ max_tool_result_chars: configStore.maxToolResultChars },
 						);
 						return llmProvider.call(
 							{ ...context, messages: projected },
@@ -196,7 +199,7 @@ export function useAgent() {
 				console.warn("session save failed:", e);
 			}
 		},
-		[agent, store, sessionStore],
+		[agent, store, configStore, sessionStore],
 	);
 
 	const steerPrompt = useCallback(

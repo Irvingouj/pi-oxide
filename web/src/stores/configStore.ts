@@ -10,10 +10,12 @@ interface ConfigStore {
 	apiKey: string;
 	baseUrl: string;
 	model: string;
+	maxToolResultChars: number;
 
 	setApiKey: (key: string) => void;
 	setBaseUrl: (url: string) => void;
 	setModel: (model: string) => void;
+	setMaxToolResultChars: (n: number) => void;
 }
 
 export const useConfigStore = create<ConfigStore>()(
@@ -22,10 +24,13 @@ export const useConfigStore = create<ConfigStore>()(
 			apiKey: viteEnv.VITE_API_KEY ?? "",
 			baseUrl: viteEnv.VITE_BASE_URL ?? "",
 			model: viteEnv.VITE_MODEL ?? "",
+			maxToolResultChars: 50000,
 
 			setApiKey: (apiKey) => set({ apiKey }),
 			setBaseUrl: (baseUrl) => set({ baseUrl }),
 			setModel: (model) => set({ model }),
+			setMaxToolResultChars: (maxToolResultChars) =>
+				set({ maxToolResultChars }),
 		}),
 		{
 			name: "pi-oxide-config",

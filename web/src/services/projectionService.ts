@@ -26,12 +26,14 @@ const budget: ProjectionBudget = {
 export function runProjection(
 	systemPrompt: string,
 	messages: unknown[],
+	overrideBudget?: Partial<ProjectionBudget>,
 ): unknown[] {
+	const activeBudget = { ...budget, ...overrideBudget };
 	try {
 		const result = projectContext({
 			system_prompt: systemPrompt,
 			messages,
-			budget,
+			budget: activeBudget,
 			state,
 		});
 		if (!result.ok) {

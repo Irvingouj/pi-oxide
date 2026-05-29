@@ -1,19 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use ts_rs::TS;
 
 use crate::context::LlmContext;
 use crate::events::{AgentAction, AgentEvent, QueueMode, ThinkingLevel};
 use crate::llm::Model;
 use crate::message::{AgentMessage, Content, ToolCall, ToolResultMessage};
 use crate::session::SessionState;
-use crate::tool::{ToolDefinition, ToolExecutionMode};
+use crate::tool::{ExecutionMode, ToolDefinition};
 use crate::types::{SessionId, ToolCallId};
 use tracing::{debug, warn};
 
 /// Public agent state.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentState {
     pub system_prompt: String,
     pub model: Model,
@@ -28,7 +26,7 @@ pub struct AgentState {
 }
 
 /// Options for constructing an Agent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentOptions {
     pub system_prompt: String,
     pub model: Model,
@@ -39,18 +37,17 @@ pub struct AgentOptions {
     #[serde(default)]
     pub follow_up_mode: QueueMode,
     #[serde(default)]
-    pub tool_execution_mode: ToolExecutionMode,
+    pub tool_execution_mode: ExecutionMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<SessionId>,
     #[serde(default)]
     pub messages: Vec<AgentMessage>,
     #[serde(default)]
-    #[ts(skip)]
     pub session_state: Option<SessionState>,
 }
 
 /// Internal phase of the agent state machine.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
     Idle,

@@ -8,7 +8,7 @@
  * response as chunks + final result, matching the existing AgentHost pattern.
  */
 
-import type { ToolDefinition } from "../tools/schemas.ts";
+import type { ToolDefinition } from "@pi-oxide/pi-host-web";
 import type {
 	AgentMessageShape,
 	ContentBlock,

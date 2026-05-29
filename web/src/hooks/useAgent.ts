@@ -15,14 +15,23 @@ import {
 	steerAgent,
 	stopAgent,
 } from "../services/agentService.ts";
-import { createLlmProvider, smartExtract } from "../services/llmService.ts";
-import { runProjection } from "../services/projectionService.ts";
-import { BROWSER_TOOLS, createToolRegistry } from "../services/toolService.ts";
+import { createLlmProvider } from "../services/llmService.ts";
+import {
+	createProjectionService,
+	type ProjectionService,
+} from "../services/projectionService.ts";
+import {
+	ARTIFACT_TOOLS,
+	BROWSER_TOOLS,
+	createArtifactToolRegistry,
+	createToolRegistry,
+} from "../services/toolService.ts";
 import { useAgentStore } from "../stores/agentStore.ts";
 import { useConfigStore } from "../stores/configStore.ts";
 import { useSessionStore } from "../stores/sessionStore.ts";
 
 const SESSION_ID = "browser-default-session";
+const MAX_TOOL_RESULT_DISPLAY_CHARS = 500;
 
 function eventToStoreAction(
 	event: AgentEvent,
@@ -63,8 +72,15 @@ function eventToStoreAction(
 		}
 		case "tool_execution_end": {
 			const result = event.result as { content?: Array<{ text?: string }> };
-			const text = result.content?.map((c) => c.text).join("\n") ?? "";
-			store.setToolResult(event.tool_call_id, text.slice(0, 500));
+			const text =
+				result.content
+					?.map((c) => c.text)
+					.filter((t): t is string => t !== undefined)
+					.join("\n") ?? "";
+			store.setToolResult(
+				event.tool_call_id,
+				text.slice(0, MAX_TOOL_RESULT_DISPLAY_CHARS),
+			);
 			break;
 		}
 		case "queue_update": {
@@ -77,9 +93,18 @@ function eventToStoreAction(
 			}
 			break;
 		}
-		case "finished":
-		case "wait_for_input": {
+		case "agent_end": {
 			store.setRunning(false);
+			break;
+		}
+		case "tool_execution_update":
+		case "tool_execution_cancelled":
+		case "turn_start":
+		case "turn_end":
+		case "agent_start":
+		case "save_point":
+		case "settled": {
+			// No-op for now; these events are not yet displayed in the UI
 			break;
 		}
 	}
@@ -89,6 +114,9 @@ export function useAgent() {
 	const [agent, setAgent] = useState<Agent | null>(null);
 	const abortControllerRef = useRef<AbortController | null>(null);
 	const runtimeRef = useRef(new LiveBrowserRuntime());
+	const projectionServiceRef = useRef<ProjectionService>(
+		createProjectionService(),
+	);
 
 	const store = useAgentStore();
 	const configStore = useConfigStore();
@@ -100,6 +128,7 @@ export function useAgent() {
 
 		async function init() {
 			store.setStatus("Loading WASM...");
+			projectionServiceRef.current.clearArtifacts();
 			await sessionStore.loadSession(SESSION_ID);
 			if (cancelled) return;
 
@@ -107,6 +136,17 @@ export function useAgent() {
 			if (cancelled) {
 				a.destroy();
 				return;
+			}
+
+			if (sessionStore.restoredState?.projection_state) {
+				projectionServiceRef.current.restoreState(
+					sessionStore.restoredState.projection_state,
+				);
+			}
+			if (sessionStore.restoredState?.artifacts) {
+				projectionServiceRef.current.loadArtifacts(
+					sessionStore.restoredState.artifacts,
+				);
 			}
 
 			setAgent(a);
@@ -151,15 +191,17 @@ export function useAgent() {
 			const abortController = new AbortController();
 			abortControllerRef.current = abortController;
 
-			const tools = createToolRegistry(runtimeRef.current, (text, prompt) =>
-				smartExtract(text, prompt, abortController.signal),
-			);
+			const projectionService = projectionServiceRef.current;
+			const tools = {
+				...createToolRegistry(runtimeRef.current),
+				...createArtifactToolRegistry(projectionService),
+			};
 			const llmProvider = createLlmProvider(abortController.signal);
 
 			const result = await runTurn(agent, text, {
 				llm: {
 					async call(context, signal) {
-						const projected = runProjection(
+						const projected = projectionService.runProjection(
 							context.system_prompt,
 							context.messages,
 							{ max_tool_result_chars: configStore.maxToolResultChars },
@@ -171,7 +213,7 @@ export function useAgent() {
 					},
 				},
 				tools,
-				llmTools: BROWSER_TOOLS,
+				llmTools: [...BROWSER_TOOLS, ...ARTIFACT_TOOLS],
 				onEvent: (event) => eventToStoreAction(event, store),
 				signal: abortController.signal,
 			});
@@ -193,9 +235,20 @@ export function useAgent() {
 			store.setRunning(false);
 			abortControllerRef.current = null;
 
+			const lastReport = projectionServiceRef.current.getLastReport();
+			if (lastReport?.needs_compaction) {
+				projectionServiceRef.current.resetTurnsSinceCompaction();
+			} else {
+				projectionServiceRef.current.incrementTurnsSinceCompaction();
+			}
+
 			// Persist session
 			try {
-				const state = getSessionState(agent);
+				const state = {
+					...getSessionState(agent),
+					projection_state: projectionServiceRef.current.getState(),
+					artifacts: projectionServiceRef.current.snapshotArtifacts(),
+				};
 				await sessionStore.saveSession(SESSION_ID, state);
 			} catch (e) {
 				console.warn("session save failed:", e);

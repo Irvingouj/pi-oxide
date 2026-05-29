@@ -6,6 +6,7 @@
 
 use pi_core::{ToolCall, ToolDefinition, ToolError, ToolExecutionUpdate, ToolResult, ToolRunMode};
 
+#[allow(dead_code)]
 pub trait Extension: Send + Sync {
     fn name(&self) -> &str;
     fn tools(&self) -> Vec<ToolDefinition>;

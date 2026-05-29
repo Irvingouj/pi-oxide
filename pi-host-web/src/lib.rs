@@ -8,11 +8,11 @@ use std::cell::RefCell;
 
 use wasm_bindgen::prelude::*;
 
-use pi_core::{
-    estimate_tokens, estimate_tokens_for_text, fallback_strategy, AgentRuntime, Transition,
-};
+use pi_core::{estimate_tokens, estimate_tokens_for_text, AgentRuntime, Transition};
 use tracing::info;
+#[allow(unused_imports)]
 use tracing_subscriber::layer::SubscriberExt;
+#[allow(unused_imports)]
 use tracing_subscriber::util::SubscriberInitExt;
 
 fn project_context(input: pi_core::ProjectionInput) -> pi_core::ProjectionOutput {
@@ -110,6 +110,30 @@ fn err<R: for<'de> serde::Deserialize<'de>>(e: &HostError) -> R {
     serde_json::from_value(serde_json::Value::Object(map)).unwrap()
 }
 
+fn dto_err<R: for<'de> serde::Deserialize<'de>>(e: serde_json::Error) -> R {
+    let mut map = serde_json::Map::new();
+    map.insert("ok".to_string(), serde_json::Value::Bool(false));
+    map.insert("data".to_string(), serde_json::Value::Null);
+    map.insert(
+        "error".to_string(),
+        serde_json::to_value(ErrorDto {
+            code: "dto_conversion".to_string(),
+            message: format!("DTO conversion failed: {}", e),
+        })
+        .unwrap(),
+    );
+    serde_json::from_value(serde_json::Value::Object(map)).unwrap()
+}
+
+macro_rules! try_conv {
+    ($expr:expr) => {
+        match $expr {
+            Ok(v) => v,
+            Err(e) => return dto_err(e),
+        }
+    };
+}
+
 // ---------------------------------------------------------------------------
 // Agent handle table
 // ---------------------------------------------------------------------------
@@ -174,7 +198,7 @@ pub fn create_agent(options: AgentOptions) -> CreateAgentResult {
     console_error_panic_hook::set_once();
     init_tracing();
     info!("createAgent called");
-    let core_options: pi_core::AgentOptions = options.into();
+    let core_options: pi_core::AgentOptions = try_conv!(options.try_into());
     let runtime = AgentRuntime::new(core_options);
     let handle = put_runtime(runtime);
     info!(handle, "agent created");
@@ -187,11 +211,14 @@ pub fn prompt(handle: u32, input: PromptInput) -> StepResult {
     info!(handle, "prompt called");
 
     let core_prompt: pi_core::AgentMessage = match input.prompt {
-        PromptRequest::Message(m) => m.into(),
+        PromptRequest::Message(m) => try_conv!(m.try_into()),
         PromptRequest::Text { text } => pi_core::AgentMessage::user(text),
     };
-    let core_tools: Vec<pi_core::ToolDefinition> =
-        input.tools.into_iter().map(|t| t.into()).collect();
+    let core_tools: Vec<pi_core::ToolDefinition> = try_conv!(input
+        .tools
+        .into_iter()
+        .map(|t| t.try_into())
+        .collect::<Result<Vec<_>, _>>());
 
     let runtime = match take_runtime(handle) {
         Ok(r) => r,
@@ -247,8 +274,14 @@ pub fn prompt(handle: u32, input: PromptInput) -> StepResult {
 
     match result {
         Ok((events, actions)) => ok(StepOutput {
-            events: events.into_iter().map(|e| e.into()).collect(),
-            actions: actions.into_iter().map(|a| a.into()).collect(),
+            events: try_conv!(events
+                .into_iter()
+                .map(|e| e.try_into())
+                .collect::<Result<Vec<_>, _>>()),
+            actions: try_conv!(actions
+                .into_iter()
+                .map(|a| a.try_into())
+                .collect::<Result<Vec<_>, _>>()),
         }),
         Err(e) => err(&e),
     }
@@ -259,7 +292,7 @@ pub fn feed_llm_chunk(handle: u32, chunk: LlmChunk) -> EventsResult {
     console_error_panic_hook::set_once();
     info!(handle, "feedLlmChunk called");
 
-    let core_chunk: pi_core::LlmChunk = chunk.into();
+    let core_chunk: pi_core::LlmChunk = try_conv!(chunk.try_into());
     let runtime = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
@@ -283,7 +316,10 @@ pub fn feed_llm_chunk(handle: u32, chunk: LlmChunk) -> EventsResult {
 
     match result {
         Ok(events) => ok(EventsOutput {
-            events: events.into_iter().map(|e| e.into()).collect(),
+            events: try_conv!(events
+                .into_iter()
+                .map(|e| e.try_into())
+                .collect::<Result<Vec<_>, _>>()),
         }),
         Err(e) => err(&e),
     }
@@ -294,7 +330,7 @@ pub fn on_llm_done(handle: u32, result: LlmResult) -> StepResult {
     console_error_panic_hook::set_once();
     info!(handle, "onLlmDone called");
 
-    let core_result: pi_core::LlmResult = result.into();
+    let core_result: pi_core::LlmResult = try_conv!(result.try_into());
     let runtime = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
@@ -318,8 +354,14 @@ pub fn on_llm_done(handle: u32, result: LlmResult) -> StepResult {
 
     match result {
         Ok((events, actions)) => ok(StepOutput {
-            events: events.into_iter().map(|e| e.into()).collect(),
-            actions: actions.into_iter().map(|a| a.into()).collect(),
+            events: try_conv!(events
+                .into_iter()
+                .map(|e| e.try_into())
+                .collect::<Result<Vec<_>, _>>()),
+            actions: try_conv!(actions
+                .into_iter()
+                .map(|a| a.try_into())
+                .collect::<Result<Vec<_>, _>>()),
         }),
         Err(e) => err(&e),
     }
@@ -336,8 +378,8 @@ pub fn on_tool_done(handle: u32, tool_call_id: String, payload: ToolDonePayload)
 
     let id = pi_core::ToolCallId::new(&tool_call_id);
     let core_result: Result<pi_core::ToolResult, pi_core::ToolError> = match payload {
-        ToolDonePayload::Failure { error } => Err(error.into()),
-        ToolDonePayload::Success { result } => Ok(result.into()),
+        ToolDonePayload::Failure { error } => Err(try_conv!(error.try_into())),
+        ToolDonePayload::Success { result } => Ok(try_conv!(result.try_into())),
     };
 
     let runtime = match take_runtime(handle) {
@@ -363,8 +405,14 @@ pub fn on_tool_done(handle: u32, tool_call_id: String, payload: ToolDonePayload)
 
     match result {
         Ok((events, actions)) => ok(StepOutput {
-            events: events.into_iter().map(|e| e.into()).collect(),
-            actions: actions.into_iter().map(|a| a.into()).collect(),
+            events: try_conv!(events
+                .into_iter()
+                .map(|e| e.try_into())
+                .collect::<Result<Vec<_>, _>>()),
+            actions: try_conv!(actions
+                .into_iter()
+                .map(|a| a.try_into())
+                .collect::<Result<Vec<_>, _>>()),
         }),
         Err(e) => err(&e),
     }
@@ -403,7 +451,10 @@ pub fn on_tool_started(handle: u32, tool_call_id: String) -> EventsResult {
 
     match result {
         Ok(events) => ok(EventsOutput {
-            events: events.into_iter().map(|e| e.into()).collect(),
+            events: try_conv!(events
+                .into_iter()
+                .map(|e| e.try_into())
+                .collect::<Result<Vec<_>, _>>()),
         }),
         Err(e) => err(&e),
     }
@@ -413,7 +464,7 @@ pub fn on_tool_started(handle: u32, tool_call_id: String) -> EventsResult {
 pub fn on_tool_update(handle: u32, update: ToolExecutionUpdate) -> EventsResult {
     console_error_panic_hook::set_once();
 
-    let core_update: pi_core::ToolExecutionUpdate = update.into();
+    let core_update: pi_core::ToolExecutionUpdate = try_conv!(update.try_into());
     let runtime = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
@@ -437,7 +488,10 @@ pub fn on_tool_update(handle: u32, update: ToolExecutionUpdate) -> EventsResult 
 
     match result {
         Ok(events) => ok(EventsOutput {
-            events: events.into_iter().map(|e| e.into()).collect(),
+            events: try_conv!(events
+                .into_iter()
+                .map(|e| e.try_into())
+                .collect::<Result<Vec<_>, _>>()),
         }),
         Err(e) => err(&e),
     }
@@ -448,7 +502,7 @@ pub fn on_tool_cancelled(handle: u32, tool_call_id: String, reason: CancelReason
     console_error_panic_hook::set_once();
 
     let id = pi_core::ToolCallId::new(&tool_call_id);
-    let core_reason: pi_core::CancelReason = reason.into();
+    let core_reason: pi_core::CancelReason = try_conv!(reason.try_into());
     let runtime = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
@@ -472,8 +526,14 @@ pub fn on_tool_cancelled(handle: u32, tool_call_id: String, reason: CancelReason
 
     match result {
         Ok((events, actions)) => ok(StepOutput {
-            events: events.into_iter().map(|e| e.into()).collect(),
-            actions: actions.into_iter().map(|a| a.into()).collect(),
+            events: try_conv!(events
+                .into_iter()
+                .map(|e| e.try_into())
+                .collect::<Result<Vec<_>, _>>()),
+            actions: try_conv!(actions
+                .into_iter()
+                .map(|a| a.try_into())
+                .collect::<Result<Vec<_>, _>>()),
         }),
         Err(e) => err(&e),
     }
@@ -529,8 +589,14 @@ pub fn abort(handle: u32) -> StepResult {
 
     match result {
         Ok((events, actions)) => ok(StepOutput {
-            events: events.into_iter().map(|e| e.into()).collect(),
-            actions: actions.into_iter().map(|a| a.into()).collect(),
+            events: try_conv!(events
+                .into_iter()
+                .map(|e| e.try_into())
+                .collect::<Result<Vec<_>, _>>()),
+            actions: try_conv!(actions
+                .into_iter()
+                .map(|a| a.try_into())
+                .collect::<Result<Vec<_>, _>>()),
         }),
         Err(e) => err(&e),
     }
@@ -568,8 +634,14 @@ pub fn continue_turn(handle: u32) -> StepResult {
 
     match result {
         Ok((events, actions)) => ok(StepOutput {
-            events: events.into_iter().map(|e| e.into()).collect(),
-            actions: actions.into_iter().map(|a| a.into()).collect(),
+            events: try_conv!(events
+                .into_iter()
+                .map(|e| e.try_into())
+                .collect::<Result<Vec<_>, _>>()),
+            actions: try_conv!(actions
+                .into_iter()
+                .map(|a| a.try_into())
+                .collect::<Result<Vec<_>, _>>()),
         }),
         Err(e) => err(&e),
     }
@@ -579,7 +651,7 @@ pub fn continue_turn(handle: u32) -> StepResult {
 pub fn steer(handle: u32, message: AgentMessage) -> EventsResult {
     console_error_panic_hook::set_once();
 
-    let core_message: pi_core::AgentMessage = message.into();
+    let core_message: pi_core::AgentMessage = try_conv!(message.try_into());
     let runtime = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
@@ -608,7 +680,10 @@ pub fn steer(handle: u32, message: AgentMessage) -> EventsResult {
 
     match result {
         Ok(events) => ok(EventsOutput {
-            events: events.into_iter().map(|e| e.into()).collect(),
+            events: try_conv!(events
+                .into_iter()
+                .map(|e| e.try_into())
+                .collect::<Result<Vec<_>, _>>()),
         }),
         Err(e) => err(&e),
     }
@@ -618,7 +693,7 @@ pub fn steer(handle: u32, message: AgentMessage) -> EventsResult {
 pub fn follow_up(handle: u32, message: AgentMessage) -> EmptyResult {
     console_error_panic_hook::set_once();
 
-    let core_message: pi_core::AgentMessage = message.into();
+    let core_message: pi_core::AgentMessage = try_conv!(message.try_into());
     let runtime = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
@@ -663,7 +738,7 @@ pub fn state(handle: u32) -> StateResult {
     let result = with_runtime(handle, |runtime| runtime.state().clone());
     match result {
         Ok(core_state) => ok(StateOutput {
-            state: core_state.into(),
+            state: try_conv!(core_state.try_into()),
         }),
         Err(e) => err(&e),
     }
@@ -697,9 +772,9 @@ pub fn project_context_export(input: ProjectionInput) -> ProjectionResult {
     console_error_panic_hook::set_once();
     info!("projectContext called");
 
-    let core_input: pi_core::ProjectionInput = input.into();
+    let core_input: pi_core::ProjectionInput = try_conv!(input.try_into());
     let core_output = project_context(core_input);
-    let output: ProjectionOutput = core_output.into();
+    let output: ProjectionOutput = try_conv!(core_output.try_into());
     ok(output)
 }
 
@@ -714,7 +789,7 @@ pub fn get_session_state(handle: u32) -> SessionStateResult {
     let core_state = runtime.session_state().clone();
     put_runtime(runtime);
     ok(SessionStateOutput {
-        state: core_state.into(),
+        state: try_conv!(core_state.try_into()),
     })
 }
 
@@ -722,7 +797,7 @@ pub fn get_session_state(handle: u32) -> SessionStateResult {
 pub fn set_session_state(handle: u32, state: SessionState) -> EmptyResult {
     console_error_panic_hook::set_once();
 
-    let core_state: pi_core::SessionState = state.into();
+    let core_state: pi_core::SessionState = try_conv!(state.try_into());
     let runtime = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
@@ -745,7 +820,10 @@ pub fn get_session_branch(handle: u32) -> SessionBranchResult {
     let entries = agent.session_branch();
     put_runtime(AgentRuntime::from_agent(agent));
     ok(SessionBranchOutput {
-        entries: entries.into_iter().map(|e| e.into()).collect(),
+        entries: try_conv!(entries
+            .into_iter()
+            .map(|e| e.try_into())
+            .collect::<Result<Vec<_>, _>>()),
     })
 }
 
@@ -753,7 +831,7 @@ pub fn get_session_branch(handle: u32) -> SessionBranchResult {
 pub fn move_to(handle: u32, target_id: String, summary: Option<BranchSummary>) -> MoveToResult {
     console_error_panic_hook::set_once();
 
-    let core_summary: Option<pi_core::BranchSummary> = summary.map(|s| s.into());
+    let core_summary: Option<pi_core::BranchSummary> = summary.map(|s| try_conv!(s.try_into()));
     let runtime = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
@@ -770,7 +848,7 @@ pub fn move_to(handle: u32, target_id: String, summary: Option<BranchSummary>) -
 pub fn append_session_entry(handle: u32, entry: SessionEntry) -> EmptyResult {
     console_error_panic_hook::set_once();
 
-    let core_entry: pi_core::SessionEntry = entry.into();
+    let core_entry: pi_core::SessionEntry = try_conv!(entry.try_into());
     let runtime = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
@@ -785,8 +863,12 @@ pub fn append_session_entry(handle: u32, entry: SessionEntry) -> EmptyResult {
 pub fn estimate_tokens_export(input: EstimateTokensInput) -> EstimateTokensResult {
     console_error_panic_hook::set_once();
 
-    let core_messages: Vec<pi_core::AgentMessage> =
-        input.messages.into_iter().map(|m| m.into()).collect();
+    let core_messages: Vec<pi_core::AgentMessage> = try_conv!(input
+        .messages
+        .into_iter()
+        .map(|m| m.try_into())
+        .collect::<Result<Vec<_>, _>>());
+
     let tokens = estimate_tokens(&core_messages);
     ok(EstimateTokensOutput { tokens })
 }
@@ -797,13 +879,6 @@ pub fn estimate_tokens_for_text_export(text: String) -> EstimateTokensResult {
 
     let tokens = estimate_tokens_for_text(&text);
     ok(EstimateTokensOutput { tokens })
-}
-
-#[wasm_bindgen(js_name = "fallbackStrategy")]
-pub fn fallback_strategy_export(tool_name: String) -> ContextStrategy {
-    console_error_panic_hook::set_once();
-
-    fallback_strategy(&tool_name).into()
 }
 
 // ---------------------------------------------------------------------------
@@ -988,7 +1063,6 @@ mod tests {
             budget: ContextProjectionBudget {
                 max_tool_result_chars: 50000,
                 max_context_tokens: 100000,
-                default_preview_chars: 2000,
                 microcompact_after_turns: 5,
                 compaction_threshold: 0.75,
             },
@@ -1032,6 +1106,8 @@ mod tests {
             }],
             leaf_id: "entry-0".to_string(),
             name: "test-session".to_string(),
+            projection_state: None,
+            artifacts: Vec::new(),
         };
 
         let set_resp = set_session_state(0, custom_state.clone());
@@ -1087,12 +1163,6 @@ mod tests {
         let resp = estimate_tokens_for_text_export("hello".to_string());
         assert!(resp.ok);
         assert_eq!(resp.data.unwrap().tokens, 2); // (5 + 3) / 4 = 2
-    }
-
-    #[test]
-    fn fallback_strategy_returns_strategy() {
-        let strategy = fallback_strategy_export("ls".to_string());
-        assert!(matches!(strategy, ContextStrategy::Head { .. }));
     }
 
     #[test]
@@ -1246,6 +1316,7 @@ mod tests {
             description: "A test tool.".to_string(),
             parameters: JsonSchema(serde_json::json!({})),
             execution_mode: Default::default(),
+            tool_run_mode: Default::default(),
         };
         let resp = prompt(
             0,
@@ -1310,6 +1381,7 @@ mod tests {
             description: "A test tool.".to_string(),
             parameters: JsonSchema(serde_json::json!({})),
             execution_mode: Default::default(),
+            tool_run_mode: Default::default(),
         };
         let resp = prompt(
             0,
@@ -1357,6 +1429,7 @@ mod tests {
             description: "A test tool.".to_string(),
             parameters: JsonSchema(serde_json::json!({})),
             execution_mode: Default::default(),
+            tool_run_mode: Default::default(),
         };
         let resp = prompt(
             0,
@@ -1379,5 +1452,177 @@ mod tests {
         );
         assert_eq!(context.tools[0].name, ToolName("test_tool".to_string()));
         destroy_agent(0);
+    }
+
+    #[test]
+    fn projection_strategy_dynamic_roundtrip() {
+        let strategy = ProjectionStrategy::Dynamic {
+            script: "#{ action: \"project\", text: head(text, 100) }".to_string(),
+        };
+        let core: pi_core::ProjectionStrategy = strategy.clone().try_into().unwrap();
+        let back: ProjectionStrategy = core.try_into().unwrap();
+        assert!(matches!(back, ProjectionStrategy::Dynamic { .. }));
+    }
+
+    #[test]
+    fn tool_projection_state_inline_roundtrip() {
+        let state = ToolProjectionState::Inline;
+        let core: pi_core::ToolProjectionState = state.clone().try_into().unwrap();
+        let back: ToolProjectionState = core.try_into().unwrap();
+        assert!(matches!(back, ToolProjectionState::Inline));
+    }
+
+    #[test]
+    fn tool_projection_state_deferred_roundtrip() {
+        let state = ToolProjectionState::Deferred {
+            until_turn: 5,
+            inserted_at_turn: 2,
+        };
+        let core: pi_core::ToolProjectionState = state.clone().try_into().unwrap();
+        let back: ToolProjectionState = core.try_into().unwrap();
+        assert!(matches!(
+            back,
+            ToolProjectionState::Deferred {
+                until_turn: 5,
+                inserted_at_turn: 2
+            }
+        ));
+    }
+
+    #[test]
+    fn tool_projection_state_replaced_roundtrip() {
+        let replacement = ContextReplacement {
+            tool_call_id: "tc-1".to_string(),
+            tool_name: "read".to_string(),
+            artifact_id: "tool-result-tc-1".to_string(),
+            original_chars: 5000,
+            preview_chars: 200,
+            strategy: ProjectionStrategy::Fixed {
+                shape: ProjectionShape::Head { max_chars: 200 },
+                min_age: 0,
+            },
+            outcome: ProjectionOutcome {
+                text: "hello".to_string(),
+            },
+        };
+        let state = ToolProjectionState::Replaced {
+            replacement,
+            inserted_at_turn: 0,
+        };
+        let core: pi_core::ToolProjectionState = state.clone().try_into().unwrap();
+        let back: ToolProjectionState = core.try_into().unwrap();
+        assert!(matches!(back, ToolProjectionState::Replaced { .. }));
+    }
+
+    #[test]
+    fn projection_outcome_roundtrip() {
+        let outcome = ProjectionOutcome {
+            text: "hello".to_string(),
+        };
+        let core: pi_core::ProjectionOutcome = outcome.clone().try_into().unwrap();
+        let back: ProjectionOutcome = core.try_into().unwrap();
+        assert_eq!(back.text, "hello");
+    }
+
+    #[test]
+    fn projection_strategy_fixed_roundtrip() {
+        let strategy = ProjectionStrategy::Fixed {
+            shape: ProjectionShape::Head { max_chars: 2000 },
+            min_age: 2,
+        };
+        let core: pi_core::ProjectionStrategy = strategy.clone().try_into().unwrap();
+        let back: ProjectionStrategy = core.try_into().unwrap();
+        assert!(
+            matches!(
+                back,
+                ProjectionStrategy::Fixed {
+                    shape: ProjectionShape::Head { max_chars: 2000 },
+                    min_age: 2
+                }
+            ),
+            "Fixed strategy should round-trip with shape and min_age"
+        );
+    }
+
+    #[test]
+    fn old_context_state_migration_roundtrip() {
+        let old_state = ContextProjectionState {
+            tools: std::collections::BTreeMap::new(),
+            replacements: {
+                let mut map = std::collections::BTreeMap::new();
+                map.insert(
+                    "tc-old".to_string(),
+                    OldContextReplacement {
+                        tool_call_id: "tc-old".to_string(),
+                        tool_name: "read".to_string(),
+                        artifact_id: "art-old".to_string(),
+                        original_chars: 5000,
+                        preview_chars: 200,
+                        strategy: OldContextStrategy::Head { max_chars: 200 },
+                    },
+                );
+                map
+            },
+            current_turn: 3,
+            last_api_usage: None,
+            turns_since_compaction: 1,
+        };
+        let core: pi_core::ContextProjectionState = old_state.try_into().unwrap();
+        let entry = core.tools.get("tc-old");
+        assert!(
+            matches!(entry, Some(pi_core::ToolProjectionState::Replaced { replacement, .. }) if replacement.tool_call_id == "tc-old"),
+            "old replacement should migrate to Replaced state, got {:?}",
+            entry
+        );
+    }
+
+    #[test]
+    fn project_context_with_old_replacements_migrates() {
+        let input = ProjectionInput {
+            system_prompt: "You are helpful.".to_string(),
+            messages: vec![AgentMessage::User(UserMessage {
+                content: vec![Content::Text(TextContent {
+                    text: "hello".to_string(),
+                })],
+                timestamp: 1,
+            })],
+            budget: ContextProjectionBudget {
+                max_tool_result_chars: 50000,
+                max_context_tokens: 100000,
+                microcompact_after_turns: 5,
+                compaction_threshold: 0.75,
+            },
+            state: ContextProjectionState {
+                tools: std::collections::BTreeMap::new(),
+                replacements: {
+                    let mut map = std::collections::BTreeMap::new();
+                    map.insert(
+                        "tc-old".to_string(),
+                        OldContextReplacement {
+                            tool_call_id: "tc-old".to_string(),
+                            tool_name: "read".to_string(),
+                            artifact_id: "art-old".to_string(),
+                            original_chars: 5000,
+                            preview_chars: 200,
+                            strategy: OldContextStrategy::Head { max_chars: 200 },
+                        },
+                    );
+                    map
+                },
+                current_turn: 3,
+                last_api_usage: None,
+                turns_since_compaction: 0,
+            },
+        };
+
+        let resp = project_context_export(input);
+        assert!(resp.ok);
+        let data = resp.data.unwrap();
+        // The updated state should have migrated the old replacement into tools
+        let migrated = data.updated_state.tools.get("tc-old");
+        assert!(
+            migrated.is_some(),
+            "old replacement should be migrated into updated_state.tools"
+        );
     }
 }

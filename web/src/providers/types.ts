@@ -4,7 +4,7 @@
  * These types bridge the Rust agent core and any specific provider implementation.
  */
 
-import type { ToolDefinition } from "../tools/schemas.ts";
+import type { ToolDefinition } from "@pi-oxide/pi-host-web";
 
 /** Context from the Rust agent for a stream_llm action. */
 export interface LlmRequest {

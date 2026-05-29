@@ -6,12 +6,12 @@ use tsify::Tsify;
 // Only used at the WASM boundary, not in hot loops.
 // ---------------------------------------------------------------------------
 
-fn to_dto<T, U>(v: T) -> U
+fn to_dto<T, U>(v: T) -> Result<U, serde_json::Error>
 where
     T: Serialize,
     U: for<'de> Deserialize<'de>,
 {
-    serde_json::from_value(serde_json::to_value(v).unwrap()).unwrap()
+    serde_json::from_value(serde_json::to_value(v)?)
 }
 
 // ---------------------------------------------------------------------------
@@ -155,14 +155,10 @@ pub struct AssistantMessage {
     pub usage: TokenUsage,
 }
 
-fn tool_result_role() -> String {
-    "tool_result".to_string()
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct ToolResultMessage {
-    #[serde(skip_deserializing, default = "tool_result_role")]
+    #[serde(skip)]
     pub role: String,
     pub tool_call_id: ToolCallId,
     pub tool_name: ToolName,
@@ -290,6 +286,8 @@ pub struct ToolDefinition {
     pub parameters: JsonSchema,
     #[serde(rename = "execution_mode", default)]
     pub execution_mode: ExecutionMode,
+    #[serde(rename = "tool_run_mode", default)]
+    pub tool_run_mode: ToolRunMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Tsify, Default)]
@@ -304,10 +302,10 @@ pub enum ExecutionMode {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Tsify, Default)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "snake_case")]
-pub enum ToolExecutionMode {
+pub enum ToolRunMode {
     #[default]
-    Parallel,
-    Sequential,
+    Immediate,
+    Deferred,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
@@ -527,18 +525,10 @@ pub struct LlmContext {
 pub struct ContextProjectionBudget {
     pub max_tool_result_chars: usize,
     pub max_context_tokens: usize,
-    pub default_preview_chars: usize,
-    #[serde(default = "default_microcompact_after_turns")]
+    #[serde(default = "pi_core::context_projection::default_microcompact_after_turns")]
     pub microcompact_after_turns: u32,
-    #[serde(default = "default_compaction_threshold")]
+    #[serde(default = "pi_core::context_projection::default_compaction_threshold")]
     pub compaction_threshold: f32,
-}
-
-fn default_microcompact_after_turns() -> u32 {
-    5
-}
-fn default_compaction_threshold() -> f32 {
-    0.75
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, Tsify)]
@@ -556,19 +546,85 @@ pub struct ContextReplacement {
     pub artifact_id: String,
     pub original_chars: usize,
     pub preview_chars: usize,
-    pub strategy: ContextStrategy,
+    pub strategy: ProjectionStrategy,
+    #[serde(default)]
+    pub outcome: ProjectionOutcome,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum ToolProjectionState {
+    #[serde(rename = "inline")]
+    #[default]
+    Inline,
+    #[serde(rename = "deferred")]
+    Deferred {
+        until_turn: u32,
+        #[serde(default)]
+        inserted_at_turn: u32,
+    },
+    #[serde(rename = "replaced")]
+    Replaced {
+        replacement: ContextReplacement,
+        #[serde(default)]
+        inserted_at_turn: u32,
+    },
+}
+
+/// Backward-compat: old session JSON used flat strategy structs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum OldContextStrategy {
+    KeepFull,
+    Head {
+        max_chars: usize,
+    },
+    Tail {
+        max_chars: usize,
+    },
+    HeadTail {
+        head_chars: usize,
+        tail_chars: usize,
+    },
+    DropIfOld,
+    Microcompacted,
+    Script {
+        script: String,
+    },
+}
+
+/// Backward-compat: old session JSON used `replacements` instead of `tools`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct OldContextReplacement {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub artifact_id: String,
+    pub original_chars: usize,
+    pub preview_chars: usize,
+    pub strategy: OldContextStrategy,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct ContextProjectionState {
-    pub replacements: std::collections::BTreeMap<String, ContextReplacement>,
+    #[serde(default)]
+    pub tools: std::collections::BTreeMap<String, ToolProjectionState>,
+    /// Backward-compat: old session JSON with `replacements` instead of `tools`.
+    #[serde(default)]
+    pub replacements: std::collections::BTreeMap<String, OldContextReplacement>,
+    #[serde(default, alias = "turn_count")]
+    pub current_turn: u32,
     #[serde(default)]
     pub last_api_usage: Option<ApiUsageSnapshot>,
     #[serde(default)]
     pub turns_since_compaction: u32,
 }
 
+/// NOTE: Only `replacements` is currently consumed by the web host. The other
+/// fields are computed for future use and are verified by Rust unit tests.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct ContextProjectionReport {
@@ -613,7 +669,7 @@ pub enum ContentKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "snake_case", tag = "type")]
-pub enum ContextStrategy {
+pub enum ProjectionShape {
     #[serde(rename = "keep_full")]
     KeepFull,
     #[serde(rename = "head")]
@@ -625,17 +681,44 @@ pub enum ContextStrategy {
         head_chars: usize,
         tail_chars: usize,
     },
-    #[serde(rename = "drop_if_old")]
-    DropIfOld,
     #[serde(rename = "microcompacted")]
     Microcompacted,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum ProjectionStrategy {
+    #[serde(rename = "fixed")]
+    Fixed {
+        shape: ProjectionShape,
+        #[serde(default)]
+        min_age: u32,
+    },
+    #[serde(rename = "dynamic")]
+    Dynamic { script: String },
+}
+
+impl Default for ProjectionStrategy {
+    fn default() -> Self {
+        ProjectionStrategy::Fixed {
+            shape: ProjectionShape::KeepFull,
+            min_age: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct ProjectionOutcome {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct ToolResultContext {
     pub content_kind: ContentKind,
-    pub strategy: ContextStrategy,
+    pub strategy: ProjectionStrategy,
     pub original_chars: usize,
     pub truncated_by_tool: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -711,11 +794,22 @@ pub enum EntryKind {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct ArtifactEntry {
+    pub id: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct SessionState {
     pub entries: Vec<SessionEntry>,
     pub leaf_id: String,
     #[serde(default)]
     pub name: String,
+    #[serde(default)]
+    pub projection_state: Option<ContextProjectionState>,
+    #[serde(default)]
+    pub artifacts: Vec<ArtifactEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
@@ -816,7 +910,7 @@ pub struct AgentOptions {
     #[serde(default)]
     pub follow_up_mode: QueueMode,
     #[serde(default)]
-    pub tool_execution_mode: ToolExecutionMode,
+    pub tool_execution_mode: ExecutionMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<SessionId>,
     #[serde(default)]
@@ -961,13 +1055,15 @@ pub struct ProjectionResult {
 
 macro_rules! dto_conv {
     ($dto:ty, $core:ty) => {
-        impl From<$core> for $dto {
-            fn from(v: $core) -> Self {
+        impl TryFrom<$core> for $dto {
+            type Error = serde_json::Error;
+            fn try_from(v: $core) -> Result<Self, serde_json::Error> {
                 to_dto(v)
             }
         }
-        impl From<$dto> for $core {
-            fn from(v: $dto) -> Self {
+        impl TryFrom<$dto> for $core {
+            type Error = serde_json::Error;
+            fn try_from(v: $dto) -> Result<Self, serde_json::Error> {
                 to_dto(v)
             }
         }
@@ -1007,7 +1103,7 @@ dto_conv!(LlmError, pi_core::LlmError);
 
 dto_conv!(ToolDefinition, pi_core::ToolDefinition);
 dto_conv!(ExecutionMode, pi_core::ExecutionMode);
-dto_conv!(ToolExecutionMode, pi_core::ToolExecutionMode);
+dto_conv!(ToolRunMode, pi_core::ToolRunMode);
 dto_conv!(ToolResult, pi_core::ToolResult);
 dto_conv!(ToolError, pi_core::ToolError);
 
@@ -1032,7 +1128,10 @@ dto_conv!(ContextProjectionReport, pi_core::ContextProjectionReport);
 dto_conv!(ProjectionInput, pi_core::ProjectionInput);
 dto_conv!(ProjectionOutput, pi_core::ProjectionOutput);
 dto_conv!(ContentKind, pi_core::ContentKind);
-dto_conv!(ContextStrategy, pi_core::ContextStrategy);
+dto_conv!(ProjectionShape, pi_core::ProjectionShape);
+dto_conv!(ProjectionStrategy, pi_core::ProjectionStrategy);
+dto_conv!(ProjectionOutcome, pi_core::ProjectionOutcome);
+dto_conv!(ToolProjectionState, pi_core::ToolProjectionState);
 dto_conv!(ToolResultContext, pi_core::ToolResultContext);
 
 dto_conv!(AgentState, pi_core::AgentState);
@@ -1041,5 +1140,6 @@ dto_conv!(Phase, pi_core::Phase);
 
 dto_conv!(SessionEntry, pi_core::SessionEntry);
 dto_conv!(EntryKind, pi_core::EntryKind);
+dto_conv!(ArtifactEntry, pi_core::ArtifactEntry);
 dto_conv!(SessionState, pi_core::SessionState);
 dto_conv!(BranchSummary, pi_core::BranchSummary);

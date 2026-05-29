@@ -1,12 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use ts_rs::TS;
 
 macro_rules! string_newtype {
     ($name:ident) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
         #[serde(transparent)]
-        #[ts(type = "string")]
         pub struct $name(pub String);
 
         impl $name {
@@ -16,6 +14,10 @@ macro_rules! string_newtype {
 
             pub fn as_str(&self) -> &str {
                 &self.0
+            }
+
+            pub fn clone_inner(&self) -> String {
+                self.0.clone()
             }
         }
 

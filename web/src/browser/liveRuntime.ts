@@ -113,7 +113,7 @@ export class LiveBrowserRuntime implements BrowserRuntime {
 				},
 			};
 		}
-		el.click();
+		(el as HTMLElement).click();
 		return { ok: true };
 	}
 

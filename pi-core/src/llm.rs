@@ -1,12 +1,10 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use crate::message::{AssistantMessage, StopReason};
 use crate::types::{ApiName, ModelId, ModelName, ProviderName, ToolCallId};
 
 /// Describes a concrete LLM model and its provider.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Model {
     pub id: ModelId,
     pub name: ModelName,
@@ -24,7 +22,7 @@ pub struct Model {
 }
 
 /// Capabilities advertised by a model.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub struct ModelCapabilities {
     pub vision: bool,
     pub json_mode: bool,
@@ -33,7 +31,7 @@ pub struct ModelCapabilities {
 }
 
 /// Per-token cost estimate.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub struct ModelCost {
     pub input: f64,
     pub output: f64,
@@ -42,7 +40,7 @@ pub struct ModelCost {
 }
 
 /// Supported LLM providers.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelProvider {
     OpenAi,
@@ -79,7 +77,7 @@ pub enum LlmChunk {
 }
 
 /// Final result of an LLM stream.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LlmResult {
     Ok(AssistantMessage),
     Err { error: LlmError, aborted: bool },
@@ -108,12 +106,11 @@ impl LlmResult {
 }
 
 /// Error from the LLM provider.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, thiserror::Error)]
 #[error("llm error: {message}")]
 pub struct LlmError {
     pub code: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(type = "object | undefined")]
     pub details: Option<serde_json::Value>,
 }

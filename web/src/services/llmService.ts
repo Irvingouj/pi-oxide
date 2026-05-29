@@ -35,9 +35,9 @@ interface AgentMessageShape {
 		id?: string;
 		name?: string;
 		arguments?: Record<string, unknown>;
-		tool_call_id?: string;
-		is_error?: boolean;
 	}>;
+	tool_call_id?: string;
+	is_error?: boolean;
 }
 
 // --- Message conversion (mirrors browserLlm.ts) ---
@@ -186,7 +186,7 @@ export async function* buildStreamingChunks(
 		api: "anthropic",
 		provider: "anthropic",
 		model: "browser-model",
-		stop_reason: data.stop_reason,
+		stop_reason: data.stop_reason as "end_turn" | "tool_use",
 		error_message: undefined,
 		timestamp: Date.now(),
 		usage: {
@@ -218,11 +218,12 @@ export function buildLlmResult(data: LlmResponse): LlmResult {
 	const content = data.content
 		.filter((b) => b.type === "text" || b.type === "tool_use")
 		.map((b) => {
-			if (b.type === "text") return { type: "text", text: b.text };
+			if (b.type === "text")
+				return { type: "text" as const, text: b.text || "" };
 			return {
-				type: "tool_call",
-				id: b.id,
-				name: b.name,
+				type: "tool_call" as const,
+				id: b.id || "",
+				name: b.name || "",
 				arguments: b.input || {},
 			};
 		});
@@ -273,21 +274,4 @@ export function createLlmProvider(signal?: AbortSignal): {
 			};
 		},
 	};
-}
-
-export async function smartExtract(
-	text: string,
-	prompt: string,
-	signal?: AbortSignal,
-): Promise<string> {
-	const data = await callLlm(
-		prompt,
-		[{ role: "user", content: [{ type: "text", text }] }],
-		[],
-		signal,
-	);
-	return data.content
-		.filter((b): b is typeof b & { text: string } => b.type === "text" && !!b.text)
-		.map((b) => b.text)
-		.join("\n");
 }

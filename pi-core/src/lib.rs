@@ -24,11 +24,14 @@ pub use agent_runtime::{
     StreamingAgent, ToolTransition, Transition, UserInputDuringTools, WaitingToolsAgent,
 };
 pub use context::{AgentContext, LlmContext};
-pub use context_metadata::{fallback_strategy, ContentKind, ContextStrategy, ToolResultContext};
+pub use context_metadata::{
+    fallback_strategy, ContentKind, ProjectionOutcome, ProjectionShape, ProjectionStrategy,
+    ToolResultContext,
+};
 pub use context_projection::{
     estimate_tokens, estimate_tokens_for_text, project, ApiUsageSnapshot, ContextProjectionBudget,
     ContextProjectionReport, ContextProjectionState, ContextReplacement, ProjectionInput,
-    ProjectionOutput,
+    ProjectionOutput, ToolProjectionState,
 };
 pub use events::{
     AgentAction, AgentEvent, CancelReason, ContentDelta, QueueMode, ThinkingLevel,
@@ -41,11 +44,10 @@ pub use message::{
     ToolResultMessage, UserMessage,
 };
 pub use session::{
-    BranchSummary, EntryKind, SessionEntry, SessionError, SessionState, SessionStorage,
+    ArtifactEntry, BranchSummary, EntryKind, SessionEntry, SessionError, SessionState,
+    SessionStorage,
 };
-pub use tool::{
-    ExecutionMode, ToolDefinition, ToolError, ToolExecutionMode, ToolResult, ToolRunMode,
-};
+pub use tool::{ExecutionMode, ToolDefinition, ToolError, ToolResult, ToolRunMode};
 pub use types::{
     ApiName, JsonSchema, ModelId, ModelName, ProviderName, SessionId, ToolArguments, ToolCallId,
     ToolDetails, ToolName,

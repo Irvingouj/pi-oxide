@@ -1,12 +1,11 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use crate::types::{
     ApiName, ModelId, ProviderName, ToolArguments, ToolCallId, ToolDetails, ToolName,
 };
 
 /// A user message sent to the agent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserMessage {
     pub content: Vec<Content>,
     pub timestamp: u64,
@@ -27,7 +26,7 @@ impl UserMessage {
 }
 
 /// An assistant message produced by the LLM.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssistantMessage {
     pub content: Vec<Content>,
     pub api: ApiName,
@@ -58,7 +57,7 @@ impl AssistantMessage {
 }
 
 /// A message carrying the result of a tool execution back to the LLM.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResultMessage {
     #[serde(skip_deserializing, default = "tool_result_role")]
     pub role: String,
@@ -66,10 +65,23 @@ pub struct ToolResultMessage {
     pub tool_name: ToolName,
     pub content: Vec<Content>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(type = "object | undefined")]
     pub details: Option<ToolDetails>,
     pub is_error: bool,
     pub timestamp: u64,
+}
+
+impl ToolResultMessage {
+    pub fn with_content(&self, new_content: Vec<Content>) -> Self {
+        Self {
+            role: self.role.clone(),
+            tool_call_id: self.tool_call_id.clone(),
+            tool_name: self.tool_name.clone(),
+            content: new_content,
+            details: self.details.clone(),
+            is_error: self.is_error,
+            timestamp: self.timestamp,
+        }
+    }
 }
 
 fn tool_result_role() -> String {
@@ -77,10 +89,8 @@ fn tool_result_role() -> String {
 }
 
 /// Union of all message types visible to the core.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
-#[ts(tag = "role", rename_all = "snake_case")]
-#[ts(export)]
 pub enum AgentMessage {
     User(UserMessage),
     Assistant(AssistantMessage),
@@ -108,37 +118,35 @@ impl AgentMessage {
 }
 
 /// Content block within a message.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-#[ts(tag = "type", rename_all = "snake_case")]
 pub enum Content {
     Text(TextContent),
     Image(ImageContent),
     ToolCall(ToolCall),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextContent {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ImageContent {
     pub media_type: String,
     pub data: String,
 }
 
 /// A tool call requested by the assistant.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: ToolCallId,
     pub name: ToolName,
-    #[ts(type = "object")]
     pub arguments: ToolArguments,
 }
 
 /// Token usage statistics.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct TokenUsage {
     pub input: u32,
     pub output: u32,
@@ -148,9 +156,8 @@ pub struct TokenUsage {
 }
 
 /// Why an assistant response stopped.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
 pub enum StopReason {
     EndTurn,
     MaxTokens,

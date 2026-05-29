@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{debug, trace};
 
+use crate::context_projection::ContextProjectionState;
 use crate::events::ThinkingLevel;
 use crate::message::AgentMessage;
 
@@ -47,6 +48,13 @@ pub enum EntryKind {
     },
 }
 
+/// A stored artifact entry (web-side host cache for original tool result text).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtifactEntry {
+    pub id: String,
+    pub text: String,
+}
+
 /// In-memory session state managed by the core.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SessionState {
@@ -54,6 +62,10 @@ pub struct SessionState {
     pub leaf_id: String,
     #[serde(default)]
     pub name: String,
+    #[serde(default)]
+    pub projection_state: Option<ContextProjectionState>,
+    #[serde(default)]
+    pub artifacts: Vec<ArtifactEntry>,
 }
 
 impl SessionState {

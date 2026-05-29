@@ -1,8 +1,8 @@
 use pi_core::{
     project, AgentAction, AgentEvent, AgentMessage, AgentOptions, AgentRuntime, AssistantMessage,
     Content, ContentDelta, ContextProjectionBudget, ContextProjectionState, JsonSchema, LlmChunk,
-    LlmResult, Model, ProjectionInput, StopReason, ToolArguments, ToolCall, ToolCallId,
-    ToolDefinition, ToolExecutionUpdate, ToolName, ToolResult,
+    LlmResult, Model, ProjectionInput, StopReason, TextContent, ToolArguments, ToolCall,
+    ToolCallId, ToolDefinition, ToolExecutionUpdate, ToolName, ToolResult, ToolResultMessage,
 };
 
 fn dummy_model() -> Model {
@@ -27,7 +27,7 @@ fn dummy_options() -> AgentOptions {
         thinking_level: pi_core::ThinkingLevel::Off,
         steering_mode: pi_core::QueueMode::OneAtATime,
         follow_up_mode: pi_core::QueueMode::OneAtATime,
-        tool_execution_mode: pi_core::ToolExecutionMode::Parallel,
+        tool_execution_mode: pi_core::ExecutionMode::Parallel,
         session_id: None,
         messages: vec![],
         session_state: None,
@@ -404,14 +404,48 @@ fn context_projection_integrates_with_state_machine() {
     // Context should include user, assistant, and tool_result messages
     assert_eq!(context.messages.len(), 3);
 
+    // Add two full agent turns so the tool result is old enough (age >= min_age for 'read')
+    let mut messages = context.messages.clone();
+    // Turn 1: assistant + tool_result
+    messages.push(AgentMessage::Assistant(assistant_with_tool_calls(vec![
+        tool_call("call-2", "read"),
+    ])));
+    messages.push(AgentMessage::ToolResult(ToolResultMessage {
+        role: "tool_result".to_string(),
+        tool_call_id: ToolCallId::new("call-2"),
+        tool_name: ToolName::new("read"),
+        content: vec![Content::Text(TextContent {
+            text: "ok".to_string(),
+        })],
+        details: None,
+        is_error: false,
+        timestamp: 2,
+    }));
+    messages.push(AgentMessage::user("turn 1"));
+    // Turn 2: assistant + tool_result
+    messages.push(AgentMessage::Assistant(assistant_with_tool_calls(vec![
+        tool_call("call-3", "read"),
+    ])));
+    messages.push(AgentMessage::ToolResult(ToolResultMessage {
+        role: "tool_result".to_string(),
+        tool_call_id: ToolCallId::new("call-3"),
+        tool_name: ToolName::new("read"),
+        content: vec![Content::Text(TextContent {
+            text: "ok".to_string(),
+        })],
+        details: None,
+        is_error: false,
+        timestamp: 3,
+    }));
+    messages.push(AgentMessage::user("turn 2"));
+
     // Project with a tight budget to force tool-result budgeting
     let projection = project(ProjectionInput {
         system_prompt: context.system_prompt.clone(),
-        messages: context.messages.clone(),
+        messages,
         budget: ContextProjectionBudget {
             max_tool_result_chars: 100,
             max_context_tokens: 1000,
-            default_preview_chars: 50,
             microcompact_after_turns: 5,
             compaction_threshold: 0.75,
         },
@@ -447,7 +481,7 @@ fn context_projection_integrates_with_state_machine() {
         result_text.len()
     );
     assert!(
-        result_text.contains("Preview:"),
+        result_text.contains("<context-artifact"),
         "budgeted result should contain preview marker"
     );
 
@@ -534,7 +568,6 @@ fn context_projection_keep_full_bypass() {
         budget: ContextProjectionBudget {
             max_tool_result_chars: 100,
             max_context_tokens: 5000,
-            default_preview_chars: 50,
             microcompact_after_turns: 5,
             compaction_threshold: 0.75,
         },
@@ -562,7 +595,7 @@ fn context_projection_keep_full_bypass() {
 
     // KeepFull means the full text is preserved inline, not replaced with a preview marker
     assert!(
-        !result_text.contains("Preview:"),
+        !result_text.contains("<context-artifact"),
         "KeepFull strategy should not insert preview marker, got: {result_text:.100}..."
     );
     assert!(

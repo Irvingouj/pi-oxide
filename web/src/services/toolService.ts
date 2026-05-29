@@ -4,56 +4,139 @@
  * Pure JS, no React. Wraps browser tool execution into the SDK ToolMap shape.
  */
 
-import type { ToolMap } from "@pi-oxide/pi-host-web";
+import type { ToolCall, ToolDefinition, ToolMap } from "@pi-oxide/pi-host-web";
 import type { BrowserRuntime } from "../browser/browserRuntime.ts";
 import { BROWSER_TOOLS, executeBrowserTool } from "../browser/browserTools.ts";
+import type { ProjectionService } from "./projectionService.ts";
 
-const SMART_EXTRACT_THRESHOLD = 5000;
+// ========================================================================
+// Artifact tool schemas
+// ========================================================================
 
-export function createToolRegistry(
-	runtime: BrowserRuntime,
-	smartExtract?: (text: string, prompt: string) => Promise<string>,
-): ToolMap {
+const artifactReadSchema: object = {
+	type: "object",
+	properties: {
+		artifact_id: {
+			type: "string",
+			description: "The artifact id to retrieve (e.g. tool-result-abc123).",
+		},
+	},
+	required: ["artifact_id"],
+	additionalProperties: false,
+};
+
+const MAX_SEARCH_RESULTS = 50;
+
+const artifactSearchSchema: object = {
+	type: "object",
+	properties: {
+		pattern: {
+			type: "string",
+			description: "Text pattern to search for inside stored artifacts.",
+		},
+	},
+	required: ["pattern"],
+	additionalProperties: false,
+};
+
+// ========================================================================
+// Artifact tool definitions
+// ========================================================================
+
+const ARTIFACT_READ: ToolDefinition = {
+	name: "artifact_read",
+	label: "Read Artifact",
+	description:
+		"Read the full original text of a previously stored artifact by its id. " +
+		"Use this when a projected tool result references an artifact you need to inspect.",
+	parameters: artifactReadSchema,
+	execution_mode: "parallel",
+};
+
+const ARTIFACT_SEARCH: ToolDefinition = {
+	name: "artifact_search",
+	label: "Search Artifacts",
+	description:
+		"Search all stored artifacts for a text pattern. Returns up to 50 matching artifact ids, a short snippet around the first match, and the match count. Use artifact_read to retrieve the full text.",
+	parameters: artifactSearchSchema,
+	execution_mode: "parallel",
+};
+
+/** All artifact tools exposed by the host. */
+export const ARTIFACT_TOOLS: ToolDefinition[] = [
+	ARTIFACT_READ,
+	ARTIFACT_SEARCH,
+];
+
+// ========================================================================
+// Tool registry
+// ========================================================================
+
+export function createToolRegistry(runtime: BrowserRuntime): ToolMap {
 	return Object.fromEntries(
 		BROWSER_TOOLS.map((t) => [
 			t.name,
-			async (call: ToolCall) => {
-				const result = executeBrowserTool(call, runtime);
-				if (
-					smartExtract &&
-					"content" in result &&
-					result.content.length > 0 &&
-					result.details &&
-					typeof result.details === "object"
-				) {
-					const details = result.details as Record<string, unknown>;
-					const prompt = details.smart_extract_prompt as string | undefined;
-					const text = result.content[0].text;
-					const originalChars =
-						(typeof details.original_chars === "number" && details.original_chars > 0)
-							? details.original_chars
-							: text.length;
-					if (prompt && originalChars > SMART_EXTRACT_THRESHOLD) {
-						try {
-							const summary = await smartExtract(text, prompt);
-							return {
-								content: [{ type: "text", text: summary }],
-								details: {
-									content_kind: "generic_text",
-									strategy: { type: "keep_full" },
-									original_chars: originalChars,
-									truncated_by_tool: false,
-								},
-							};
-						} catch {
-							/* smart extract is best-effort; degrade to original result */
-						}
-					}
-				}
-				return result;
-			},
+			async (call: ToolCall) => executeBrowserTool(call, runtime),
 		]),
 	);
+}
+
+/**
+ * Create artifact tool handlers that wrap the projection service artifact store.
+ */
+export function createArtifactToolRegistry(
+	projectionService: ProjectionService,
+): ToolMap {
+	return {
+		artifact_read: async (call: ToolCall) => {
+			const artifactId = call.arguments.artifact_id as string;
+			if (typeof artifactId !== "string" || artifactId.length === 0) {
+				return {
+					error: {
+						code: "invalid_argument",
+						message: "artifact_id must be a non-empty string",
+					},
+				};
+			}
+			const text = projectionService.readArtifact(artifactId);
+			if (text === undefined) {
+				return {
+					error: {
+						code: "not_found",
+						message: `artifact not found: ${artifactId}`,
+					},
+				};
+			}
+			return {
+				content: [{ type: "text", text }],
+			};
+		},
+		artifact_search: async (call: ToolCall) => {
+			const pattern = call.arguments.pattern as string;
+			if (typeof pattern !== "string" || pattern.length === 0) {
+				return {
+					error: {
+						code: "invalid_argument",
+						message: "pattern must be a non-empty string",
+					},
+				};
+			}
+			const matches = projectionService.searchArtifacts(pattern);
+			const capped = matches.slice(0, MAX_SEARCH_RESULTS);
+			const text = JSON.stringify(
+				capped.map((m) => ({
+					id: m.id,
+					snippet: m.snippet,
+					match_count: m.matchCount,
+				})),
+				null,
+				2,
+			);
+			return {
+				content: [{ type: "text", text }],
+			};
+		},
+	};
 }
 
 export { BROWSER_TOOLS };

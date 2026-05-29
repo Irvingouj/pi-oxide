@@ -167,10 +167,21 @@ export const BROWSER_TOOLS: ToolDefinition[] = [
 	BROWSER_CONSOLE,
 ];
 
+const BROWSER_GET_PAGE_SCRIPT = `#{ action: "project", text: head(text, 3000) }`;
+const BROWSER_EVAL_JS_SCRIPT = `#{ action: "project", text: head(text, 5000) }`;
+const BROWSER_CONSOLE_SCRIPT = `let all = lines(text);
+let errs = [];
+for line in all {
+  if contains(line, "ERROR") || contains(line, "FATAL") {
+    errs.push(line);
+  }
+}
+#{ action: "project", text: join(errs, "\\n") }`;
+
 const DEFAULT_SCRIPTS: Record<string, string> = {
-	browser_get_page: `head(text, 3000)`,
-	browser_console: `let all = lines(text);\nlet errs = [];\nfor line in all {\n  if contains(line, "ERROR") || contains(line, "FATAL") {\n    errs.push(line);\n  }\n}\njoin(errs, "\\n")`,
-	browser_eval_js: `head(text, 5000)`,
+	browser_get_page: BROWSER_GET_PAGE_SCRIPT,
+	browser_console: BROWSER_CONSOLE_SCRIPT,
+	browser_eval_js: BROWSER_EVAL_JS_SCRIPT,
 };
 
 // ========================================================================
@@ -182,7 +193,10 @@ const MAX_ELEMENT_TEXT = 500;
 
 /** Discriminated result returned by browser tool handlers. */
 export type BrowserToolResult =
-	| { content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }
+	| {
+			content: Array<{ type: "text"; text: string }>;
+			details?: Record<string, unknown>;
+	  }
 	| { error: { code: string; message: string } };
 
 function truncateText(
@@ -201,10 +215,12 @@ function makeDetails(
 	return {
 		content_kind: "generic_text",
 		strategy: {
-			type: "script",
-			script: DEFAULT_SCRIPTS[toolName] || "head(text, 2000)",
+			type: "dynamic",
+			script:
+				DEFAULT_SCRIPTS[toolName] ||
+				`#{ action: "project", text: head(text, 2000) }`,
 		},
-		original_chars: text.length,
+		original_chars: Array.from(text).length,
 		truncated_by_tool: truncatedByTool,
 	};
 }
@@ -289,10 +305,7 @@ export function executeBrowserTool(
 			);
 			return {
 				content: [{ type: "text", text }],
-				details: {
-					...makeDetails("browser_get_page", text, false),
-					smart_extract_prompt: "Summarize the key interactive elements and page structure from this JSON. Keep the URL and title. Focus on buttons, links, forms, and inputs.",
-				},
+				details: makeDetails("browser_get_page", text, false),
 			};
 		}
 
@@ -321,18 +334,22 @@ export function executeBrowserTool(
 					error: { code: "invalid_argument", message: "selector is required" },
 				};
 			}
-			return tryTool(() => {
-				if (all) {
-					const elements = runtime.querySelectorAll(selector);
-					return {
-						selector,
-						matchCount: elements.length,
-						elements: elements.map(formatElement),
-					};
-				}
-				const el = runtime.querySelector(selector);
-				return { selector, found: el ? formatElement(el) : null };
-			}, "selector_error", "browser_query_selector");
+			return tryTool(
+				() => {
+					if (all) {
+						const elements = runtime.querySelectorAll(selector);
+						return {
+							selector,
+							matchCount: elements.length,
+							elements: elements.map(formatElement),
+						};
+					}
+					const el = runtime.querySelector(selector);
+					return { selector, found: el ? formatElement(el) : null };
+				},
+				"selector_error",
+				"browser_query_selector",
+			);
 		}
 
 		case "browser_click": {
@@ -342,13 +359,17 @@ export function executeBrowserTool(
 					error: { code: "invalid_argument", message: "selector is required" },
 				};
 			}
-			return tryTool(() => {
-				const result = runtime.click(selector);
-				if (!result.ok) {
-					throw new Error(result.error.message);
-				}
-				return { ok: true, action: "click", selector };
-			}, "click_error", "browser_click");
+			return tryTool(
+				() => {
+					const result = runtime.click(selector);
+					if (!result.ok) {
+						throw new Error(result.error.message);
+					}
+					return { ok: true, action: "click", selector };
+				},
+				"click_error",
+				"browser_click",
+			);
 		}
 
 		case "browser_type": {
@@ -364,18 +385,22 @@ export function executeBrowserTool(
 					error: { code: "invalid_argument", message: "text must be a string" },
 				};
 			}
-			return tryTool(() => {
-				const result = runtime.type(selector, text);
-				if (!result.ok) {
-					throw new Error(result.error.message);
-				}
-				return {
-					ok: true,
-					action: "type",
-					selector,
-					textLength: text.length,
-				};
-			}, "type_error", "browser_type");
+			return tryTool(
+				() => {
+					const result = runtime.type(selector, text);
+					if (!result.ok) {
+						throw new Error(result.error.message);
+					}
+					return {
+						ok: true,
+						action: "type",
+						selector,
+						textLength: text.length,
+					};
+				},
+				"type_error",
+				"browser_type",
+			);
 		}
 
 		case "browser_console": {

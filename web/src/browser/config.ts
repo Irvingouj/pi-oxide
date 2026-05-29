@@ -17,34 +17,39 @@ function prefill(id: string, envValue: string | undefined) {
 	}
 }
 
+function getConfigStore():
+	| { apiKey?: string; baseUrl?: string; model?: string }
+	| undefined {
+	const store = (window as unknown as Record<string, unknown>).__useConfigStore;
+	if (typeof store === "object" && store !== null && "getState" in store) {
+		return (
+			store as {
+				getState(): { apiKey?: string; baseUrl?: string; model?: string };
+			}
+		).getState();
+	}
+	return undefined;
+}
+
 export function getApiKey(): string {
 	prefill("api-key-input", import.meta.env.VITE_FIREWORKS_API_KEY);
 	const dom = readInput("api-key-input");
 	if (dom) return dom;
-	const store = (
-		window as unknown as Record<string, unknown>
-	).__useConfigStore?.getState?.();
-	return (store?.apiKey as string) || "";
+	return getConfigStore()?.apiKey || "";
 }
 
 export function getApiBaseUrl(): string {
 	prefill("base-url-input", import.meta.env.VITE_FIREWORKS_BASE_URL);
 	const dom = readInput("base-url-input");
 	if (dom) return dom;
-	const store = (
-		window as unknown as Record<string, unknown>
-	).__useConfigStore?.getState?.();
-	return (store?.baseUrl as string) || "https://api.fireworks.ai/inference";
+	return getConfigStore()?.baseUrl || "https://api.fireworks.ai/inference";
 }
 
 export function getModel(): string {
 	prefill("model-input", import.meta.env.VITE_FIREWORKS_MODEL);
 	const dom = readInput("model-input");
 	if (dom) return dom;
-	const store = (
-		window as unknown as Record<string, unknown>
-	).__useConfigStore?.getState?.();
 	return (
-		(store?.model as string) || "accounts/fireworks/routers/kimi-k2p6-turbo"
+		getConfigStore()?.model || "accounts/fireworks/routers/kimi-k2p6-turbo"
 	);
 }

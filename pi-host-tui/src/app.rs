@@ -9,8 +9,8 @@ use ratatui::Frame;
 
 use pi_core::{
     AgentAction, AgentMessage, AgentOptions, AgentRuntime, ApiName, ContextProjectionBudget,
-    ContextProjectionState, Model, ModelId, ModelName, ProviderName, QueueMode, SessionId,
-    SessionState, ThinkingLevel, ToolCallId, ToolDefinition, ToolExecutionMode, WaitMode,
+    ContextProjectionState, ExecutionMode, Model, ModelId, ModelName, ProviderName, QueueMode,
+    SessionId, SessionState, ThinkingLevel, ToolCallId, ToolDefinition, WaitMode,
 };
 
 use crate::extension::{BashExtension, BuiltinExtension, Extension};
@@ -147,7 +147,7 @@ impl App {
             thinking_level: ThinkingLevel::Off,
             steering_mode: QueueMode::OneAtATime,
             follow_up_mode: QueueMode::OneAtATime,
-            tool_execution_mode: ToolExecutionMode::Parallel,
+            tool_execution_mode: ExecutionMode::Parallel,
             session_id: session_id.as_ref().map(SessionId::new),
             messages: Vec::new(),
             session_state,

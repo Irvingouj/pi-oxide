@@ -1,14 +1,7 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import type {
-	BrowserConsoleEntry,
-	BrowserElementSnapshot,
-	BrowserPageSnapshot,
-	BrowserRuntime,
-	BrowserToolResult as RuntimeToolResult,
-} from "../src/browser/browserRuntime.ts";
+import type { BrowserRuntime } from "../src/browser/browserRuntime.ts";
 import {
-	BROWSER_TOOLS,
 	type BrowserToolResult,
 	executeBrowserTool,
 } from "../src/browser/browserTools.ts";
@@ -52,6 +45,19 @@ describe("executeBrowserTool", () => {
 		);
 		assert.ok(isContent(result));
 		assert.ok(result.content[0].text.includes("http://localhost/"));
+	});
+
+	it("eval_js returns dynamic strategy in details", () => {
+		const runtime = mockRuntime();
+		const result = executeBrowserTool(
+			{ name: "browser_eval_js", arguments: { source: "1+1" }, id: "1" },
+			runtime,
+		);
+		assert.ok(isContent(result));
+		assert.equal(
+			(result.details?.strategy as { type?: string })?.type,
+			"dynamic",
+		);
 	});
 
 	it("eval_js with invalid source returns error", () => {

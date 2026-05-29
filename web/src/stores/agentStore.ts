@@ -20,6 +20,7 @@ interface AgentStore {
 	addMessage: (msg: ChatMessage) => void;
 	appendToLastAssistant: (text: string) => void;
 	removeEmptyAssistant: () => void;
+	setToolResult: (toolCallId: string, result: string) => void;
 	setRunning: (v: boolean) => void;
 	setStatus: (s: string) => void;
 	setError: (e: string | null) => void;

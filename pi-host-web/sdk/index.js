@@ -28,9 +28,52 @@ import {
   state,
   steer,
   default as init,
+  // HostState API
+  createHostState,
+  destroyHostState,
+  // New API (HostDirective protocol)
+  createHostAgent,
+  destroyHostAgent,
+  startTurn,
+  hostFeedLlmChunk,
+  hostLlmDone,
+  hostToolDone,
+  hostAcceptCompaction,
+  hostContinueTurn,
+  getHostStatePersistData,
+  restoreHostState,
+  restoreHostStateFromJson,
+  // Phase 5 — artifact access
+  hostReadArtifact,
+  hostSearchArtifacts,
+  hostToolCancelled,
+  hostAbort,
+  getHostAgentPersistData,
+  restoreHostAgent,
 } from "../pi_host_web.js";
 
 export { projectContext };
+export {
+  createHostState,
+  destroyHostState,
+  createHostAgent,
+  destroyHostAgent,
+  startTurn,
+  hostFeedLlmChunk,
+  hostLlmDone,
+  hostToolDone,
+  hostAcceptCompaction,
+  hostContinueTurn,
+  getHostStatePersistData,
+  restoreHostState,
+  restoreHostStateFromJson,
+  hostReadArtifact,
+  hostSearchArtifacts,
+  hostToolCancelled,
+  hostAbort,
+  getHostAgentPersistData,
+  restoreHostAgent,
+};
 
 let initialized = false;
 

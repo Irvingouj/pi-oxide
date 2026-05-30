@@ -387,6 +387,27 @@ pub enum AgentAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(tag = "type", rename_all = "snake_case")]
+pub enum HostDirective {
+    StreamLlm { context: LlmContext },
+    ExecuteTools { calls: Vec<ToolCall> },
+    CancelTools { tool_call_ids: Vec<ToolCallId>, reason: CancelReason },
+    Persist,
+    Compact { compact_up_to: String, reason: CompactReason },
+    Finished,
+    WaitForInput { mode: WaitMode },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactReason {
+    OverBudget { estimated_tokens: usize, budget_tokens: usize },
+    EntryCount { count: usize },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
     AgentStart,
     AgentEnd {
@@ -794,22 +815,11 @@ pub enum EntryKind {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct ArtifactEntry {
-    pub id: String,
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct SessionState {
     pub entries: Vec<SessionEntry>,
     pub leaf_id: String,
     #[serde(default)]
     pub name: String,
-    #[serde(default)]
-    pub projection_state: Option<ContextProjectionState>,
-    #[serde(default)]
-    pub artifacts: Vec<ArtifactEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
@@ -934,6 +944,14 @@ pub enum Phase {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct StartTurnInput {
+    pub prompt: AgentMessage,
+    #[serde(default)]
+    pub tools: Vec<ToolDefinition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(untagged)]
 pub enum PromptRequest {
     Message(AgentMessage),
@@ -1011,6 +1029,23 @@ pub struct StepResult {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct TurnResultOutput {
+    pub events: Vec<AgentEvent>,
+    pub directives: Vec<HostDirective>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct TurnResultResult {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<TurnResultOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ErrorDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct EventsResult {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1047,6 +1082,97 @@ pub struct ProjectionResult {
     pub data: Option<ProjectionOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ErrorDto>,
+}
+
+// ---------------------------------------------------------------------------
+// HostState result types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct CreateHostStateOutput {
+    pub handle: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct CreateHostStateResult {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<CreateHostStateOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ErrorDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct CreateHostAgentOutput {
+    pub handle: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct CreateHostAgentResult {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<CreateHostAgentOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ErrorDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct PersistData {
+    pub entries: Vec<SessionEntry>,
+    pub leaf_id: String,
+    pub name: String,
+    pub projection_state: ContextProjectionState,
+    pub artifacts: Vec<(String, String)>,
+    pub budget: ContextProjectionBudget,
+    pub system_prompt: String,
+}
+
+/// Backward-compat: old session JSON used object-shaped artifacts `{id, text}`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct OldArtifactEntry {
+    pub id: String,
+    pub text: String,
+}
+
+/// Backward-compat: old session JSON with `projection_state` and `artifacts`
+/// nested inside the `SessionState` object.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct OldSessionState {
+    pub entries: Vec<SessionEntry>,
+    pub leaf_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub projection_state: Option<ContextProjectionState>,
+    #[serde(default)]
+    pub artifacts: Vec<OldArtifactEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct HostStatePersistDataOutput {
+    pub state: PersistData,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct HostStatePersistDataResult {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<HostStatePersistDataOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ErrorDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct ArtifactSearchResults {
+    pub results: Vec<crate::host_state::ArtifactSearchResult>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1140,6 +1266,6 @@ dto_conv!(Phase, pi_core::Phase);
 
 dto_conv!(SessionEntry, pi_core::SessionEntry);
 dto_conv!(EntryKind, pi_core::EntryKind);
-dto_conv!(ArtifactEntry, pi_core::ArtifactEntry);
 dto_conv!(SessionState, pi_core::SessionState);
 dto_conv!(BranchSummary, pi_core::BranchSummary);
+dto_conv!(PersistData, crate::host_state::PersistData);

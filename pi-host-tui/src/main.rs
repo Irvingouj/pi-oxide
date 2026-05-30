@@ -1,7 +1,10 @@
 use clap::Parser;
 
+use crate::host_state::HostState;
+
 mod app;
 mod extension;
+mod host_state;
 mod llm;
 mod markdown;
 mod session;
@@ -35,10 +38,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "https://api.anthropic.com".into());
 
     let session_backend = session::FileSystemSessionBackend::new();
-    let session_state = cli
-        .session_id
-        .as_ref()
-        .and_then(|id| session_backend.load(id));
+    let host_state = cli.session_id.as_ref().and_then(|id| {
+        // Try new format first
+        if let Some(data) = session_backend.load(id) {
+            return Some(HostState::restore(data));
+        }
+        // Fall back to old SessionState format
+        let path = session_backend.path_for(id);
+        let data = std::fs::read_to_string(path).ok()?;
+        let old: pi_core::SessionState = serde_json::from_str(&data).ok()?;
+        Some(HostState::from_session_state(
+            old,
+            pi_core::ContextProjectionState::default(),
+            std::collections::BTreeMap::new(),
+            pi_core::ContextProjectionBudget::default(),
+            cli.system.clone(),
+        ))
+    });
     let cwd = std::env::current_dir()?;
 
     let mut terminal = ratatui::init();
@@ -48,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &api_key,
         &base_url,
         cli.session_id,
-        session_state,
+        host_state,
         &cwd,
     );
     let result = app.run(&mut terminal, &session_backend);

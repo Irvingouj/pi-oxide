@@ -5,10 +5,10 @@ use ratatui::text::Text;
 
 use pi_core::{message::TokenUsage, timestamp};
 use pi_core::{
-    project, AgentRuntime, Content, LlmChunk, LlmError, LlmResult, ProjectionInput, StopReason,
+    AgentRuntime, Content, LlmChunk, LlmError, LlmResult, StopReason,
     TextContent, ToolArguments, ToolCallId, ToolName,
 };
-use pi_core::{ApiName, ApiUsageSnapshot, AssistantMessage, ModelId, ProviderName};
+use pi_core::{ApiName, ApiUsageSnapshot, AssistantMessage, ContextProjectionReport, ModelId, ProviderName};
 
 use crate::app::{App, ChatEntry};
 use crate::markdown;
@@ -18,22 +18,14 @@ impl App {
         &mut self,
         terminal: &mut ratatui::DefaultTerminal,
         context: pi_core::LlmContext,
+        report: ContextProjectionReport,
     ) {
         self.running = true;
-        let projected = project(ProjectionInput {
-            system_prompt: context.system_prompt.clone(),
-            messages: context.messages.clone(),
-            budget: self.budget.clone(),
-            state: self.projection_state.clone(),
-        });
-        self.projection_state = projected.updated_state;
-        let projected_messages = projected.projected_messages;
-
         self.streaming_text.clear();
 
         match self.llm_client.stream_sync(
             &context.system_prompt,
-            &projected_messages,
+            &context.messages,
             &context.tools,
         ) {
             Ok(mut stream) => {
@@ -110,8 +102,9 @@ impl App {
                 let usage = stream.usage();
                 if let Some((input, output, total)) = usage {
                     self.last_usage = Some((input, output, total));
-                    self.projection_state.last_api_usage = Some(ApiUsageSnapshot {
-                        estimated_tokens: projected.report.estimated_tokens,
+                    let host_state = self.host_state.as_mut().unwrap();
+                    host_state.projection_state.last_api_usage = Some(ApiUsageSnapshot {
+                        estimated_tokens: report.estimated_tokens,
                         actual_input_tokens: input as usize,
                     });
                 }

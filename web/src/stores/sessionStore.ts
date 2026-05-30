@@ -1,22 +1,23 @@
-import type { SessionState } from "@pi-oxide/pi-host-web";
+import type { PersistData } from "@pi-oxide/pi-host-web";
 import { create } from "zustand";
 import { IndexedDBSessionBackend } from "../browser/persistence.ts";
 
 interface SessionStore {
-	restoredState: SessionState | undefined;
+	restoredState: PersistData | undefined;
 	sessionId: string;
 
 	loadSession: (sessionId: string) => Promise<void>;
-	saveSession: (sessionId: string, state: SessionState) => Promise<void>;
+	saveSession: (sessionId: string, state: PersistData) => Promise<void>;
 }
 
 const backend = new IndexedDBSessionBackend();
 
-function isSessionState(v: unknown): v is SessionState {
+function isPersistData(v: unknown): v is PersistData {
 	return (
 		typeof v === "object" &&
 		v !== null &&
-		Array.isArray((v as Record<string, unknown>).entries)
+		Array.isArray((v as Record<string, unknown>).entries) &&
+		typeof (v as Record<string, unknown>).budget === "object"
 	);
 }
 
@@ -27,11 +28,29 @@ export const useSessionStore = create<SessionStore>((set) => ({
 	loadSession: async (sessionId) => {
 		try {
 			const loaded = await backend.load(sessionId);
-			if (loaded && isSessionState(loaded)) {
+			if (loaded && isPersistData(loaded)) {
 				set({ restoredState: loaded });
 			} else if (loaded) {
-				console.warn("Session state missing entries field, clearing");
-				const empty: SessionState = { entries: [], leaf_id: "", name: "" };
+				console.warn("Session state missing entries/budget fields, clearing");
+				const empty: PersistData = {
+					entries: [],
+					leaf_id: "",
+					name: "",
+					projection_state: {
+						tools: {},
+						current_turn: 0,
+						last_api_usage: null,
+						turns_since_compaction: 0,
+					},
+					artifacts: [],
+					budget: {
+						max_tool_result_chars: 50000,
+						max_context_tokens: 100000,
+						microcompact_after_turns: 5,
+						compaction_threshold: 0.75,
+					},
+					system_prompt: "",
+				};
 				await backend.save(sessionId, empty);
 				set({ restoredState: undefined });
 			} else {

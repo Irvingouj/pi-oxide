@@ -1,25 +1,19 @@
 /**
- * useAgent hook — bridges the WASM agent lifecycle to React/Zustand.
+ * useAgent hook — bridges the WASM HostAgent lifecycle to React/Zustand.
  *
- * Replaces the old bootstrap() function. Creates the agent on mount,
- * wires events to the agentStore, and exposes send/steer/stop actions.
+ * Uses the new HostDirective protocol. No local projection state or artifacts.
  */
 
-import type { Agent, AgentEvent } from "@pi-oxide/pi-host-web";
+import type { AgentEvent, PersistData } from "@pi-oxide/pi-host-web";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LiveBrowserRuntime } from "../browser/liveRuntime.ts";
 import {
-	createAgent,
-	getSessionState,
-	runTurn,
-	steerAgent,
+	createHostAgentInstance,
+	HostAgent,
+	runTurnWithHostAgent,
 	stopAgent,
 } from "../services/agentService.ts";
 import { createLlmProvider } from "../services/llmService.ts";
-import {
-	createProjectionService,
-	type ProjectionService,
-} from "../services/projectionService.ts";
 import {
 	ARTIFACT_TOOLS,
 	BROWSER_TOOLS,
@@ -33,14 +27,21 @@ import { useSessionStore } from "../stores/sessionStore.ts";
 const SESSION_ID = "browser-default-session";
 const MAX_TOOL_RESULT_DISPLAY_CHARS = 500;
 
+function isPersistData(v: unknown): v is PersistData {
+	return (
+		typeof v === "object" &&
+		v !== null &&
+		Array.isArray((v as Record<string, unknown>).entries) &&
+		typeof (v as Record<string, unknown>).budget === "object"
+	);
+}
+
 function eventToStoreAction(
 	event: AgentEvent,
 	store: ReturnType<typeof useAgentStore.getState>,
 ) {
 	switch (event.type) {
 		case "message_start": {
-			// Only create an empty assistant message slot for assistant messages.
-			// MessageStart fires for user, tool_result, and assistant messages.
 			if (event.message?.role === "assistant") {
 				store.addMessage({
 					id: `msg-${Date.now()}`,
@@ -104,55 +105,40 @@ function eventToStoreAction(
 		case "agent_start":
 		case "save_point":
 		case "settled": {
-			// No-op for now; these events are not yet displayed in the UI
 			break;
 		}
 	}
 }
 
 export function useAgent() {
-	const [agent, setAgent] = useState<Agent | null>(null);
+	const [hostAgent, setHostAgent] = useState<HostAgent | null>(null);
 	const abortControllerRef = useRef<AbortController | null>(null);
 	const runtimeRef = useRef(new LiveBrowserRuntime());
-	const projectionServiceRef = useRef<ProjectionService>(
-		createProjectionService(),
-	);
 
 	const store = useAgentStore();
 	const configStore = useConfigStore();
 	const sessionStore = useSessionStore();
 
-	// Create agent on mount
 	useEffect(() => {
 		let cancelled = false;
 
 		async function init() {
 			store.setStatus("Loading WASM...");
-			projectionServiceRef.current.clearArtifacts();
 			await sessionStore.loadSession(SESSION_ID);
 			if (cancelled) return;
 
-			const a = await createAgent(SESSION_ID, sessionStore.restoredState);
+			const restored = sessionStore.restoredState;
+			const agent = await createHostAgentInstance(
+				SESSION_ID,
+				restored && isPersistData(restored) ? restored : undefined,
+			);
 			if (cancelled) {
-				a.destroy();
+				agent.destroy();
 				return;
 			}
 
-			if (sessionStore.restoredState?.projection_state) {
-				projectionServiceRef.current.restoreState(
-					sessionStore.restoredState.projection_state,
-				);
-			}
-			if (sessionStore.restoredState?.artifacts) {
-				projectionServiceRef.current.loadArtifacts(
-					sessionStore.restoredState.artifacts,
-				);
-			}
-
-			setAgent(a);
-			store.setStatus(
-				sessionStore.restoredState ? "Session restored" : "Ready",
-			);
+			setHostAgent(agent);
+			store.setStatus(restored ? "Session restored" : "Ready");
 			store.setRunning(false);
 		}
 
@@ -161,29 +147,23 @@ export function useAgent() {
 			cancelled = true;
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [
-		store.setStatus,
-		store.setRunning,
-		sessionStore.restoredState,
-		sessionStore.loadSession,
-	]);
+	}, [store.setStatus, store.setRunning, sessionStore.loadSession]);
 
-	// Cleanup on unmount
 	useEffect(() => {
 		return () => {
-			if (agent) {
+			if (hostAgent) {
 				try {
-					agent.destroy();
+					hostAgent.destroy();
 				} catch {
 					/* ignore */
 				}
 			}
 		};
-	}, [agent]);
+	}, [hostAgent]);
 
 	const sendPrompt = useCallback(
 		async (text: string) => {
-			if (!agent || store.isRunning || !text.trim()) return;
+			if (!hostAgent || store.isRunning || !text.trim()) return;
 			store.addMessage({ id: `user-${Date.now()}`, type: "user", text });
 			store.setRunning(true);
 			store.setError(null);
@@ -191,30 +171,20 @@ export function useAgent() {
 			const abortController = new AbortController();
 			abortControllerRef.current = abortController;
 
-			const projectionService = projectionServiceRef.current;
 			const tools = {
 				...createToolRegistry(runtimeRef.current),
-				...createArtifactToolRegistry(projectionService),
+				...createArtifactToolRegistry(() => hostAgent.handle),
 			};
 			const llmProvider = createLlmProvider(abortController.signal);
 
-			const result = await runTurn(agent, text, {
-				llm: {
-					async call(context, signal) {
-						const projected = projectionService.runProjection(
-							context.system_prompt,
-							context.messages,
-							{ max_tool_result_chars: configStore.maxToolResultChars },
-						);
-						return llmProvider.call(
-							{ ...context, messages: projected },
-							signal,
-						);
-					},
-				},
+			const result = await runTurnWithHostAgent(hostAgent, text, {
+				llm: llmProvider,
 				tools,
 				llmTools: [...BROWSER_TOOLS, ...ARTIFACT_TOOLS],
 				onEvent: (event) => eventToStoreAction(event, store),
+				onPersist: async (data) => {
+					await sessionStore.saveSession(SESSION_ID, data);
+				},
 				signal: abortController.signal,
 			});
 
@@ -234,47 +204,17 @@ export function useAgent() {
 
 			store.setRunning(false);
 			abortControllerRef.current = null;
-
-			const lastReport = projectionServiceRef.current.getLastReport();
-			if (lastReport?.needs_compaction) {
-				projectionServiceRef.current.resetTurnsSinceCompaction();
-			} else {
-				projectionServiceRef.current.incrementTurnsSinceCompaction();
-			}
-
-			// Persist session
-			try {
-				const state = {
-					...getSessionState(agent),
-					projection_state: projectionServiceRef.current.getState(),
-					artifacts: projectionServiceRef.current.snapshotArtifacts(),
-				};
-				await sessionStore.saveSession(SESSION_ID, state);
-			} catch (e) {
-				console.warn("session save failed:", e);
-			}
 		},
-		[agent, store, configStore, sessionStore],
+		[hostAgent, store, sessionStore],
 	);
 
 	const steerPrompt = useCallback(
 		async (text: string) => {
-			if (!agent || !text.trim()) return;
-			try {
-				const events = steerAgent(agent, text);
-				for (const event of events) {
-					eventToStoreAction(event, store);
-				}
-			} catch (e: unknown) {
-				const code = (e as { code?: string }).code;
-				if (code === "wrong_phase") {
-					console.warn("steer ignored: agent is not in a steerable phase");
-				} else {
-					console.warn("steer failed:", e);
-				}
-			}
+			if (!hostAgent || !text.trim()) return;
+			// Steering is not yet supported in the HostAgent API
+			console.warn("steering is not yet supported in the HostAgent API");
 		},
-		[agent, store],
+		[hostAgent],
 	);
 
 	const stopPrompt = useCallback(() => {

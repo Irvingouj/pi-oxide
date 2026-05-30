@@ -9,11 +9,12 @@ use ratatui::Frame;
 
 use pi_core::{
     AgentAction, AgentMessage, AgentOptions, AgentRuntime, ApiName, ContextProjectionBudget,
-    ContextProjectionState, ExecutionMode, Model, ModelId, ModelName, ProviderName, QueueMode,
-    SessionId, SessionState, ThinkingLevel, ToolCallId, ToolDefinition, WaitMode,
+    ExecutionMode, Model, ModelId, ModelName, ProviderName, QueueMode,
+    SessionId, ThinkingLevel, ToolCallId, ToolDefinition, WaitMode,
 };
 
 use crate::extension::{BashExtension, BuiltinExtension, Extension};
+use crate::host_state::{CompactReason, HostDirective, HostState};
 use crate::llm::LlmClient;
 use crate::session::FileSystemSessionBackend;
 
@@ -72,8 +73,7 @@ pub struct App {
     pub(crate) current_tools: Vec<(String, String)>,
     pub(crate) tool_definitions: Vec<ToolDefinition>,
     pub(crate) llm_client: LlmClient,
-    pub(crate) projection_state: ContextProjectionState,
-    pub(crate) budget: ContextProjectionBudget,
+    pub(crate) host_state: Option<HostState>,
     pub(crate) last_usage: Option<(u32, u32, u32)>,
     pub(crate) session_id: Option<String>,
     pub(crate) session_backend: FileSystemSessionBackend,
@@ -117,7 +117,7 @@ impl App {
         api_key: &str,
         base_url: &str,
         session_id: Option<String>,
-        session_state: Option<SessionState>,
+        host_state: Option<HostState>,
         cwd: &Path,
     ) -> Self {
         let model = Model {
@@ -141,6 +141,7 @@ impl App {
         for ext in &extensions {
             tool_defs.extend(ext.tools());
         }
+        let session_state = host_state.as_ref().map(|h| h.to_session_state());
         let agent = AgentRuntime::new(AgentOptions {
             system_prompt: system_prompt.to_string(),
             model,
@@ -182,8 +183,7 @@ impl App {
             current_tools: Vec::new(),
             tool_definitions: tool_defs,
             llm_client,
-            projection_state: ContextProjectionState::default(),
-            budget: ContextProjectionBudget::default(),
+            host_state: Some(host_state.unwrap_or_else(|| HostState::new(system_prompt.to_string(), ContextProjectionBudget::default()))),
             last_usage: None,
             session_id,
             session_backend: FileSystemSessionBackend::new(),
@@ -506,13 +506,16 @@ impl App {
                     }
                     "load" => {
                         if let Some(id) = parts.get(2) {
-                            if let Some(state) = self.session_backend.load(id) {
+                            if let Some(data) = self.session_backend.load(id) {
+                                let host_state = HostState::restore(data);
+                                let session_state = host_state.to_session_state();
                                 let agent = self.agent.take().unwrap().reset();
                                 self.agent = Some(agent);
-                                self.agent_mut().set_session_state(state);
+                                self.agent_mut().set_session_state(session_state);
                                 // Rebuild messages from the loaded session tree so the LLM sees the full transcript
                                 let messages = self.agent().session_state().build_context();
                                 self.agent_mut().state_mut().messages = messages;
+                                self.host_state = Some(host_state);
                                 self.session_id = Some(id.to_string());
                                 self.entries.clear();
                                 self.entries
@@ -543,8 +546,9 @@ impl App {
             }
             "/tokens" => {
                 if let Some((input, output, total)) = self.last_usage {
-                    let ctx_pct = if self.budget.max_context_tokens > 0 {
-                        (input as f64 / self.budget.max_context_tokens as f64 * 100.0) as u16
+                    let budget = &self.host_state.as_ref().unwrap().budget;
+                    let ctx_pct = if budget.max_context_tokens > 0 {
+                        (input as f64 / budget.max_context_tokens as f64 * 100.0) as u16
                     } else {
                         0
                     };
@@ -566,8 +570,14 @@ impl App {
                     self.agent_mut().state_mut().messages.truncate(new_len);
                     // Rebuild session tree from truncated messages so it stays in sync
                     let truncated = self.agent().state().messages.clone();
-                    self.agent_mut()
-                        .set_session_state(pi_core::SessionState::from_messages(&truncated));
+                    let new_session_state = pi_core::SessionState::from_messages(&truncated);
+                    self.agent_mut().set_session_state(new_session_state.clone());
+                    // Sync host_state entries/leaf with the truncated session state
+                    if let Some(ref mut hs) = self.host_state {
+                        hs.entries = new_session_state.entries;
+                        hs.leaf_id = new_session_state.leaf_id;
+                        hs.name = new_session_state.name;
+                    }
                     // Also truncate entries to remove the last user+assistant+tools round
                     if let Some(last_user_entry) = self
                         .entries
@@ -593,12 +603,61 @@ impl App {
         let _ = terminal.draw(|f| self.render(f));
     }
 
+    fn actions_to_directives(&mut self, actions: Vec<AgentAction>) -> Vec<HostDirective> {
+        let mut directives = Vec::new();
+        for action in actions {
+            match action {
+                AgentAction::StreamLlm { context, .. } => {
+                    let system_prompt = context.system_prompt.clone();
+                    let (projected_messages, report) =
+                        self.host_state.as_mut().unwrap().project(&system_prompt, &context.messages);
+                    if report.needs_compaction {
+                        let compact_up_to = self.host_state.as_ref().unwrap().leaf_id.clone();
+                        directives.push(HostDirective::Compact {
+                            compact_up_to,
+                            reason: CompactReason::OverBudget {
+                                estimated_tokens: report.estimated_tokens,
+                                budget_tokens: self.host_state.as_ref().unwrap().budget.max_context_tokens,
+                            },
+                        });
+                    }
+                    directives.push(HostDirective::StreamLlm {
+                        context: pi_core::LlmContext {
+                            system_prompt,
+                            messages: projected_messages,
+                            tools: context.tools,
+                        },
+                        report,
+                    });
+                }
+                AgentAction::ExecuteTools { calls } => {
+                    directives.push(HostDirective::ExecuteTools { calls });
+                }
+                AgentAction::CancelTools { tool_call_ids, reason } => {
+                    directives.push(HostDirective::CancelTools {
+                        tool_call_ids,
+                        reason,
+                    });
+                }
+                AgentAction::WaitForInput { mode } => {
+                    directives.push(HostDirective::WaitForInput { mode });
+                }
+                AgentAction::Finished { .. } => {
+                    directives.push(HostDirective::Finished);
+                    directives.push(HostDirective::Persist);
+                }
+            }
+        }
+        directives
+    }
+
     pub(crate) fn handle_actions(
         &mut self,
         terminal: &mut ratatui::DefaultTerminal,
         actions: Vec<AgentAction>,
     ) {
-        for action in actions {
+        let directives = self.actions_to_directives(actions);
+        for directive in directives {
             if self.cancelled {
                 let runtime = self.agent.take().unwrap();
                 let (_events, new_runtime) = match runtime {
@@ -614,21 +673,38 @@ impl App {
                 let _ = terminal.draw(|f| self.render(f));
                 return;
             }
-            match action {
-                AgentAction::StreamLlm { context, .. } => {
-                    self.stream_llm(terminal, context);
+            match directive {
+                HostDirective::StreamLlm { context, report } => {
+                    self.stream_llm(terminal, context, report);
                 }
-                AgentAction::ExecuteTools { calls } => {
+                HostDirective::ExecuteTools { calls } => {
                     self.execute_tools(terminal, calls);
                 }
-                AgentAction::Finished { .. } => {
+                HostDirective::Finished => {
                     self.entries.push(ChatEntry::System("Done.".into()));
                     self.running = false;
                     let _ = terminal.draw(|f| self.render(f));
                 }
-                AgentAction::WaitForInput { .. } => {
+                HostDirective::WaitForInput { .. } => {
                     self.running = false;
                     let _ = terminal.draw(|f| self.render(f));
+                }
+                HostDirective::Persist => {
+                    self.save_session();
+                }
+                HostDirective::Compact { .. } => {
+                    if let Some(plan) = self.host_state.as_ref().unwrap().plan_compaction() {
+                        self.entries.push(ChatEntry::System(
+                            "Compacting old context...".into(),
+                        ));
+                        let _ = terminal.draw(|f| self.render(f));
+                        self.host_state.as_mut().unwrap().accept_compaction(
+                            plan,
+                            "Context compacted by host.".to_string(),
+                        );
+                        let session_state = self.host_state.as_ref().unwrap().to_session_state();
+                        self.agent_mut().set_session_state(session_state);
+                    }
                 }
                 _ => {}
             }

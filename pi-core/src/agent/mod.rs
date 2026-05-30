@@ -145,6 +145,7 @@ impl Agent {
 
     /// Replace the in-memory session tree.
     pub(crate) fn set_session_state(&mut self, state: SessionState) {
+        self.state.messages = state.build_context();
         self.session_state = state;
     }
 

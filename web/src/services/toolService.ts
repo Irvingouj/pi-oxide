@@ -4,10 +4,15 @@
  * Pure JS, no React. Wraps browser tool execution into the SDK ToolMap shape.
  */
 
-import type { ToolCall, ToolDefinition, ToolMap } from "@pi-oxide/pi-host-web";
+import {
+	hostReadArtifact,
+	hostSearchArtifacts,
+	type ToolCall,
+	type ToolDefinition,
+	type ToolMap,
+} from "@pi-oxide/pi-host-web";
 import type { BrowserRuntime } from "../browser/browserRuntime.ts";
 import { BROWSER_TOOLS, executeBrowserTool } from "../browser/browserTools.ts";
-import type { ProjectionService } from "./projectionService.ts";
 
 // ========================================================================
 // Artifact tool schemas
@@ -82,11 +87,9 @@ export function createToolRegistry(runtime: BrowserRuntime): ToolMap {
 }
 
 /**
- * Create artifact tool handlers that wrap the projection service artifact store.
+ * Create artifact tool handlers that read from the host agent artifact store.
  */
-export function createArtifactToolRegistry(
-	projectionService: ProjectionService,
-): ToolMap {
+export function createArtifactToolRegistry(getHandle: () => number): ToolMap {
 	return {
 		artifact_read: async (call: ToolCall) => {
 			const artifactId = call.arguments.artifact_id as string;
@@ -98,8 +101,8 @@ export function createArtifactToolRegistry(
 					},
 				};
 			}
-			const text = projectionService.readArtifact(artifactId);
-			if (text === undefined) {
+			const text = hostReadArtifact(getHandle(), artifactId);
+			if (text === "") {
 				return {
 					error: {
 						code: "not_found",
@@ -121,13 +124,13 @@ export function createArtifactToolRegistry(
 					},
 				};
 			}
-			const matches = projectionService.searchArtifacts(pattern);
-			const capped = matches.slice(0, MAX_SEARCH_RESULTS);
+			const result = hostSearchArtifacts(getHandle(), pattern);
+			const capped: Array<{ id: string; snippet: string; match_count: number }> = result.results.slice(0, MAX_SEARCH_RESULTS);
 			const text = JSON.stringify(
 				capped.map((m) => ({
 					id: m.id,
 					snippet: m.snippet,
-					match_count: m.matchCount,
+					match_count: m.match_count,
 				})),
 				null,
 				2,

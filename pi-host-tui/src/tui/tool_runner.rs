@@ -73,12 +73,37 @@ impl App {
         }
     }
 
+    fn store_artifact_from_tool_result(&mut self, tool_call_id: &ToolCallId, result: &Result<ToolResult, ToolError>) {
+        if let Ok(tool_result) = result {
+            let text = tool_result
+                .content
+                .iter()
+                .filter_map(|c| {
+                    if let Content::Text(t) = c {
+                        Some(t.text.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let tcid = tool_call_id.as_str();
+            if let Some(ref mut hs) = self.host_state {
+                if let Some(pi_core::ToolProjectionState::Replaced { replacement, .. }) = hs.projection_state.tools.get(tcid) {
+                    hs.store_artifact(replacement.artifact_id.clone(), text);
+                }
+            }
+        }
+    }
+
     pub(crate) fn on_tool_result(
         &mut self,
         terminal: &mut ratatui::DefaultTerminal,
         tool_call_id: ToolCallId,
         result: Result<ToolResult, ToolError>,
     ) {
+        self.store_artifact_from_tool_result(&tool_call_id, &result);
+
         let output_text = match &result {
             Ok(tool_result) => tool_result
                 .content
@@ -151,6 +176,8 @@ impl App {
         let mut runtime = self.agent.take().unwrap();
         let mut all_actions = Vec::new();
         for (tool_call_id, result) in just_completed {
+            self.store_artifact_from_tool_result(&tool_call_id, &result);
+
             let output_text = match &result {
                 Ok(r) => r
                     .content

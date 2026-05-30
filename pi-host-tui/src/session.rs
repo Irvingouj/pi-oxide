@@ -1,10 +1,10 @@
 //! Filesystem-based session persistence for the terminal agent.
 //!
-//! Stores SessionState as pretty-printed JSON in ~/.pi-oxide/sessions/{id}.json.
+//! Stores PersistData as pretty-printed JSON in ~/.pi-oxide/sessions/{id}.json.
 
 use std::path::PathBuf;
 
-use pi_core::SessionState;
+use crate::host_state::PersistData;
 
 pub struct FileSystemSessionBackend {
     dir: PathBuf,
@@ -17,18 +17,18 @@ impl FileSystemSessionBackend {
         Self { dir }
     }
 
-    /// Load a session state from disk.
-    pub fn load(&self, session_id: &str) -> Option<SessionState> {
+    /// Load a persisted host state from disk.
+    pub fn load(&self, session_id: &str) -> Option<PersistData> {
         let path = self.path_for(session_id);
         let data = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&data).ok()
     }
 
-    /// Save a session state to disk.
+    /// Save a persisted host state to disk.
     pub fn save(
         &self,
         session_id: &str,
-        state: &SessionState,
+        state: &PersistData,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let path = self.path_for(session_id);
         if let Some(parent) = path.parent() {
@@ -55,7 +55,7 @@ impl FileSystemSessionBackend {
         ids
     }
 
-    fn path_for(&self, session_id: &str) -> PathBuf {
+    pub fn path_for(&self, session_id: &str) -> PathBuf {
         self.dir.join(format!("{}.json", session_id))
     }
 }

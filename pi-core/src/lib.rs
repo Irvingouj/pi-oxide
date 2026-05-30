@@ -44,8 +44,8 @@ pub use message::{
     ToolResultMessage, UserMessage,
 };
 pub use session::{
-    ArtifactEntry, BranchSummary, EntryKind, SessionEntry, SessionError, SessionState,
-    SessionStorage,
+    apply_compaction, plan_compaction, BranchSummary, CompactionPlan, EntryKind, SessionEntry,
+    SessionError, SessionState, SessionStorage,
 };
 pub use tool::{ExecutionMode, ToolDefinition, ToolError, ToolResult, ToolRunMode};
 pub use types::{

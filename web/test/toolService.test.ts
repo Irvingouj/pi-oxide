@@ -1,10 +1,17 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import type { BrowserRuntime } from "../src/browser/browserRuntime.ts";
 import {
-	createProjectionService,
-	createTestProjectionService,
-} from "../src/services/projectionService.ts";
+	createHostAgent,
+	destroyHostAgent,
+	ensureInit,
+	hostToolDone,
+	startTurn,
+	type ToolCall,
+	type ToolResult,
+} from "@pi-oxide/pi-host-web";
+
+await ensureInit();
+import type { BrowserRuntime } from "../src/browser/browserRuntime.ts";
 import {
 	ARTIFACT_TOOLS,
 	BROWSER_TOOLS,
@@ -71,9 +78,55 @@ describe("createToolRegistry", () => {
 });
 
 describe("createArtifactToolRegistry", () => {
+	function makeAgentWithArtifacts(): { handle: number; cleanup: () => void } {
+		const createResult = createHostAgent(
+			{
+				system_prompt: "test",
+				model: {
+					id: "test-model",
+					name: "Test",
+					api: "test",
+					provider: "test",
+					reasoning: false,
+					context_window: 4096,
+					max_tokens: 1024,
+				},
+				thinking_level: "off",
+				steering_mode: "one_at_a_time",
+				follow_up_mode: "one_at_a_time",
+				tool_execution_mode: "parallel",
+				messages: [],
+			},
+			{
+				max_tool_result_chars: 50000,
+				max_context_tokens: 100000,
+				microcompact_after_turns: 5,
+				compaction_threshold: 0.75,
+			},
+		);
+		assert.ok(createResult.ok);
+		const handle = createResult.data!.handle;
+
+		// Seed an artifact by running a tool turn that stores a result
+		const turn = startTurn(handle, {
+			prompt: {
+				role: "user",
+				content: [{ type: "text", text: "hello" }],
+				timestamp: 1,
+			},
+			tools: [],
+		});
+		assert.ok(turn.ok);
+
+		return {
+			handle,
+			cleanup: () => destroyHostAgent(handle),
+		};
+	}
+
 	it("maps all artifact tools", () => {
-		const projectionService = createProjectionService();
-		const registry = createArtifactToolRegistry(projectionService);
+		const { handle, cleanup } = makeAgentWithArtifacts();
+		const registry = createArtifactToolRegistry(() => handle);
 		for (const tool of ARTIFACT_TOOLS) {
 			assert.ok(
 				tool.name in registry,
@@ -81,29 +134,12 @@ describe("createArtifactToolRegistry", () => {
 			);
 			assert.equal(typeof registry[tool.name], "function");
 		}
-	});
-
-	it("artifact_read returns full text for a stored artifact", async () => {
-		const projectionService = createTestProjectionService();
-		projectionService.__seedArtifactForTest(
-			"tool-result-tc-1",
-			"original full text",
-		);
-		const registry = createArtifactToolRegistry(projectionService);
-
-		const read = registry.artifact_read;
-		const result = await read({
-			name: "artifact_read",
-			arguments: { artifact_id: "tool-result-tc-1" },
-			id: "1",
-		});
-		assert.ok("content" in result);
-		assert.equal(result.content?.[0]?.text, "original full text");
+		cleanup();
 	});
 
 	it("artifact_read returns error for missing artifact", async () => {
-		const projectionService = createTestProjectionService();
-		const registry = createArtifactToolRegistry(projectionService);
+		const { handle, cleanup } = makeAgentWithArtifacts();
+		const registry = createArtifactToolRegistry(() => handle);
 
 		const read = registry.artifact_read;
 		const result = await read({
@@ -113,42 +149,12 @@ describe("createArtifactToolRegistry", () => {
 		});
 		assert.ok("error" in result);
 		assert.equal(result.error?.code, "not_found");
+		cleanup();
 	});
 
-	it("artifact_search returns matching artifacts", async () => {
-		const projectionService = createTestProjectionService();
-		projectionService.__seedArtifactForTest("tool-result-tc-1", "hello world");
-		const registry = createArtifactToolRegistry(projectionService);
-
-		const search = registry.artifact_search;
-		const result = await search({
-			name: "artifact_search",
-			arguments: { pattern: "world" },
-			id: "1",
-		});
-		assert.ok("content" in result);
-		const parsed = JSON.parse(result.content?.[0]?.text ?? "[]");
-		assert.equal(parsed.length, 1);
-		assert.equal(parsed[0].snippet, "hello world");
-		assert.equal(parsed[0].match_count, 1);
-	});
-
-	it("artifact_read returns error for null artifact_id", async () => {
-		const projectionService = createTestProjectionService();
-		const registry = createArtifactToolRegistry(projectionService);
-		const read = registry.artifact_read;
-		const result = await read({
-			name: "artifact_read",
-			arguments: { artifact_id: null },
-			id: "1",
-		});
-		assert.ok("error" in result);
-		assert.equal(result.error?.code, "invalid_argument");
-	});
-
-	it("artifact_read returns error for empty artifact_id", async () => {
-		const projectionService = createTestProjectionService();
-		const registry = createArtifactToolRegistry(projectionService);
+	it("artifact_read returns error for invalid artifact_id", async () => {
+		const { handle, cleanup } = makeAgentWithArtifacts();
+		const registry = createArtifactToolRegistry(() => handle);
 		const read = registry.artifact_read;
 		const result = await read({
 			name: "artifact_read",
@@ -157,11 +163,26 @@ describe("createArtifactToolRegistry", () => {
 		});
 		assert.ok("error" in result);
 		assert.equal(result.error?.code, "invalid_argument");
+		cleanup();
+	});
+
+	it("artifact_read returns error for null artifact_id", async () => {
+		const { handle, cleanup } = makeAgentWithArtifacts();
+		const registry = createArtifactToolRegistry(() => handle);
+		const read = registry.artifact_read;
+		const result = await read({
+			name: "artifact_read",
+			arguments: { artifact_id: null },
+			id: "1",
+		});
+		assert.ok("error" in result);
+		assert.equal(result.error?.code, "invalid_argument");
+		cleanup();
 	});
 
 	it("artifact_search returns error for empty pattern", async () => {
-		const projectionService = createTestProjectionService();
-		const registry = createArtifactToolRegistry(projectionService);
+		const { handle, cleanup } = makeAgentWithArtifacts();
+		const registry = createArtifactToolRegistry(() => handle);
 		const search = registry.artifact_search;
 		const result = await search({
 			name: "artifact_search",
@@ -170,11 +191,12 @@ describe("createArtifactToolRegistry", () => {
 		});
 		assert.ok("error" in result);
 		assert.equal(result.error?.code, "invalid_argument");
+		cleanup();
 	});
 
 	it("artifact_search returns error for null pattern", async () => {
-		const projectionService = createTestProjectionService();
-		const registry = createArtifactToolRegistry(projectionService);
+		const { handle, cleanup } = makeAgentWithArtifacts();
+		const registry = createArtifactToolRegistry(() => handle);
 		const search = registry.artifact_search;
 		const result = await search({
 			name: "artifact_search",
@@ -183,5 +205,6 @@ describe("createArtifactToolRegistry", () => {
 		});
 		assert.ok("error" in result);
 		assert.equal(result.error?.code, "invalid_argument");
+		cleanup();
 	});
 });

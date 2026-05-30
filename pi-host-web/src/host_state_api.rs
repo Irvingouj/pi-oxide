@@ -22,7 +22,7 @@ pub fn destroy_host_state(handle: u32) -> EmptyResult {
 #[wasm_bindgen(js_name = "getHostStatePersistData")]
 pub fn get_host_state_persist_data(handle: u32) -> HostStatePersistDataResult {
     console_error_panic_hook::set_once();
-    let result = with_host_state(handle, |state| state.get_persist_data());
+    let result = with_host_state(handle, |state| state.get_persist_data(&pi_core::SessionState::default()));
     match result {
         Ok(data) => {
             let dto_data: PersistData = try_conv!(data.try_into());
@@ -52,7 +52,7 @@ pub fn restore_host_state_from_json(json: String) -> CreateHostStateResult {
     }
     // Try old format
     if let Ok(old) = serde_json::from_str::<crate::dto::OldSessionState>(&json) {
-        let state = HostState::migrate_from_old_session(old);
+        let (state, _session_state) = HostState::migrate_from_old_session(old);
         let handle = put_host_state(state);
         return ok(CreateHostStateOutput { handle });
     }

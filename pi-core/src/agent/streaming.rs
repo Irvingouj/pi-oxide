@@ -2,6 +2,7 @@ use super::{Agent, Phase};
 use crate::events::{AgentAction, AgentEvent, ContentDelta};
 use crate::llm::{LlmChunk, LlmResult};
 use crate::message::{AgentMessage, Content, StopReason, TextContent, ToolCall};
+use crate::session::SessionState;
 use tracing::{debug, trace, warn};
 
 impl Agent {
@@ -71,7 +72,11 @@ impl Agent {
     }
 
     /// Called by the host when the LLM stream ends.
-    pub(crate) fn on_llm_done(&mut self, result: LlmResult) -> (Vec<AgentEvent>, Vec<AgentAction>) {
+    pub(crate) fn on_llm_done(
+        &mut self,
+        result: LlmResult,
+        session_state: &mut SessionState,
+    ) -> (Vec<AgentEvent>, Vec<AgentAction>) {
         if self.phase != Phase::Streaming {
             warn!(phase = ?self.phase, "on_llm_done requested outside streaming phase");
             return (vec![], vec![]);
@@ -85,7 +90,7 @@ impl Agent {
 
         self.replace_last_assistant_or_push(msg.clone());
         self.state.streaming_message = None;
-        self.append_session_message(&msg);
+        self.append_session_message(session_state, &msg);
         events.push(AgentEvent::MessageEnd {
             message: msg.clone(),
         });
@@ -137,12 +142,12 @@ impl Agent {
             // Check steering / follow-up queues
             let steering = self.drain_steering();
             if !steering.is_empty() {
-                return self.inject_messages_and_stream(steering);
+                return self.inject_messages_and_stream(steering, session_state);
             }
 
             let follow = self.drain_follow_up();
             if !follow.is_empty() {
-                return self.inject_messages_and_stream(follow);
+                return self.inject_messages_and_stream(follow, session_state);
             }
 
             // Run complete

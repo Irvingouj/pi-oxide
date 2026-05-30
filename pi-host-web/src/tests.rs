@@ -201,13 +201,13 @@ fn get_session_state_after_creation_is_empty() {
 #[test]
 fn set_and_get_session_state_roundtrip() {
     create_agent(dummy_options());
-    let custom_state = SessionState {
-        entries: vec![SessionEntry {
+    let custom_state = crate::dto::SessionState {
+        entries: vec![crate::dto::SessionEntry {
             id: "entry-0".to_string(),
             parent_id: None,
-            kind: EntryKind::Message {
-                message: AgentMessage::User(UserMessage {
-                    content: vec![Content::Text(TextContent {
+            kind: crate::dto::EntryKind::Message {
+                message: crate::dto::AgentMessage::User(crate::dto::UserMessage {
+                    content: vec![crate::dto::Content::Text(crate::dto::TextContent {
                         text: "hi".to_string(),
                     })],
                     timestamp: 1,
@@ -912,7 +912,7 @@ fn directive_cancel_tools() {
         tool_call_ids: vec![pi_core::ToolCallId::new("tc-1")],
         reason: pi_core::CancelReason::UserRequested,
     }];
-    let directives = super::convert_actions_to_directives(&mut host_state, core_actions).unwrap();
+    let directives = super::convert_actions_to_directives(&mut host_state, &[], "", core_actions).unwrap();
     assert!(
         directives.iter().any(|d| matches!(d, HostDirective::CancelTools { .. })),
         "should convert CancelTools action to directive"
@@ -927,7 +927,7 @@ fn directive_wait_for_input() {
     let core_actions = vec![pi_core::AgentAction::WaitForInput {
         mode: pi_core::WaitMode::Any,
     }];
-    let directives = super::convert_actions_to_directives(&mut host_state, core_actions).unwrap();
+    let directives = super::convert_actions_to_directives(&mut host_state, &[], "", core_actions).unwrap();
     assert!(
         directives.iter().any(|d| matches!(d, HostDirective::WaitForInput { .. })),
         "should convert WaitForInput action to directive"
@@ -1121,9 +1121,17 @@ fn dto_host_directive_serialize() {
 
     let compact = HostDirective::Compact {
         compact_up_to: "leaf".to_string(),
+        first_kept_entry_id: "e2".to_string(),
+        tokens_before: 42,
         reason: CompactReason::OverBudget {
             estimated_tokens: 100,
             budget_tokens: 50,
+        },
+        compacted_entry_ids: vec!["e0".to_string(), "e1".to_string()],
+        summary_context: LlmContext {
+            system_prompt: "Summarize".to_string(),
+            messages: vec![],
+            tools: vec![],
         },
     };
     let json = serde_json::to_string(&compact).unwrap();
@@ -1338,10 +1346,13 @@ fn migrate_old_session_entries_preserved() {
     let state_resp = get_host_state_persist_data(handle);
     assert!(state_resp.ok);
     let data = state_resp.data.unwrap().state;
-    assert_eq!(data.entries.len(), 1);
-    assert_eq!(data.entries[0].id, "e1");
-    assert_eq!(data.leaf_id, "e1");
-    assert_eq!(data.name, "legacy");
+    // Standalone HostState no longer stores entries/leaf_id/name
+    assert_eq!(data.entries.len(), 0);
+    assert_eq!(data.leaf_id, "");
+    assert_eq!(data.name, "");
+    assert_eq!(data.projection_state, ContextProjectionState::default());
+    assert!(data.artifacts.is_empty());
+    assert_eq!(data.budget.max_tool_result_chars, 50000); // default
     destroy_host_state(handle);
 }
 
@@ -1368,7 +1379,8 @@ fn migrate_new_session_noop() {
     let state_resp = get_host_state_persist_data(handle);
     assert!(state_resp.ok);
     let restored = state_resp.data.unwrap().state;
-    assert_eq!(restored.name, "new");
+    // Standalone HostState no longer stores entries/leaf_id/name
+    assert_eq!(restored.name, "");
     assert_eq!(restored.system_prompt, "You are helpful.");
     assert_eq!(restored.artifacts.len(), 1);
     assert_eq!(restored.artifacts[0], ("a1".to_string(), "hello".to_string()));
@@ -1389,7 +1401,8 @@ fn migrate_partial_session() {
     let state_resp = get_host_state_persist_data(handle);
     assert!(state_resp.ok);
     let data = state_resp.data.unwrap().state;
-    assert_eq!(data.entries.len(), 1);
+    // Standalone HostState no longer stores entries/leaf_id/name
+    assert_eq!(data.entries.len(), 0);
     assert_eq!(data.projection_state, ContextProjectionState::default());
     assert!(data.artifacts.is_empty());
     assert_eq!(data.budget.max_tool_result_chars, 50000); // default

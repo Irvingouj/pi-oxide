@@ -68,7 +68,8 @@ impl App {
                         }
                     }
                     if self.cancelled {
-                        let transition = streaming.abort();
+                        let transition = streaming.abort(std::mem::take(&mut self.session_state));
+                        self.session_state = transition.session_state;
                         self.agent = Some(transition.state.into_runtime());
                         self.running = false;
                         self.entries.push(ChatEntry::System("Cancelled.".into()));
@@ -158,8 +159,9 @@ impl App {
                 };
 
                 let result = LlmResult::Ok(assistant_msg);
-                let transition = streaming.finish_llm(result);
-                let (_events, actions, runtime) = transition.into_parts();
+                let transition = streaming.finish_llm(result, std::mem::take(&mut self.session_state));
+                let (_events, actions, runtime, session_state) = transition.into_parts();
+                self.session_state = session_state;
                 self.agent = Some(runtime);
                 self.handle_actions(terminal, actions);
             }
@@ -173,13 +175,15 @@ impl App {
                     aborted: false,
                 };
                 let runtime = self.agent.take().unwrap();
-                let (_events, actions, new_runtime) = match runtime {
+                let session_state = std::mem::take(&mut self.session_state);
+                let (_events, actions, new_runtime, session_state) = match runtime {
                     AgentRuntime::Streaming(streaming) => {
-                        let transition = streaming.finish_llm(err_result);
+                        let transition = streaming.finish_llm(err_result, session_state);
                         transition.into_parts()
                     }
-                    other => (vec![], vec![], other),
+                    other => (vec![], vec![], other, session_state),
                 };
+                self.session_state = session_state;
                 self.agent = Some(new_runtime);
                 self.handle_actions(terminal, actions);
             }

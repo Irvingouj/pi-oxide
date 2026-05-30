@@ -68,16 +68,11 @@ pub struct Agent {
     pub(crate) steering_mode: QueueMode,
     pub(crate) follow_up_mode: QueueMode,
     pub(crate) session_id: Option<SessionId>,
-    pub(crate) session_state: SessionState,
     pub(crate) turn_tools: Vec<ToolDefinition>,
 }
 
 impl Agent {
     pub fn new(options: AgentOptions) -> Self {
-        let mut session_state = options.session_state.unwrap_or_default();
-        if session_state.entries.is_empty() && !options.messages.is_empty() {
-            session_state = SessionState::from_messages(&options.messages);
-        }
         Self {
             state: AgentState {
                 system_prompt: options.system_prompt,
@@ -98,7 +93,6 @@ impl Agent {
             steering_mode: options.steering_mode,
             follow_up_mode: options.follow_up_mode,
             session_id: options.session_id,
-            session_state,
             turn_tools: Vec::new(),
         }
     }
@@ -138,17 +132,6 @@ impl Agent {
         &mut self.state
     }
 
-    /// Read-only access to the session tree.
-    pub fn session_state(&self) -> &SessionState {
-        &self.session_state
-    }
-
-    /// Replace the in-memory session tree.
-    pub(crate) fn set_session_state(&mut self, state: SessionState) {
-        self.state.messages = state.build_context();
-        self.session_state = state;
-    }
-
     /// Reset state (clear messages, queues, runtime state).
     pub(crate) fn reset(&mut self) {
         debug!("agent state reset");
@@ -161,10 +144,13 @@ impl Agent {
         self.follow_up_queue.clear();
         self.pending_tool_calls.clear();
         self.completed_tool_results.clear();
-        self.session_state = SessionState::default();
         self.completed_tool_terminations.clear();
         self.turn_tools.clear();
         self.phase = Phase::Idle;
+    }
+
+    pub(crate) fn rebuild_messages(&mut self, session_state: &SessionState) {
+        self.state.messages = session_state.build_context();
     }
 
     // --- private helpers used by submodules ---
@@ -180,6 +166,7 @@ impl Agent {
     pub(crate) fn inject_messages_and_stream(
         &mut self,
         messages: Vec<AgentMessage>,
+        session_state: &mut SessionState,
     ) -> (Vec<AgentEvent>, Vec<AgentAction>) {
         let mut events = Vec::new();
 
@@ -187,7 +174,7 @@ impl Agent {
             events.push(AgentEvent::MessageStart {
                 message: msg.clone(),
             });
-            self.append_session_message(&msg);
+            self.append_session_message(session_state, &msg);
             self.state.messages.push(msg);
             events.push(AgentEvent::MessageEnd {
                 message: self.state.messages.last().unwrap().clone(),

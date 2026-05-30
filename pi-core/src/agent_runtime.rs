@@ -22,6 +22,7 @@ pub struct Transition<T> {
     pub events: Vec<AgentEvent>,
     pub actions: Vec<AgentAction>,
     pub state: T,
+    pub session_state: SessionState,
 }
 
 /// Outcome of finishing an LLM stream.
@@ -35,47 +36,52 @@ pub enum FinishLlmTransition {
 
 impl FinishLlmTransition {
     /// Destructure into the common parts regardless of which phase we land in.
-    pub fn into_parts(self) -> (Vec<AgentEvent>, Vec<AgentAction>, AgentRuntime) {
+    pub fn into_parts(self) -> (Vec<AgentEvent>, Vec<AgentAction>, AgentRuntime, SessionState) {
         match self {
             FinishLlmTransition::MoreStreaming(t) => {
                 let Transition {
                     events,
                     actions,
                     state,
+                    session_state,
                 } = t;
-                (events, actions, state.into_runtime())
+                (events, actions, state.into_runtime(), session_state)
             }
             FinishLlmTransition::WaitingTools(t) => {
                 let Transition {
                     events,
                     actions,
                     state,
+                    session_state,
                 } = t;
-                (events, actions, state.into_runtime())
+                (events, actions, state.into_runtime(), session_state)
             }
             FinishLlmTransition::Ready(t) => {
                 let Transition {
                     events,
                     actions,
                     state,
+                    session_state,
                 } = t;
-                (events, actions, state.into_runtime())
+                (events, actions, state.into_runtime(), session_state)
             }
             FinishLlmTransition::Finished(t) => {
                 let Transition {
                     events,
                     actions,
                     state,
+                    session_state,
                 } = t;
-                (events, actions, state.into_runtime())
+                (events, actions, state.into_runtime(), session_state)
             }
             FinishLlmTransition::Aborted(t) => {
                 let Transition {
                     events,
                     actions,
                     state,
+                    session_state,
                 } = t;
-                (events, actions, state.into_runtime())
+                (events, actions, state.into_runtime(), session_state)
             }
         }
     }
@@ -89,31 +95,34 @@ pub enum ToolTransition {
 }
 
 impl ToolTransition {
-    pub fn into_parts(self) -> (Vec<AgentEvent>, Vec<AgentAction>, AgentRuntime) {
+    pub fn into_parts(self) -> (Vec<AgentEvent>, Vec<AgentAction>, AgentRuntime, SessionState) {
         match self {
             ToolTransition::WaitingTools(t) => {
                 let Transition {
                     events,
                     actions,
                     state,
+                    session_state,
                 } = t;
-                (events, actions, state.into_runtime())
+                (events, actions, state.into_runtime(), session_state)
             }
             ToolTransition::Ready(t) => {
                 let Transition {
                     events,
                     actions,
                     state,
+                    session_state,
                 } = t;
-                (events, actions, state.into_runtime())
+                (events, actions, state.into_runtime(), session_state)
             }
             ToolTransition::Finished(t) => {
                 let Transition {
                     events,
                     actions,
                     state,
+                    session_state,
                 } = t;
-                (events, actions, state.into_runtime())
+                (events, actions, state.into_runtime(), session_state)
             }
         }
     }
@@ -224,16 +233,6 @@ impl AgentRuntime {
         Self::from_agent(agent)
     }
 
-    /// Read-only access to the session tree.
-    pub fn session_state(&self) -> &SessionState {
-        self.as_agent().session_state()
-    }
-
-    /// Replace the in-memory session tree.
-    pub fn set_session_state(&mut self, state: SessionState) {
-        self.as_agent_mut().set_session_state(state)
-    }
-
     /// Forward a tool execution update.
     pub fn on_tool_update(&mut self, update: ToolExecutionUpdate) -> Vec<AgentEvent> {
         self.as_agent_mut().on_tool_update(update)
@@ -262,12 +261,14 @@ impl IdleAgent {
         mut self,
         msg: AgentMessage,
         tools: Vec<ToolDefinition>,
+        mut session_state: SessionState,
     ) -> Transition<StreamingAgent> {
-        let (events, actions) = self.agent.start_turn(msg, tools);
+        let (events, actions) = self.agent.start_turn(msg, tools, &mut session_state);
         Transition {
             events,
             actions,
             state: StreamingAgent { agent: self.agent },
+            session_state,
         }
     }
 
@@ -285,6 +286,7 @@ impl IdleAgent {
             events: vec![],
             actions: vec![],
             state: IdleAgent { agent: self.agent },
+            session_state: SessionState::default(),
         }
     }
 
@@ -310,8 +312,8 @@ impl StreamingAgent {
         self.agent.feed_llm_chunk(chunk)
     }
 
-    pub fn finish_llm(mut self, result: LlmResult) -> FinishLlmTransition {
-        let (events, actions) = self.agent.on_llm_done(result);
+    pub fn finish_llm(mut self, result: LlmResult, mut session_state: SessionState) -> FinishLlmTransition {
+        let (events, actions) = self.agent.on_llm_done(result, &mut session_state);
 
         // Abort / error path
         if self.agent.state().error_message.is_some() {
@@ -319,6 +321,7 @@ impl StreamingAgent {
                 events,
                 actions,
                 state: AbortedAgent { agent: self.agent },
+                session_state,
             });
         }
 
@@ -331,6 +334,7 @@ impl StreamingAgent {
                 events,
                 actions,
                 state: StreamingAgent { agent: self.agent },
+                session_state,
             });
         }
 
@@ -343,6 +347,7 @@ impl StreamingAgent {
                 events,
                 actions,
                 state: WaitingToolsAgent { agent: self.agent },
+                session_state,
             });
         }
 
@@ -355,6 +360,7 @@ impl StreamingAgent {
                 events,
                 actions,
                 state: FinishedAgent { agent: self.agent },
+                session_state,
             });
         }
 
@@ -363,15 +369,17 @@ impl StreamingAgent {
             events,
             actions,
             state: ReadyAgent { agent: self.agent },
+            session_state,
         })
     }
 
-    pub fn abort(mut self) -> Transition<AbortedAgent> {
+    pub fn abort(mut self, session_state: SessionState) -> Transition<AbortedAgent> {
         let events = self.agent.abort();
         Transition {
             events,
             actions: vec![],
             state: AbortedAgent { agent: self.agent },
+            session_state,
         }
     }
 
@@ -397,8 +405,9 @@ impl WaitingToolsAgent {
         mut self,
         id: ToolCallId,
         result: Result<ToolResult, ToolError>,
+        mut session_state: SessionState,
     ) -> ToolTransition {
-        let (events, actions) = self.agent.on_tool_done(id, result);
+        let (events, actions) = self.agent.on_tool_done(id, result, &mut session_state);
 
         if actions
             .iter()
@@ -408,6 +417,7 @@ impl WaitingToolsAgent {
                 events,
                 actions,
                 state: FinishedAgent { agent: self.agent },
+                session_state,
             });
         }
 
@@ -416,6 +426,7 @@ impl WaitingToolsAgent {
                 events,
                 actions,
                 state: ReadyAgent { agent: self.agent },
+                session_state,
             });
         }
 
@@ -423,6 +434,7 @@ impl WaitingToolsAgent {
             events,
             actions,
             state: WaitingToolsAgent { agent: self.agent },
+            session_state,
         })
     }
 
@@ -434,8 +446,8 @@ impl WaitingToolsAgent {
         self.agent.on_tool_started(id)
     }
 
-    pub fn cancel_tool(mut self, id: ToolCallId, reason: CancelReason) -> ToolTransition {
-        let (events, actions) = self.agent.on_tool_cancelled(id, reason);
+    pub fn cancel_tool(mut self, id: ToolCallId, reason: CancelReason, mut session_state: SessionState) -> ToolTransition {
+        let (events, actions) = self.agent.on_tool_cancelled(id, reason, &mut session_state);
 
         if actions
             .iter()
@@ -445,6 +457,7 @@ impl WaitingToolsAgent {
                 events,
                 actions,
                 state: FinishedAgent { agent: self.agent },
+                session_state,
             });
         }
 
@@ -453,6 +466,7 @@ impl WaitingToolsAgent {
                 events,
                 actions,
                 state: ReadyAgent { agent: self.agent },
+                session_state,
             });
         }
 
@@ -460,6 +474,7 @@ impl WaitingToolsAgent {
             events,
             actions,
             state: WaitingToolsAgent { agent: self.agent },
+            session_state,
         })
     }
 
@@ -471,12 +486,13 @@ impl WaitingToolsAgent {
         UserInputDuringTools::QueuedFollowUp(vec![])
     }
 
-    pub fn abort(mut self) -> Transition<AbortedAgent> {
+    pub fn abort(mut self, session_state: SessionState) -> Transition<AbortedAgent> {
         let events = self.agent.abort();
         Transition {
             events,
             actions: vec![],
             state: AbortedAgent { agent: self.agent },
+            session_state,
         }
     }
 
@@ -498,29 +514,32 @@ impl ReadyAgent {
         self.agent
     }
 
-    pub fn continue_turn(mut self) -> Transition<StreamingAgent> {
-        let (events, actions) = self.agent.continue_turn();
+    pub fn continue_turn(mut self, mut session_state: SessionState) -> Transition<StreamingAgent> {
+        let (events, actions) = self.agent.continue_turn(&mut session_state);
         Transition {
             events,
             actions,
             state: StreamingAgent { agent: self.agent },
+            session_state,
         }
     }
 
-    pub fn wait_for_input(self) -> Transition<IdleAgent> {
+    pub fn wait_for_input(self, session_state: SessionState) -> Transition<IdleAgent> {
         Transition {
             events: vec![],
             actions: vec![],
             state: IdleAgent { agent: self.agent },
+            session_state,
         }
     }
 
-    pub fn abort(mut self) -> Transition<AbortedAgent> {
+    pub fn abort(mut self, session_state: SessionState) -> Transition<AbortedAgent> {
         let events = self.agent.abort();
         Transition {
             events,
             actions: vec![],
             state: AbortedAgent { agent: self.agent },
+            session_state,
         }
     }
 
@@ -556,15 +575,16 @@ impl FinishedAgent {
             events: vec![],
             actions: vec![],
             state: IdleAgent { agent: self.agent },
+            session_state: SessionState::default(),
         }
     }
 
     /// Transition back to Idle without clearing conversation history.
     /// Used when the host wants to start a new turn after the previous one finished.
-    pub fn into_idle(self) -> IdleAgent {
+    pub fn into_idle(self, session_state: SessionState) -> (IdleAgent, SessionState) {
         let mut agent = self.agent;
         agent.turn_tools.clear();
-        IdleAgent { agent }
+        (IdleAgent { agent }, session_state)
     }
 
     pub fn into_runtime(self) -> AgentRuntime {
@@ -591,15 +611,16 @@ impl AbortedAgent {
             events: vec![],
             actions: vec![],
             state: IdleAgent { agent: self.agent },
+            session_state: SessionState::default(),
         }
     }
 
     /// Transition back to Idle without clearing conversation history.
     /// Used when the host wants to start a new turn after an abort/error.
-    pub fn into_idle(self) -> IdleAgent {
+    pub fn into_idle(self, session_state: SessionState) -> (IdleAgent, SessionState) {
         let mut agent = self.agent;
         agent.turn_tools.clear();
-        IdleAgent { agent }
+        (IdleAgent { agent }, session_state)
     }
 
     pub fn into_runtime(self) -> AgentRuntime {

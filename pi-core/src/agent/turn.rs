@@ -1,6 +1,7 @@
 use super::{Agent, Phase};
 use crate::events::{AgentAction, AgentEvent, WaitMode};
 use crate::message::AgentMessage;
+use crate::session::SessionState;
 use crate::tool::ToolDefinition;
 use tracing::{debug, warn};
 
@@ -10,6 +11,7 @@ impl Agent {
         &mut self,
         prompt: AgentMessage,
         tools: Vec<ToolDefinition>,
+        session_state: &mut SessionState,
     ) -> (Vec<AgentEvent>, Vec<AgentAction>) {
         if self.phase == Phase::Streaming {
             warn!(phase = ?self.phase, "start_turn requested while LLM is streaming");
@@ -21,8 +23,9 @@ impl Agent {
             );
         }
 
+        self.rebuild_messages(session_state);
         self.state.messages.push(prompt.clone());
-        self.append_session_message(&prompt);
+        self.append_session_message(session_state, &prompt);
         self.turn_tools = tools;
         debug!(
             message_count = self.state.messages.len(),
@@ -49,7 +52,10 @@ impl Agent {
     }
 
     /// Continue from the current transcript without adding a new message.
-    pub(crate) fn continue_turn(&mut self) -> (Vec<AgentEvent>, Vec<AgentAction>) {
+    pub(crate) fn continue_turn(
+        &mut self,
+        session_state: &mut SessionState,
+    ) -> (Vec<AgentEvent>, Vec<AgentAction>) {
         if self.phase == Phase::Streaming {
             warn!(phase = ?self.phase, "continue_turn requested while LLM is streaming");
             return (vec![], vec![]);
@@ -60,12 +66,12 @@ impl Agent {
             // Check steering queue first
             let drained = self.drain_steering();
             if !drained.is_empty() {
-                return self.inject_messages_and_stream(drained);
+                return self.inject_messages_and_stream(drained, session_state);
             }
 
             let follow = self.drain_follow_up();
             if !follow.is_empty() {
-                return self.inject_messages_and_stream(follow);
+                return self.inject_messages_and_stream(follow, session_state);
             }
 
             return (
@@ -76,6 +82,7 @@ impl Agent {
             );
         }
 
+        self.rebuild_messages(session_state);
         self.phase = Phase::Streaming;
         self.state.is_streaming = true;
 

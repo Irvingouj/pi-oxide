@@ -10,7 +10,7 @@ use ratatui::Frame;
 use pi_core::{
     AgentAction, AgentMessage, AgentOptions, AgentRuntime, ApiName, ContextProjectionBudget,
     ExecutionMode, Model, ModelId, ModelName, ProviderName, QueueMode,
-    SessionId, ThinkingLevel, ToolCallId, ToolDefinition, WaitMode,
+    SessionId, SessionState, ThinkingLevel, ToolCallId, ToolDefinition, WaitMode,
 };
 
 use crate::extension::{BashExtension, BuiltinExtension, Extension};
@@ -78,6 +78,7 @@ pub struct App {
     pub(crate) session_id: Option<String>,
     pub(crate) session_backend: FileSystemSessionBackend,
     pub(crate) cwd: std::path::PathBuf,
+    pub(crate) session_state: SessionState,
 
     // New: cancellation
     pub(crate) cancelled: bool,
@@ -141,7 +142,7 @@ impl App {
         for ext in &extensions {
             tool_defs.extend(ext.tools());
         }
-        let session_state = host_state.as_ref().map(|h| h.to_session_state());
+        let session_state = host_state.as_ref().map(|h| h.to_session_state()).unwrap_or_default();
         let agent = AgentRuntime::new(AgentOptions {
             system_prompt: system_prompt.to_string(),
             model,
@@ -151,7 +152,7 @@ impl App {
             tool_execution_mode: ExecutionMode::Parallel,
             session_id: session_id.as_ref().map(SessionId::new),
             messages: Vec::new(),
-            session_state,
+            session_state: None,
         });
 
         let llm_client = LlmClient::new(api_key, base_url, model_id);
@@ -188,6 +189,7 @@ impl App {
             session_id,
             session_backend: FileSystemSessionBackend::new(),
             cwd: cwd.to_path_buf(),
+            session_state,
             cancelled: false,
             history: Vec::new(),
             history_index: None,
@@ -424,22 +426,29 @@ impl App {
         let tool_defs = self.tool_definitions.clone();
         let (_events, actions, new_runtime) = match runtime {
             AgentRuntime::Idle(idle) => {
-                let t = idle.start_turn(AgentMessage::user(text), tool_defs);
+                let t = idle.start_turn(AgentMessage::user(text), tool_defs, std::mem::take(&mut self.session_state));
+                self.session_state = t.session_state;
                 (t.events, t.actions, t.state.into_runtime())
             }
             AgentRuntime::ReadyToContinue(ready) => {
-                let t1 = ready.wait_for_input();
-                let t2 = t1.state.start_turn(AgentMessage::user(text), tool_defs);
+                let t1 = ready.wait_for_input(std::mem::take(&mut self.session_state));
+                self.session_state = t1.session_state;
+                let t2 = t1.state.start_turn(AgentMessage::user(text), tool_defs, std::mem::take(&mut self.session_state));
+                self.session_state = t2.session_state;
                 (t2.events, t2.actions, t2.state.into_runtime())
             }
             AgentRuntime::Finished(finished) => {
-                let t1 = finished.restart();
-                let t2 = t1.state.start_turn(AgentMessage::user(text), tool_defs);
+                let (idle, session_state) = finished.into_idle(std::mem::take(&mut self.session_state));
+                self.session_state = session_state;
+                let t2 = idle.start_turn(AgentMessage::user(text), tool_defs, std::mem::take(&mut self.session_state));
+                self.session_state = t2.session_state;
                 (t2.events, t2.actions, t2.state.into_runtime())
             }
             AgentRuntime::Aborted(aborted) => {
-                let t1 = aborted.restart();
-                let t2 = t1.state.start_turn(AgentMessage::user(text), tool_defs);
+                let (idle, session_state) = aborted.into_idle(std::mem::take(&mut self.session_state));
+                self.session_state = session_state;
+                let t2 = idle.start_turn(AgentMessage::user(text), tool_defs, std::mem::take(&mut self.session_state));
+                self.session_state = t2.session_state;
                 (t2.events, t2.actions, t2.state.into_runtime())
             }
             AgentRuntime::WaitingTools(mut waiting) => {
@@ -511,9 +520,9 @@ impl App {
                                 let session_state = host_state.to_session_state();
                                 let agent = self.agent.take().unwrap().reset();
                                 self.agent = Some(agent);
-                                self.agent_mut().set_session_state(session_state);
+                                self.session_state = session_state;
                                 // Rebuild messages from the loaded session tree so the LLM sees the full transcript
-                                let messages = self.agent().session_state().build_context();
+                                let messages = self.session_state.build_context();
                                 self.agent_mut().state_mut().messages = messages;
                                 self.host_state = Some(host_state);
                                 self.session_id = Some(id.to_string());
@@ -571,7 +580,7 @@ impl App {
                     // Rebuild session tree from truncated messages so it stays in sync
                     let truncated = self.agent().state().messages.clone();
                     let new_session_state = pi_core::SessionState::from_messages(&truncated);
-                    self.agent_mut().set_session_state(new_session_state.clone());
+                    self.session_state = new_session_state.clone();
                     // Sync host_state entries/leaf with the truncated session state
                     if let Some(ref mut hs) = self.host_state {
                         hs.entries = new_session_state.entries;
@@ -662,7 +671,8 @@ impl App {
                 let runtime = self.agent.take().unwrap();
                 let (_events, new_runtime) = match runtime {
                     AgentRuntime::Streaming(streaming) => {
-                        let t = streaming.abort();
+                        let t = streaming.abort(std::mem::take(&mut self.session_state));
+                        self.session_state = t.session_state;
                         (t.events, t.state.into_runtime())
                     }
                     other => (vec![], other),
@@ -703,7 +713,7 @@ impl App {
                             "Context compacted by host.".to_string(),
                         );
                         let session_state = self.host_state.as_ref().unwrap().to_session_state();
-                        self.agent_mut().set_session_state(session_state);
+                        self.session_state = session_state;
                     }
                 }
                 _ => {}

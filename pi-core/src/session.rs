@@ -497,15 +497,15 @@ mod tests {
     #[test]
     fn agent_new_without_projection_state() {
         let agent = Agent::new(dummy_options());
-        assert!(agent.session_state().entries.is_empty());
-        assert_eq!(agent.session_state().leaf_id, "");
+        assert!(agent.state().messages.is_empty());
     }
 
     #[test]
     fn agent_full_turn_without_projection() {
         let mut agent = Agent::new(dummy_options());
+        let mut session_state = SessionState::default();
         let prompt = AgentMessage::user("hello");
-        let (events, actions) = agent.start_turn(prompt, vec![]);
+        let (events, actions) = agent.start_turn(prompt, vec![], &mut session_state);
         assert!(!events.is_empty());
         assert!(actions.iter().any(|a| matches!(a, crate::events::AgentAction::StreamLlm { .. })));
 
@@ -521,10 +521,10 @@ mod tests {
             timestamp: 1,
             usage: TokenUsage::default(),
         };
-        let (events, actions) = agent.on_llm_done(LlmResult::Ok(assistant));
+        let (events, actions) = agent.on_llm_done(LlmResult::Ok(assistant), &mut session_state);
         assert!(!events.is_empty());
         assert!(actions.iter().any(|a| matches!(a, crate::events::AgentAction::Finished { .. })));
-        assert!(!agent.session_state().entries.is_empty());
+        assert!(!session_state.entries.is_empty());
     }
 
     #[test]

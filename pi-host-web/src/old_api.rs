@@ -1,5 +1,5 @@
-use wasm_bindgen::prelude::*;
 use super::*;
+use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = "createAgent")]
 pub fn create_agent(options: AgentOptions) -> CreateAgentResult {
@@ -8,7 +8,7 @@ pub fn create_agent(options: AgentOptions) -> CreateAgentResult {
     info!("createAgent called");
     let core_options: pi_core::AgentOptions = try_conv!(options.try_into());
     let runtime = AgentRuntime::new(core_options);
-    let handle = put_runtime(runtime);
+    let handle = put_runtime(runtime, SessionState::default());
     info!(handle, "agent created");
     ok(CreateAgentOutput { handle })
 }
@@ -28,7 +28,7 @@ pub fn prompt(handle: u32, input: PromptInput) -> StepResult {
         .map(|t| t.try_into())
         .collect::<Result<Vec<_>, _>>());
 
-    let runtime = match take_runtime(handle) {
+    let (runtime, session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
@@ -39,40 +39,43 @@ pub fn prompt(handle: u32, input: PromptInput) -> StepResult {
                 events,
                 actions,
                 state,
-            } = idle.start_turn(core_prompt, core_tools);
-            put_runtime(state.into_runtime());
+                session_state,
+            } = idle.start_turn(core_prompt, core_tools, session_state);
+            put_runtime(state.into_runtime(), session_state);
             Ok((events, actions))
         }
         AgentRuntime::Finished(finished) => {
-            let idle = finished.into_idle();
+            let (idle, session_state) = finished.into_idle(session_state);
             let Transition {
                 events,
                 actions,
                 state,
-            } = idle.start_turn(core_prompt, core_tools);
-            put_runtime(state.into_runtime());
+                session_state,
+            } = idle.start_turn(core_prompt, core_tools, session_state);
+            put_runtime(state.into_runtime(), session_state);
             Ok((events, actions))
         }
         AgentRuntime::Aborted(aborted) => {
-            let idle = aborted.into_idle();
+            let (idle, session_state) = aborted.into_idle(session_state);
             let Transition {
                 events,
                 actions,
                 state,
-            } = idle.start_turn(core_prompt, core_tools);
-            put_runtime(state.into_runtime());
+                session_state,
+            } = idle.start_turn(core_prompt, core_tools, session_state);
+            put_runtime(state.into_runtime(), session_state);
             Ok((events, actions))
         }
         AgentRuntime::WaitingTools(mut waiting) => {
             let (events, actions) = waiting
                 .submit_user_message(core_prompt)
                 .into_events_actions();
-            put_runtime(waiting.into_runtime());
+            put_runtime(waiting.into_runtime(), session_state);
             Ok((events, actions))
         }
         other => {
             let actual = runtime_phase_name(&other);
-            put_runtime(other);
+            put_runtime(other, session_state);
             Err(HostError::WrongPhase {
                 expected: "Idle, Finished, Aborted, or WaitingTools",
                 actual,
@@ -101,7 +104,7 @@ pub fn feed_llm_chunk(handle: u32, chunk: LlmChunk) -> EventsResult {
     info!(handle, "feedLlmChunk called");
 
     let core_chunk: pi_core::LlmChunk = try_conv!(chunk.try_into());
-    let runtime = match take_runtime(handle) {
+    let (runtime, session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
@@ -109,12 +112,12 @@ pub fn feed_llm_chunk(handle: u32, chunk: LlmChunk) -> EventsResult {
     let result = match runtime {
         AgentRuntime::Streaming(mut streaming) => {
             let events = streaming.feed_llm_chunk(core_chunk);
-            put_runtime(streaming.into_runtime());
+            put_runtime(streaming.into_runtime(), session_state);
             Ok(events)
         }
         other => {
             let actual = runtime_phase_name(&other);
-            put_runtime(other);
+            put_runtime(other, session_state);
             Err(HostError::WrongPhase {
                 expected: "Streaming",
                 actual,
@@ -139,20 +142,22 @@ pub fn on_llm_done(handle: u32, result: LlmResult) -> StepResult {
     info!(handle, "onLlmDone called");
 
     let core_result: pi_core::LlmResult = try_conv!(result.try_into());
-    let runtime = match take_runtime(handle) {
+    let (runtime, session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
 
     let result = match runtime {
         AgentRuntime::Streaming(streaming) => {
-            let (events, actions, new_runtime) = streaming.finish_llm(core_result).into_parts();
-            put_runtime(new_runtime);
+            let (events, actions, new_runtime, session_state) = streaming
+                .finish_llm(core_result, session_state)
+                .into_parts();
+            put_runtime(new_runtime, session_state);
             Ok((events, actions))
         }
         other => {
             let actual = runtime_phase_name(&other);
-            put_runtime(other);
+            put_runtime(other, session_state);
             Err(HostError::WrongPhase {
                 expected: "Streaming",
                 actual,
@@ -190,20 +195,22 @@ pub fn on_tool_done(handle: u32, tool_call_id: String, payload: ToolDonePayload)
         ToolDonePayload::Success { result } => Ok(try_conv!(result.try_into())),
     };
 
-    let runtime = match take_runtime(handle) {
+    let (runtime, session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
 
     let result = match runtime {
         AgentRuntime::WaitingTools(waiting) => {
-            let (events, actions, new_runtime) = waiting.on_tool_done(id, core_result).into_parts();
-            put_runtime(new_runtime);
+            let (events, actions, new_runtime, session_state) = waiting
+                .on_tool_done(id, core_result, session_state)
+                .into_parts();
+            put_runtime(new_runtime, session_state);
             Ok((events, actions))
         }
         other => {
             let actual = runtime_phase_name(&other);
-            put_runtime(other);
+            put_runtime(other, session_state);
             Err(HostError::WrongPhase {
                 expected: "WaitingTools",
                 actual,
@@ -236,7 +243,7 @@ pub fn on_tool_started(handle: u32, tool_call_id: String) -> EventsResult {
     );
 
     let id = pi_core::ToolCallId::new(&tool_call_id);
-    let runtime = match take_runtime(handle) {
+    let (runtime, session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
@@ -244,12 +251,12 @@ pub fn on_tool_started(handle: u32, tool_call_id: String) -> EventsResult {
     let result = match runtime {
         AgentRuntime::WaitingTools(mut waiting) => {
             let events = waiting.on_tool_started(id);
-            put_runtime(waiting.into_runtime());
+            put_runtime(waiting.into_runtime(), session_state);
             Ok(events)
         }
         other => {
             let actual = runtime_phase_name(&other);
-            put_runtime(other);
+            put_runtime(other, session_state);
             Err(HostError::WrongPhase {
                 expected: "WaitingTools",
                 actual,
@@ -273,7 +280,7 @@ pub fn on_tool_update(handle: u32, update: ToolExecutionUpdate) -> EventsResult 
     console_error_panic_hook::set_once();
 
     let core_update: pi_core::ToolExecutionUpdate = try_conv!(update.try_into());
-    let runtime = match take_runtime(handle) {
+    let (runtime, session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
@@ -281,12 +288,12 @@ pub fn on_tool_update(handle: u32, update: ToolExecutionUpdate) -> EventsResult 
     let result = match runtime {
         AgentRuntime::WaitingTools(mut waiting) => {
             let events = waiting.on_tool_update(core_update);
-            put_runtime(waiting.into_runtime());
+            put_runtime(waiting.into_runtime(), session_state);
             Ok(events)
         }
         other => {
             let actual = runtime_phase_name(&other);
-            put_runtime(other);
+            put_runtime(other, session_state);
             Err(HostError::WrongPhase {
                 expected: "WaitingTools",
                 actual,
@@ -311,20 +318,22 @@ pub fn on_tool_cancelled(handle: u32, tool_call_id: String, reason: CancelReason
 
     let id = pi_core::ToolCallId::new(&tool_call_id);
     let core_reason: pi_core::CancelReason = try_conv!(reason.try_into());
-    let runtime = match take_runtime(handle) {
+    let (runtime, session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
 
     let result = match runtime {
         AgentRuntime::WaitingTools(waiting) => {
-            let (events, actions, new_runtime) = waiting.cancel_tool(id, core_reason).into_parts();
-            put_runtime(new_runtime);
+            let (events, actions, new_runtime, session_state) = waiting
+                .cancel_tool(id, core_reason, session_state)
+                .into_parts();
+            put_runtime(new_runtime, session_state);
             Ok((events, actions))
         }
         other => {
             let actual = runtime_phase_name(&other);
-            put_runtime(other);
+            put_runtime(other, session_state);
             Err(HostError::WrongPhase {
                 expected: "WaitingTools",
                 actual,
@@ -352,7 +361,7 @@ pub fn abort(handle: u32) -> StepResult {
     console_error_panic_hook::set_once();
     info!(handle, "abort called");
 
-    let runtime = match take_runtime(handle) {
+    let (runtime, session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
@@ -363,8 +372,9 @@ pub fn abort(handle: u32) -> StepResult {
                 events,
                 actions,
                 state,
-            } = streaming.abort();
-            put_runtime(state.into_runtime());
+                session_state,
+            } = streaming.abort(session_state);
+            put_runtime(state.into_runtime(), session_state);
             Ok((events, actions))
         }
         AgentRuntime::WaitingTools(waiting) => {
@@ -372,8 +382,9 @@ pub fn abort(handle: u32) -> StepResult {
                 events,
                 actions,
                 state,
-            } = waiting.abort();
-            put_runtime(state.into_runtime());
+                session_state,
+            } = waiting.abort(session_state);
+            put_runtime(state.into_runtime(), session_state);
             Ok((events, actions))
         }
         AgentRuntime::ReadyToContinue(ready) => {
@@ -381,13 +392,14 @@ pub fn abort(handle: u32) -> StepResult {
                 events,
                 actions,
                 state,
-            } = ready.abort();
-            put_runtime(state.into_runtime());
+                session_state,
+            } = ready.abort(session_state);
+            put_runtime(state.into_runtime(), session_state);
             Ok((events, actions))
         }
         other => {
             let actual = runtime_phase_name(&other);
-            put_runtime(other);
+            put_runtime(other, session_state);
             Err(HostError::WrongPhase {
                 expected: "Streaming, WaitingTools, or ReadyToContinue",
                 actual,
@@ -415,7 +427,7 @@ pub fn continue_turn(handle: u32) -> StepResult {
     console_error_panic_hook::set_once();
     info!(handle, "continueTurn called");
 
-    let runtime = match take_runtime(handle) {
+    let (runtime, session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
@@ -426,13 +438,14 @@ pub fn continue_turn(handle: u32) -> StepResult {
                 events,
                 actions,
                 state,
-            } = ready.continue_turn();
-            put_runtime(state.into_runtime());
+                session_state,
+            } = ready.continue_turn(session_state);
+            put_runtime(state.into_runtime(), session_state);
             Ok((events, actions))
         }
         other => {
             let actual = runtime_phase_name(&other);
-            put_runtime(other);
+            put_runtime(other, session_state);
             Err(HostError::WrongPhase {
                 expected: "ReadyToContinue",
                 actual,
@@ -460,7 +473,7 @@ pub fn steer(handle: u32, message: AgentMessage) -> EventsResult {
     console_error_panic_hook::set_once();
 
     let core_message: pi_core::AgentMessage = try_conv!(message.try_into());
-    let runtime = match take_runtime(handle) {
+    let (runtime, session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
@@ -468,17 +481,17 @@ pub fn steer(handle: u32, message: AgentMessage) -> EventsResult {
     let result = match runtime {
         AgentRuntime::Idle(mut idle) => {
             let events = idle.steer(core_message);
-            put_runtime(idle.into_runtime());
+            put_runtime(idle.into_runtime(), session_state);
             Ok(events)
         }
         AgentRuntime::ReadyToContinue(mut ready) => {
             let events = ready.steer(core_message);
-            put_runtime(ready.into_runtime());
+            put_runtime(ready.into_runtime(), session_state);
             Ok(events)
         }
         other => {
             let actual = runtime_phase_name(&other);
-            put_runtime(other);
+            put_runtime(other, session_state);
             Err(HostError::WrongPhase {
                 expected: "Idle or ReadyToContinue",
                 actual,
@@ -502,7 +515,7 @@ pub fn follow_up(handle: u32, message: AgentMessage) -> EmptyResult {
     console_error_panic_hook::set_once();
 
     let core_message: pi_core::AgentMessage = try_conv!(message.try_into());
-    let runtime = match take_runtime(handle) {
+    let (runtime, session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
@@ -510,22 +523,22 @@ pub fn follow_up(handle: u32, message: AgentMessage) -> EmptyResult {
     let result = match runtime {
         AgentRuntime::Idle(mut idle) => {
             idle.follow_up(core_message);
-            put_runtime(idle.into_runtime());
+            put_runtime(idle.into_runtime(), session_state);
             Ok(())
         }
         AgentRuntime::ReadyToContinue(mut ready) => {
             ready.follow_up(core_message);
-            put_runtime(ready.into_runtime());
+            put_runtime(ready.into_runtime(), session_state);
             Ok(())
         }
         AgentRuntime::WaitingTools(mut waiting) => {
             waiting.submit_user_message(core_message);
-            put_runtime(waiting.into_runtime());
+            put_runtime(waiting.into_runtime(), session_state);
             Ok(())
         }
         other => {
             let actual = runtime_phase_name(&other);
-            put_runtime(other);
+            put_runtime(other, session_state);
             Err(HostError::WrongPhase {
                 expected: "Idle, ReadyToContinue, or WaitingTools",
                 actual,
@@ -543,7 +556,7 @@ pub fn follow_up(handle: u32, message: AgentMessage) -> EmptyResult {
 pub fn state(handle: u32) -> StateResult {
     console_error_panic_hook::set_once();
 
-    let result = with_runtime(handle, |runtime| runtime.state().clone());
+    let result = with_runtime(handle, |runtime, _session_state| runtime.state().clone());
     match result {
         Ok(core_state) => ok(StateOutput {
             state: try_conv!(core_state.try_into()),
@@ -556,12 +569,12 @@ pub fn state(handle: u32) -> StateResult {
 pub fn reset(handle: u32) -> EmptyResult {
     console_error_panic_hook::set_once();
 
-    let runtime = match take_runtime(handle) {
+    let (runtime, _session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
     let runtime = runtime.reset();
-    put_runtime(runtime);
+    put_runtime(runtime, SessionState::default());
     ok(())
 }
 
@@ -590,29 +603,27 @@ pub fn project_context_export(input: ProjectionInput) -> ProjectionResult {
 pub fn get_session_state(handle: u32) -> SessionStateResult {
     console_error_panic_hook::set_once();
 
-    let runtime = match take_runtime(handle) {
+    let (runtime, session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
-    let core_state = runtime.session_state().clone();
-    put_runtime(runtime);
+    let core_state = session_state.clone();
+    put_runtime(runtime, session_state);
     ok(SessionStateOutput {
         state: try_conv!(core_state.try_into()),
     })
 }
 
 #[wasm_bindgen(js_name = "setSessionState")]
-pub fn set_session_state(handle: u32, state: SessionState) -> EmptyResult {
+pub fn set_session_state(handle: u32, state: crate::dto::SessionState) -> EmptyResult {
     console_error_panic_hook::set_once();
 
     let core_state: pi_core::SessionState = try_conv!(state.try_into());
-    let runtime = match take_runtime(handle) {
+    let (runtime, _session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
-    let mut runtime = runtime;
-    runtime.set_session_state(core_state);
-    put_runtime(runtime);
+    put_runtime(runtime, core_state);
     ok(())
 }
 
@@ -620,13 +631,13 @@ pub fn set_session_state(handle: u32, state: SessionState) -> EmptyResult {
 pub fn get_session_branch(handle: u32) -> SessionBranchResult {
     console_error_panic_hook::set_once();
 
-    let runtime = match take_runtime(handle) {
+    let (runtime, session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
     let agent = runtime.into_agent();
-    let entries = agent.session_branch();
-    put_runtime(AgentRuntime::from_agent(agent));
+    let entries = agent.session_branch(&session_state);
+    put_runtime(AgentRuntime::from_agent(agent), session_state);
     ok(SessionBranchOutput {
         entries: try_conv!(entries
             .into_iter()
@@ -640,13 +651,13 @@ pub fn move_to(handle: u32, target_id: String, summary: Option<BranchSummary>) -
     console_error_panic_hook::set_once();
 
     let core_summary: Option<pi_core::BranchSummary> = summary.map(|s| try_conv!(s.try_into()));
-    let runtime = match take_runtime(handle) {
+    let (runtime, mut session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
     let mut agent = runtime.into_agent();
-    let id = agent.move_to(&target_id, core_summary);
-    put_runtime(AgentRuntime::from_agent(agent));
+    let id = agent.move_to(&mut session_state, &target_id, core_summary);
+    put_runtime(AgentRuntime::from_agent(agent), session_state);
     ok(MoveToOutput {
         summary_entry_id: id,
     })
@@ -657,13 +668,13 @@ pub fn append_session_entry(handle: u32, entry: SessionEntry) -> EmptyResult {
     console_error_panic_hook::set_once();
 
     let core_entry: pi_core::SessionEntry = try_conv!(entry.try_into());
-    let runtime = match take_runtime(handle) {
+    let (runtime, mut session_state) = match take_runtime(handle) {
         Ok(r) => r,
         Err(e) => return err(&e),
     };
     let mut agent = runtime.into_agent();
-    agent.append_session_entry(core_entry);
-    put_runtime(AgentRuntime::from_agent(agent));
+    agent.append_session_entry(&mut session_state, core_entry);
+    put_runtime(AgentRuntime::from_agent(agent), session_state);
     ok(())
 }
 

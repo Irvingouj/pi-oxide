@@ -36,11 +36,12 @@ pub(crate) use host_agent_api::*;
 
 mod artifact_api;
 
-pub(crate) use pi_core::{AgentRuntime, Transition};
+pub(crate) use pi_core::{AgentRuntime, SessionState, Transition};
 pub(crate) use tracing::info;
 
 thread_local! {
-    pub(crate) static AGENT_SLOTS: RefCell<Vec<Option<AgentRuntime>>> = const { RefCell::new(Vec::new()) };
+    pub(crate) static AGENT_SLOTS: RefCell<Vec<Option<(AgentRuntime, SessionState)>>> = const { RefCell::new(Vec::new()) };
+    pub(crate) static SESSION_STATE_SLOTS: RefCell<Vec<Option<SessionState>>> = const { RefCell::new(Vec::new()) };
     pub(crate) static HOST_STATE_SLOTS: RefCell<Vec<Option<HostState>>> = const { RefCell::new(Vec::new()) };
     pub(crate) static HOST_AGENT_SLOTS: RefCell<Vec<Option<HostAgent>>> = const { RefCell::new(Vec::new()) };
     pub(crate) static TRACING_INIT: Cell<bool> = const { Cell::new(false) };

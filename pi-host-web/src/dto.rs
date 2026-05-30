@@ -392,7 +392,14 @@ pub enum HostDirective {
     ExecuteTools { calls: Vec<ToolCall> },
     CancelTools { tool_call_ids: Vec<ToolCallId>, reason: CancelReason },
     Persist,
-    Compact { compact_up_to: String, reason: CompactReason },
+    Compact {
+        compact_up_to: String,
+        first_kept_entry_id: String,
+        tokens_before: usize,
+        reason: CompactReason,
+        compacted_entry_ids: Vec<String>,
+        summary_context: LlmContext,
+    },
     Finished,
     WaitForInput { mode: WaitMode },
 }

@@ -1,6 +1,7 @@
 use super::Agent;
 use crate::events::{AgentAction, AgentEvent, CancelReason, ToolExecutionUpdate};
 use crate::message::{AgentMessage, Content, TextContent, ToolResultMessage};
+use crate::session::SessionState;
 use crate::tool::{ToolError, ToolResult};
 use crate::types::ToolCallId;
 use tracing::{debug, trace, warn};
@@ -14,6 +15,7 @@ impl Agent {
         tool_result: ToolResult,
         pre_events: Vec<AgentEvent>,
         terminate: Option<bool>,
+        session_state: &mut SessionState,
     ) -> (Vec<AgentEvent>, Vec<AgentAction>) {
         let mut events = pre_events;
 
@@ -30,7 +32,7 @@ impl Agent {
             self.completed_tool_results.push(msg.clone());
         }
         self.state.messages.push(agent_msg.clone());
-        self.append_session_message(&agent_msg);
+        self.append_session_message(session_state, &agent_msg);
         events.push(AgentEvent::MessageStart {
             message: agent_msg.clone(),
         });
@@ -87,6 +89,7 @@ impl Agent {
         &mut self,
         tool_call_id: ToolCallId,
         result: Result<ToolResult, ToolError>,
+        session_state: &mut SessionState,
     ) -> (Vec<AgentEvent>, Vec<AgentAction>) {
         let tool_call = match self.pending_tool_calls.remove(&tool_call_id) {
             Some(tc) => tc,
@@ -131,6 +134,7 @@ impl Agent {
             tool_result.clone(),
             vec![],
             tool_result.terminate,
+            session_state,
         )
     }
 
@@ -140,6 +144,7 @@ impl Agent {
         &mut self,
         tool_call_id: ToolCallId,
         reason: CancelReason,
+        session_state: &mut SessionState,
     ) -> (Vec<AgentEvent>, Vec<AgentAction>) {
         let tool_call = match self.pending_tool_calls.remove(&tool_call_id) {
             Some(tc) => tc,
@@ -190,7 +195,7 @@ impl Agent {
             terminate: None,
         };
 
-        self.resolve_tool_completion(result_msg, tool_result, pre_events, None)
+        self.resolve_tool_completion(result_msg, tool_result, pre_events, None, session_state)
     }
 
     /// Called by the host when a tool starts executing.

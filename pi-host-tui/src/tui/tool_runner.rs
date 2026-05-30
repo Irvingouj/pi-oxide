@@ -63,7 +63,8 @@ impl App {
             let runtime = self.agent.take().unwrap();
             let (_events, actions, new_runtime) = match runtime {
                 AgentRuntime::ReadyToContinue(ready) => {
-                    let t = ready.continue_turn();
+                    let t = ready.continue_turn(std::mem::take(&mut self.session_state));
+                    self.session_state = t.session_state;
                     (t.events, t.actions, t.state.into_runtime())
                 }
                 other => (vec![], vec![], other),
@@ -138,12 +139,14 @@ impl App {
         let _ = terminal.draw(|f| self.render(f));
 
         let runtime = self.agent.take().unwrap();
-        let (_events, actions, new_runtime) = match runtime {
+        let session_state = std::mem::take(&mut self.session_state);
+        let (_events, actions, new_runtime, session_state) = match runtime {
             AgentRuntime::WaitingTools(waiting) => {
-                waiting.on_tool_done(tool_call_id, result).into_parts()
+                waiting.on_tool_done(tool_call_id, result, session_state).into_parts()
             }
-            other => (vec![], vec![], other),
+            other => (vec![], vec![], other, session_state),
         };
+        self.session_state = session_state;
         self.agent = Some(new_runtime);
         self.handle_actions(terminal, actions);
     }
@@ -175,6 +178,7 @@ impl App {
         // Apply UI updates and typestate transitions atomically per completed task
         let mut runtime = self.agent.take().unwrap();
         let mut all_actions = Vec::new();
+        let mut session_state = std::mem::take(&mut self.session_state);
         for (tool_call_id, result) in just_completed {
             self.store_artifact_from_tool_result(&tool_call_id, &result);
 
@@ -200,18 +204,20 @@ impl App {
             });
             let _ = terminal.draw(|f| self.render(f));
 
-            let (events, actions, new_runtime) = match runtime {
+            let (events, actions, new_runtime, new_session_state) = match runtime {
                 AgentRuntime::WaitingTools(waiting) => {
-                    waiting.on_tool_done(tool_call_id, result).into_parts()
+                    waiting.on_tool_done(tool_call_id, result, session_state).into_parts()
                 }
-                other => (vec![], vec![], other),
+                other => (vec![], vec![], other, session_state),
             };
             runtime = new_runtime;
+            session_state = new_session_state;
             all_actions.extend(actions);
             // Discard core events in async path (TUI reconstructs its own transcript)
             let _ = events;
         }
 
+        self.session_state = session_state;
         self.agent = Some(runtime);
         self.handle_actions(terminal, all_actions);
     }

@@ -6,7 +6,7 @@ mod tests {
 
     use pi_core::{
         AgentMessage, AgentOptions, AgentRuntime, Model, ModelCapabilities, ModelCost, ModelId,
-        ModelName, ProviderName, ToolDefinition,
+        ModelName, ProviderName, SessionState, ToolDefinition,
     };
 
     use crate::extension::{BashExtension, BuiltinExtension, Extension, ExtensionContext};
@@ -66,6 +66,7 @@ mod tests {
         let tools = build_tools();
 
         let mut runtime = AgentRuntime::new(options);
+        let mut session_state = SessionState::default();
 
         // Start turn
         let AgentRuntime::Idle(idle) = runtime else {
@@ -74,9 +75,11 @@ mod tests {
         let t = idle.start_turn(
             AgentMessage::user("run 'sleep 1 && echo hello from bash'"),
             tools,
+            session_state,
         );
         println!("start_turn events: {:?}", t.events);
         println!("start_turn actions: {:?}", t.actions);
+        session_state = t.session_state;
         runtime = t.state.into_runtime();
 
         // Expect StreamLlm
@@ -142,13 +145,14 @@ mod tests {
             usage: pi_core::message::TokenUsage::default(),
         };
 
-        let (events, actions, new_runtime) = match runtime {
+        let (events, actions, new_runtime, new_session_state) = match runtime {
             AgentRuntime::Streaming(streaming) => streaming
-                .finish_llm(pi_core::LlmResult::Ok(assistant_msg))
+                .finish_llm(pi_core::LlmResult::Ok(assistant_msg), session_state)
                 .into_parts(),
             _ => panic!("expected Streaming, got non-Streaming AgentRuntime"),
         };
         runtime = new_runtime;
+        session_state = new_session_state;
         println!("finish_llm events: {:?}", events);
         println!("finish_llm actions: {:?}", actions);
 
@@ -176,15 +180,18 @@ mod tests {
                                 runtime = match runtime {
                                     AgentRuntime::WaitingTools(waiting) => {
                                         let transition =
-                                            waiting.on_tool_done(call.id.clone(), result);
+                                            waiting.on_tool_done(call.id.clone(), result, session_state);
                                         match transition {
                                             pi_core::ToolTransition::Ready(t) => {
+                                                session_state = t.session_state;
                                                 t.state.into_runtime()
                                             }
                                             pi_core::ToolTransition::Finished(t) => {
+                                                session_state = t.session_state;
                                                 t.state.into_runtime()
                                             }
                                             pi_core::ToolTransition::WaitingTools(t) => {
+                                                session_state = t.session_state;
                                                 t.state.into_runtime()
                                             }
                                         }
@@ -221,13 +228,18 @@ mod tests {
                             println!("Tool done: {} {:?}", name, result);
                             runtime = match runtime {
                                 AgentRuntime::WaitingTools(waiting) => {
-                                    let transition = waiting.on_tool_done(id.clone(), result);
+                                    let transition = waiting.on_tool_done(id.clone(), result, session_state);
                                     match transition {
                                         pi_core::ToolTransition::WaitingTools(t) => {
+                                            session_state = t.session_state;
                                             t.state.into_runtime()
                                         }
-                                        pi_core::ToolTransition::Ready(t) => t.state.into_runtime(),
+                                        pi_core::ToolTransition::Ready(t) => {
+                                            session_state = t.session_state;
+                                            t.state.into_runtime()
+                                        }
                                         pi_core::ToolTransition::Finished(t) => {
+                                            session_state = t.session_state;
                                             t.state.into_runtime()
                                         }
                                     }
@@ -253,9 +265,10 @@ mod tests {
         // Auto-continue
         let actions = match runtime {
             AgentRuntime::ReadyToContinue(ready) => {
-                let transition = ready.continue_turn();
+                let transition = ready.continue_turn(session_state);
                 println!("continue_turn events: {:?}", transition.events);
                 println!("continue_turn actions: {:?}", transition.actions);
+                session_state = transition.session_state;
                 runtime = transition.state.into_runtime();
                 transition.actions
             }
@@ -284,5 +297,9 @@ mod tests {
             }
             println!("Second stream done. stop_reason={:?}", stream.stop_reason());
         }
+
+        // Suppress unused warnings at end of test
+        let _ = runtime;
+        let _ = session_state;
     }
 }

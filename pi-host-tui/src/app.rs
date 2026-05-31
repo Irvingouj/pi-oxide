@@ -16,6 +16,7 @@ use pi_core::{
 use crate::extension::{BashExtension, BuiltinExtension, Extension};
 use crate::host_state::{HostDirective, HostState};
 use crate::llm::LlmClient;
+#[allow(unused_imports)]
 use crate::llm::LlmProvider;
 use crate::session::FileSystemSessionBackend;
 

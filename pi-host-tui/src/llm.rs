@@ -455,12 +455,14 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 /// Post-iteration accessors shared by live, recording, and replay streams.
+#[allow(dead_code)]
 pub trait LlmStreamState {
     fn usage(&self) -> Option<(u32, u32, u32)>;
     fn stop_reason(&self) -> Option<&str>;
     fn tool_calls(&self) -> Vec<CollectedToolCall>;
 }
 
+#[allow(dead_code)]
 impl LlmStreamState for LlmStream {
     fn usage(&self) -> Option<(u32, u32, u32)> {
         LlmStream::usage(self)
@@ -474,6 +476,7 @@ impl LlmStreamState for LlmStream {
 }
 
 /// The interface the TUI uses to talk to an LLM provider.
+#[allow(dead_code)]
 pub trait LlmProvider: Sized {
     type Stream: Iterator<Item = pi_core::LlmChunk> + LlmStreamState;
 
@@ -488,6 +491,7 @@ pub trait LlmProvider: Sized {
     fn set_model(&mut self, model: &str);
 }
 
+#[allow(dead_code)]
 impl LlmProvider for LlmClient {
     type Stream = LlmStream;
 

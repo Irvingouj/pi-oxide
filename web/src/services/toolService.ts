@@ -125,7 +125,11 @@ export function createArtifactToolRegistry(getHandle: () => number): ToolMap {
 				};
 			}
 			const result = hostSearchArtifacts(getHandle(), pattern);
-			const capped: Array<{ id: string; snippet: string; match_count: number }> = result.results.slice(0, MAX_SEARCH_RESULTS);
+			const capped: Array<{
+				id: string;
+				snippet: string;
+				match_count: number;
+			}> = result.results.slice(0, MAX_SEARCH_RESULTS);
 			const text = JSON.stringify(
 				capped.map((m) => ({
 					id: m.id,

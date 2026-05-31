@@ -30,6 +30,7 @@ import {
 	destroyHostAgent,
 	createHostAgent,
 	restoreHostAgent,
+	ensureInit,
 } from "@pi-oxide/pi-host-web";
 
 const SYSTEM_PROMPT =
@@ -146,7 +147,11 @@ class HostError extends Error {
 	}
 }
 
-function unwrap<T>(result: { ok: boolean; data?: T; error?: { code: string; message: string } }): T {
+function unwrap<T>(result: {
+	ok: boolean;
+	data?: T;
+	error?: { code: string; message: string };
+}): T {
 	if (!result.ok) {
 		throw new HostError(result.error!.code, result.error!.message);
 	}
@@ -192,7 +197,9 @@ export class HostAgent {
 	}
 
 	getPersistData(): PersistData {
-		const result = unwrap<{ state: PersistData }>(getHostAgentPersistData(this.handle));
+		const result = unwrap<{ state: PersistData }>(
+			getHostAgentPersistData(this.handle),
+		);
 		return result.state;
 	}
 
@@ -205,6 +212,7 @@ export async function createHostAgentInstance(
 	sessionId: string,
 	persistData?: PersistData,
 ): Promise<HostAgent> {
+	await ensureInit();
 	const options = {
 		system_prompt: SYSTEM_PROMPT,
 		model: DEFAULT_MODEL,
@@ -217,7 +225,9 @@ export async function createHostAgentInstance(
 		compaction_threshold: 0.75,
 	};
 	if (persistData) {
-		const result = unwrap<{ handle: number }>(restoreHostAgent(options, persistData));
+		const result = unwrap<{ handle: number }>(
+			restoreHostAgent(options, persistData),
+		);
 		return new HostAgent(result.handle);
 	}
 	const result = unwrap<{ handle: number }>(createHostAgent(options, budget));
@@ -266,7 +276,10 @@ export async function runTurnWithHostAgent(
 				switch (directive.type) {
 					case "stream_llm": {
 						stepChanged = true;
-						const stream = await config.llm.call(directive.context, config.signal);
+						const stream = await config.llm.call(
+							directive.context,
+							config.signal,
+						);
 						for await (const chunk of stream.chunks) {
 							checkAbort();
 							const ev = hostAgent.feedLlmChunk(chunk);
@@ -286,13 +299,32 @@ export async function runTurnWithHostAgent(
 							const handler = config.tools[call.name];
 							let result: ToolResult;
 							if (handler) {
-								result = await handler(call);
+								const raw = await handler(call);
+								if (
+									raw &&
+									typeof raw === "object" &&
+									"error" in raw &&
+									raw.error &&
+									typeof raw.error === "object" &&
+									"message" in raw.error
+								) {
+									result = {
+										content: [
+											{
+												type: "text",
+												text: raw.error.message,
+											},
+										],
+									};
+								} else {
+									result = raw as ToolResult;
+								}
 							} else {
 								result = {
 									content: [
 										{ type: "text", text: `No handler for ${call.name}` },
 									],
-									};
+								};
 							}
 							step = hostAgent.toolDone(call.id, result);
 							for (const e of step.events) config.onEvent?.(e);
@@ -361,7 +393,7 @@ export async function runTurnWithHostAgent(
 								type: "text",
 								text: `Previous conversation summary: ${kind.summary}`,
 							},
-							],
+						],
 						timestamp: entry.timestamp,
 					});
 				}
@@ -391,7 +423,7 @@ export async function runTurnWithHostAgent(
 				hostAgent.abort();
 			} catch {
 				/* agent may already be idle; ignore */
-				}
+			}
 			return { aborted: true, error: null };
 		}
 		throw e;

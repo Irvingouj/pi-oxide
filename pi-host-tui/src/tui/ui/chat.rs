@@ -7,6 +7,7 @@ use ratatui::widgets::{
 use ratatui::Frame;
 
 use crate::app::{App, ChatEntry};
+#[allow(unused_imports)]
 use crate::llm::LlmProvider;
 
 impl App {

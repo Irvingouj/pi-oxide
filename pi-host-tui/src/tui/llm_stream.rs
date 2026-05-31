@@ -11,6 +11,7 @@ use pi_core::{
 use pi_core::{ApiName, AssistantMessage, ModelId, ProviderName};
 
 use crate::app::{App, ChatEntry};
+#[allow(unused_imports)]
 use crate::llm::{LlmProvider, LlmStreamState};
 use crate::markdown;
 

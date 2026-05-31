@@ -193,9 +193,27 @@ impl Agent {
         Vec<TrimmedMessage>,
     ) {
         let t = crate::session::apply_compaction(t, plan.clone(), summary_text, a);
+
+        let compacted_entry_ids: Vec<String> = plan
+            .messages_to_summarize
+            .iter()
+            .filter_map(|msg| match msg {
+                TrimmedMessage::OriginalTool(tool) => Some(tool.entry_id.clone()),
+                _ => None,
+            })
+            .filter(|id| a.contains_key(id))
+            .collect();
+
+        let mut markers = vec![];
+        if !compacted_entry_ids.is_empty() {
+            markers.push(ChangeMarker::NewArtifacts {
+                entry_ids: compacted_entry_ids,
+            });
+        }
+
         self.phase = Phase::Streaming;
 
-        let (context, markers) = self.build_llm_context(&t);
+        let (context, _) = self.build_llm_context(&t);
         let events = vec![AgentEvent::AgentStart, AgentEvent::TurnStart];
         let actions = vec![AgentAction::StreamLlm {
             context,
@@ -237,6 +255,113 @@ impl Agent {
 
 pub(crate) fn current_timestamp() -> u64 {
     crate::timestamp::current_timestamp()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::{ModelCapabilities, ModelCost};
+    use crate::message::{
+        Artifacts, AssistantMessage, Content, OriginalToolResult, TextContent, TrimmedMessage,
+        UserMessage,
+    };
+    use crate::session::CompactionPlan;
+    use crate::types::{ToolCallId, ToolName};
+
+    fn test_agent() -> Agent {
+        Agent::new(AgentOptions {
+            system_prompt: "test".to_string(),
+            model: Model {
+                id: crate::types::ModelId::new("test"),
+                name: crate::types::ModelName::new("test"),
+                api: crate::types::ApiName::new("test"),
+                provider: crate::types::ProviderName::new("test"),
+                base_url: None,
+                reasoning: false,
+                context_window: 1000,
+                max_tokens: 100,
+                capabilities: ModelCapabilities::default(),
+                cost: ModelCost::default(),
+            },
+            thinking_level: ThinkingLevel::Off,
+            steering_mode: QueueMode::OneAtATime,
+            follow_up_mode: QueueMode::OneAtATime,
+            tool_execution_mode: ExecutionMode::Sequential,
+            session_id: None,
+        })
+    }
+
+    #[test]
+    fn accept_summary_emits_new_artifacts_for_compacted_tools() {
+        let mut agent = test_agent();
+        let mut a = Artifacts::new();
+
+        let t = vec![
+            TrimmedMessage::User(UserMessage::new_text("hello")),
+            TrimmedMessage::OriginalTool(OriginalToolResult {
+                entry_id: "entry-tool-1".to_string(),
+                tool_call_id: ToolCallId::new("tc1"),
+                tool_name: ToolName::new("bash"),
+                content: vec![Content::Text(TextContent {
+                    text: "tool output".to_string(),
+                })],
+                is_error: false,
+                turn: 0,
+            }),
+            TrimmedMessage::User(UserMessage::new_text("next")),
+        ];
+
+        let plan = CompactionPlan {
+            cut_index: 2,
+            messages_to_summarize: t[..2].to_vec(),
+            tokens_to_free: 10,
+        };
+
+        let (events, actions, markers, result_t) =
+            agent.accept_summary("summary".to_string(), t, &mut a, &plan);
+
+        // Verify compaction happened
+        assert_eq!(result_t.len(), 2);
+        assert!(matches!(&result_t[0], TrimmedMessage::Compaction(_)));
+
+        // Verify artifact was archived
+        assert!(a.contains_key("entry-tool-1"));
+
+        // Verify NewArtifacts marker was emitted
+        assert_eq!(markers.len(), 1);
+        assert!(
+            matches!(&markers[0], ChangeMarker::NewArtifacts { entry_ids } if entry_ids == &["entry-tool-1".to_string()]),
+            "expected NewArtifacts marker with entry-tool-1, got {:?}",
+            markers
+        );
+
+        // Events and actions should still be present
+        assert!(!events.is_empty());
+        assert!(!actions.is_empty());
+    }
+
+    #[test]
+    fn accept_summary_no_markers_when_no_original_tools() {
+        let mut agent = test_agent();
+        let mut a = Artifacts::new();
+
+        let t = vec![
+            TrimmedMessage::User(UserMessage::new_text("hello")),
+            TrimmedMessage::Assistant(AssistantMessage::empty()),
+            TrimmedMessage::User(UserMessage::new_text("next")),
+        ];
+
+        let plan = CompactionPlan {
+            cut_index: 2,
+            messages_to_summarize: t[..2].to_vec(),
+            tokens_to_free: 10,
+        };
+
+        let (_events, _actions, markers, _result_t) =
+            agent.accept_summary("summary".to_string(), t, &mut a, &plan);
+
+        assert!(markers.is_empty(), "expected no markers when no OriginalTools compacted");
+    }
 }
 
 /// Helper trait for extracting assistant text.

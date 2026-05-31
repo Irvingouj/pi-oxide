@@ -17,6 +17,7 @@ import {
 	hostContinueTurn,
 	hostFeedLlmChunk,
 	hostLlmDone,
+	hostReadArtifact,
 	hostSteer,
 	hostToolCancelled,
 	hostToolDone,
@@ -33,6 +34,18 @@ import {
 	unwrap,
 } from "@pi-oxide/pi-host-web";
 
+export interface ArtifactSearchResult {
+	id: string;
+	snippet: string;
+	match_count: number;
+}
+
+export interface ArtifactStore {
+	save(sessionId: string, artifactId: string, content: string): Promise<void>;
+	load(sessionId: string, artifactId: string): Promise<string | null>;
+	search(sessionId: string, query: string): Promise<ArtifactSearchResult[]>;
+}
+
 export interface AgentRunConfig {
 	llm: {
 		call(
@@ -46,6 +59,7 @@ export interface AgentRunConfig {
 	onEvent?: (event: AgentEvent) => void;
 	signal?: AbortSignal;
 	onPersist?: (data: PersistData) => Promise<void>;
+	artifactStore?: ArtifactStore;
 }
 
 export interface LlmStream {
@@ -117,14 +131,60 @@ export function stopAgent(abortController: AbortController | null): void {
 	abortController?.abort("user-requested");
 }
 
+// Local extension for markers until SDK rebuilds with wu-2
+interface StepWithMarkers extends TurnResultOutput {
+	markers?: Array<{ type: string; entry_ids: string[] }>;
+}
+
+export const stepProcessor = {
+	async processStep(
+		step: TurnResultOutput,
+		hostAgent: HostAgent,
+		config: AgentRunConfig,
+	): Promise<TurnResultOutput> {
+		const s = step as StepWithMarkers;
+		for (const event of s.events) {
+			config.onEvent?.(event);
+		}
+
+		if (config.artifactStore) {
+			const sessionId = hostAgent.getSessionId();
+			if (sessionId) {
+				const synced = new Set<string>();
+				for (const marker of s.markers ?? []) {
+					if (marker.type === "new_artifacts") {
+						for (const id of marker.entry_ids) {
+							if (synced.has(id)) continue;
+							synced.add(id);
+							const content = hostReadArtifact(hostAgent.handle, id);
+							if (content) {
+								await config.artifactStore.save(sessionId, id, content);
+							}
+						}
+					}
+				}
+			}
+		}
+
+		return step;
+	},
+};
+
 // ---------------------------------------------------------------------------
 // HostAgent — thin wrapper around the new WASM HostAgent handle
 // ---------------------------------------------------------------------------
 
 export class HostAgent {
 	readonly handle: number;
-	constructor(handle: number) {
+	readonly sessionId: string | undefined;
+
+	constructor(handle: number, sessionId?: string) {
 		this.handle = handle;
+		this.sessionId = sessionId;
+	}
+
+	getSessionId(): string | undefined {
+		return this.sessionId;
 	}
 
 	startTurn(prompt: AgentMessage, tools?: ToolDefinition[]): TurnResultOutput {
@@ -195,10 +255,10 @@ export async function createHostAgentInstance(
 		const result = unwrap<{ handle: number }>(
 			restoreHostAgent(options, persistData),
 		);
-		return new HostAgent(result.handle);
+		return new HostAgent(result.handle, sessionId);
 	}
 	const result = unwrap<{ handle: number }>(createHostAgent(options, budget));
-	return new HostAgent(result.handle);
+	return new HostAgent(result.handle, sessionId);
 }
 
 export async function runTurnWithHostAgent(
@@ -224,10 +284,11 @@ export async function runTurnWithHostAgent(
 	};
 
 	try {
-		let step = hostAgent.startTurn(prompt, config.llmTools ?? []);
-		for (const event of step.events) {
-			config.onEvent?.(event);
-		}
+		let step: TurnResultOutput = await stepProcessor.processStep(
+			hostAgent.startTurn(prompt, config.llmTools ?? []),
+			hostAgent,
+			config,
+		);
 
 		while (true) {
 			checkAbort();
@@ -252,8 +313,11 @@ export async function runTurnWithHostAgent(
 						}
 						checkAbort();
 						const result = await stream.result;
-						step = hostAgent.llmDone(result);
-						for (const e of step.events) config.onEvent?.(e);
+						step = await stepProcessor.processStep(
+							hostAgent.llmDone(result),
+							hostAgent,
+							config,
+						);
 						break;
 					}
 
@@ -272,8 +336,11 @@ export async function runTurnWithHostAgent(
 									],
 								};
 							}
-							step = hostAgent.toolDone(call.id, result);
-							for (const e of step.events) config.onEvent?.(e);
+							step = await stepProcessor.processStep(
+								hostAgent.toolDone(call.id, result),
+								hostAgent,
+								config,
+							);
 						}
 						break;
 					}
@@ -292,8 +359,11 @@ export async function runTurnWithHostAgent(
 								context.messages,
 								config.signal,
 							)) ?? "Compacted by host";
-						step = hostAgent.acceptCompaction(summary, []);
-						for (const e of step.events) config.onEvent?.(e);
+						step = await stepProcessor.processStep(
+							hostAgent.acceptCompaction(summary, []),
+							hostAgent,
+							config,
+						);
 						break;
 					}
 
@@ -304,16 +374,22 @@ export async function runTurnWithHostAgent(
 
 					case "wait_for_input": {
 						stepChanged = true;
-						step = hostAgent.continueTurn();
-						for (const e of step.events) config.onEvent?.(e);
+						step = await stepProcessor.processStep(
+							hostAgent.continueTurn(),
+							hostAgent,
+							config,
+						);
 						break;
 					}
 
 					case "cancel_tools": {
 						stepChanged = true;
 						for (const id of directive.tool_call_ids) {
-							step = hostAgent.toolCancelled(id, directive.reason);
-							for (const e of step.events) config.onEvent?.(e);
+							step = await stepProcessor.processStep(
+								hostAgent.toolCancelled(id, directive.reason),
+								hostAgent,
+								config,
+							);
 						}
 						break;
 					}

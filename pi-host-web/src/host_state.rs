@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use tsify::Tsify;
 
-use pi_core::{Artifacts, ContextProjectionBudget, TrimmedMessage};
+use pi_core::{Artifacts, ContextProjectionBudget, OriginalToolResult, TrimmedMessage};
 
 const MAX_ARTIFACTS: usize = 1000;
 
@@ -121,6 +121,43 @@ impl HostState {
             artifacts: data.host_artifacts.into_iter().collect(),
         }
     }
+
+    /// Sync specific artifacts from core's A into host_state.artifacts.
+    /// First sync wins — does not overwrite existing entries.
+    pub fn sync_artifacts_from_core(&mut self, artifacts: &Artifacts, entry_ids: &[String]) {
+        for id in entry_ids {
+            if !self.artifacts.contains_key(id) {
+                if let Some(original) = artifacts.get(id) {
+                    let text = extract_text_from_tool_result(original);
+                    self.store_artifact(id.clone(), text);
+                }
+            }
+        }
+    }
+
+    /// Sync all missing artifacts from core's A into host_state.artifacts.
+    /// Does not overwrite existing entries.
+    pub fn sync_missing_artifacts_from_core(&mut self, artifacts: &Artifacts) {
+        for (id, original) in artifacts {
+            if !self.artifacts.contains_key(id) {
+                let text = extract_text_from_tool_result(original);
+                self.store_artifact(id.clone(), text);
+            }
+        }
+    }
+}
+
+/// Extract plain text from an OriginalToolResult, using placeholders for non-text content.
+pub fn extract_text_from_tool_result(original: &OriginalToolResult) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for c in &original.content {
+        match c {
+            pi_core::Content::Text(t) => parts.push(t.text.clone()),
+            pi_core::Content::Image(img) => parts.push(format!("[image: {}]", img.media_type)),
+            pi_core::Content::ToolCall(tc) => parts.push(format!("[tool_call: {}]", tc.name.as_str())),
+        }
+    }
+    parts.join("\n")
 }
 
 #[cfg(test)]

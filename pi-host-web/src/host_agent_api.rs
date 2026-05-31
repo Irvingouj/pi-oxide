@@ -65,13 +65,20 @@ pub fn start_turn(handle: u32, input: StartTurnInput) -> TurnResultResult {
                 &budget,
                 &compaction_prompt,
             );
-            let (events, actions, runtime, transcript, artifacts, turn_number, _markers) =
+            let (events, actions, runtime, transcript, artifacts, turn_number, markers) =
                 transition.into_parts();
             host_agent.runtime = runtime;
             host_agent.transcript = transcript;
             host_agent.artifacts = artifacts;
             host_agent.turn_number = turn_number;
-            Ok((events, actions))
+            for marker in &markers {
+                if let pi_core::ChangeMarker::NewArtifacts { entry_ids } = marker {
+                    host_agent
+                        .host_state
+                        .sync_artifacts_from_core(&host_agent.artifacts, entry_ids);
+                }
+            }
+            Ok((events, actions, markers))
         }
         AgentRuntime::Finished(finished) => {
             let (idle, transcript, artifacts, turn_number) = finished.into_idle(
@@ -88,13 +95,20 @@ pub fn start_turn(handle: u32, input: StartTurnInput) -> TurnResultResult {
                 &budget,
                 &compaction_prompt,
             );
-            let (events, actions, runtime, transcript, artifacts, turn_number, _markers) =
+            let (events, actions, runtime, transcript, artifacts, turn_number, markers) =
                 transition.into_parts();
             host_agent.runtime = runtime;
             host_agent.transcript = transcript;
             host_agent.artifacts = artifacts;
             host_agent.turn_number = turn_number;
-            Ok((events, actions))
+            for marker in &markers {
+                if let pi_core::ChangeMarker::NewArtifacts { entry_ids } = marker {
+                    host_agent
+                        .host_state
+                        .sync_artifacts_from_core(&host_agent.artifacts, entry_ids);
+                }
+            }
+            Ok((events, actions, markers))
         }
         AgentRuntime::Aborted(aborted) => {
             let (idle, transcript, artifacts, turn_number) = aborted.into_idle(
@@ -111,20 +125,27 @@ pub fn start_turn(handle: u32, input: StartTurnInput) -> TurnResultResult {
                 &budget,
                 &compaction_prompt,
             );
-            let (events, actions, runtime, transcript, artifacts, turn_number, _markers) =
+            let (events, actions, runtime, transcript, artifacts, turn_number, markers) =
                 transition.into_parts();
             host_agent.runtime = runtime;
             host_agent.transcript = transcript;
             host_agent.artifacts = artifacts;
             host_agent.turn_number = turn_number;
-            Ok((events, actions))
+            for marker in &markers {
+                if let pi_core::ChangeMarker::NewArtifacts { entry_ids } = marker {
+                    host_agent
+                        .host_state
+                        .sync_artifacts_from_core(&host_agent.artifacts, entry_ids);
+                }
+            }
+            Ok((events, actions, markers))
         }
         AgentRuntime::WaitingTools(mut waiting) => {
             let (events, actions) = waiting
                 .submit_user_message(core_prompt)
                 .into_events_actions();
             host_agent.runtime = waiting.into_runtime();
-            Ok((events, actions))
+            Ok((events, actions, vec![]))
         }
         other => {
             let actual = runtime_phase_name(&other);
@@ -137,13 +158,18 @@ pub fn start_turn(handle: u32, input: StartTurnInput) -> TurnResultResult {
     };
 
     match result {
-        Ok((events, actions)) => {
+        Ok((events, actions, markers)) => {
             let directives = try_conv!(convert_actions_to_directives(actions));
             let dto_events = try_conv!(convert_events(events));
+            let dto_markers = try_conv!(markers
+                .into_iter()
+                .map(|m| ChangeMarkerDto::try_from(m))
+                .collect::<Result<Vec<_>, _>>());
             put_host_agent(host_agent);
             ok(TurnResultOutput {
                 events: dto_events,
                 directives,
+                markers: dto_markers,
             })
         }
         Err(e) => {
@@ -185,6 +211,7 @@ pub fn host_feed_llm_chunk(handle: u32, chunk: LlmChunk) -> TurnResultResult {
         Ok(events) => ok(TurnResultOutput {
             events: try_conv!(convert_events(events)),
             directives: vec![],
+            markers: vec![],
         }),
         Err(e) => err(&e),
     }
@@ -205,7 +232,7 @@ pub fn host_llm_done(handle: u32, result: LlmResult) -> TurnResultResult {
 
     let result = match host_agent.runtime {
         AgentRuntime::Streaming(streaming) => {
-            let (events, actions, new_runtime, transcript, artifacts, turn_number, _markers) =
+            let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) =
                 streaming
                     .finish_llm(
                         core_result,
@@ -219,7 +246,14 @@ pub fn host_llm_done(handle: u32, result: LlmResult) -> TurnResultResult {
             host_agent.transcript = transcript;
             host_agent.artifacts = artifacts;
             host_agent.turn_number = turn_number;
-            Ok((events, actions))
+            for marker in &markers {
+                if let pi_core::ChangeMarker::NewArtifacts { entry_ids } = marker {
+                    host_agent
+                        .host_state
+                        .sync_artifacts_from_core(&host_agent.artifacts, entry_ids);
+                }
+            }
+            Ok((events, actions, markers))
         }
         other => {
             let actual = runtime_phase_name(&other);
@@ -232,13 +266,18 @@ pub fn host_llm_done(handle: u32, result: LlmResult) -> TurnResultResult {
     };
 
     match result {
-        Ok((events, actions)) => {
+        Ok((events, actions, markers)) => {
             let directives = try_conv!(convert_actions_to_directives(actions));
             let dto_events = try_conv!(convert_events(events));
+            let dto_markers = try_conv!(markers
+                .into_iter()
+                .map(|m| ChangeMarkerDto::try_from(m))
+                .collect::<Result<Vec<_>, _>>());
             put_host_agent(host_agent);
             ok(TurnResultOutput {
                 events: dto_events,
                 directives,
+                markers: dto_markers,
             })
         }
         Err(e) => {
@@ -263,7 +302,7 @@ pub fn host_tool_done(handle: u32, id: ToolCallId, result: ToolResult) -> TurnRe
 
     let result = match host_agent.runtime {
         AgentRuntime::WaitingTools(waiting) => {
-            let (events, actions, new_runtime, transcript, artifacts, turn_number, _markers) =
+            let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) =
                 waiting
                     .on_tool_done(
                         core_id,
@@ -277,7 +316,14 @@ pub fn host_tool_done(handle: u32, id: ToolCallId, result: ToolResult) -> TurnRe
             host_agent.transcript = transcript;
             host_agent.artifacts = artifacts;
             host_agent.turn_number = turn_number;
-            Ok((events, actions))
+            for marker in &markers {
+                if let pi_core::ChangeMarker::NewArtifacts { entry_ids } = marker {
+                    host_agent
+                        .host_state
+                        .sync_artifacts_from_core(&host_agent.artifacts, entry_ids);
+                }
+            }
+            Ok((events, actions, markers))
         }
         other => {
             let actual = runtime_phase_name(&other);
@@ -290,7 +336,7 @@ pub fn host_tool_done(handle: u32, id: ToolCallId, result: ToolResult) -> TurnRe
     };
 
     match result {
-        Ok((events, actions)) => {
+        Ok((events, actions, markers)) => {
             let mut directives = try_conv!(convert_actions_to_directives(actions));
             // If the agent is ready to continue but didn't emit any directive,
             // tell the host to wait for input (it should then call hostContinueTurn).
@@ -300,10 +346,15 @@ pub fn host_tool_done(handle: u32, id: ToolCallId, result: ToolResult) -> TurnRe
                 });
             }
             let dto_events = try_conv!(convert_events(events));
+            let dto_markers = try_conv!(markers
+                .into_iter()
+                .map(|m| ChangeMarkerDto::try_from(m))
+                .collect::<Result<Vec<_>, _>>());
             put_host_agent(host_agent);
             ok(TurnResultOutput {
                 events: dto_events,
                 directives,
+                markers: dto_markers,
             })
         }
         Err(e) => {
@@ -338,7 +389,14 @@ pub fn host_accept_compaction(
             host_agent.transcript = transition.transcript;
             host_agent.artifacts = transition.artifacts;
             host_agent.turn_number = transition.turn_number;
-            Ok((transition.events, transition.actions))
+            for marker in &transition.markers {
+                if let pi_core::ChangeMarker::NewArtifacts { entry_ids } = marker {
+                    host_agent
+                        .host_state
+                        .sync_artifacts_from_core(&host_agent.artifacts, entry_ids);
+                }
+            }
+            Ok((transition.events, transition.actions, transition.markers))
         }
         other => {
             let actual = runtime_phase_name(&other);
@@ -351,17 +409,22 @@ pub fn host_accept_compaction(
     };
 
     match result {
-        Ok((events, actions)) => {
+        Ok((events, actions, markers)) => {
             let directives = if actions.is_empty() {
                 vec![HostDirective::Persist]
             } else {
                 try_conv!(convert_actions_to_directives(actions))
             };
             let dto_events = try_conv!(convert_events(events));
+            let dto_markers = try_conv!(markers
+                .into_iter()
+                .map(|m| ChangeMarkerDto::try_from(m))
+                .collect::<Result<Vec<_>, _>>());
             put_host_agent(host_agent);
             ok(TurnResultOutput {
                 events: dto_events,
                 directives,
+                markers: dto_markers,
             })
         }
         Err(e) => {
@@ -407,6 +470,7 @@ pub fn host_steer(handle: u32, message: AgentMessage) -> TurnResultResult {
         Ok(events) => ok(TurnResultOutput {
             events: try_conv!(convert_events(events)),
             directives: vec![],
+            markers: vec![],
         }),
         Err(e) => err(&e),
     }
@@ -434,13 +498,20 @@ pub fn host_continue_turn(handle: u32) -> TurnResultResult {
                 &budget,
                 &compaction_prompt,
             );
-            let (events, actions, runtime, transcript, artifacts, turn_number, _markers) =
+            let (events, actions, runtime, transcript, artifacts, turn_number, markers) =
                 transition.into_parts();
             host_agent.runtime = runtime;
             host_agent.transcript = transcript;
             host_agent.artifacts = artifacts;
             host_agent.turn_number = turn_number;
-            Ok((events, actions))
+            for marker in &markers {
+                if let pi_core::ChangeMarker::NewArtifacts { entry_ids } = marker {
+                    host_agent
+                        .host_state
+                        .sync_artifacts_from_core(&host_agent.artifacts, entry_ids);
+                }
+            }
+            Ok((events, actions, markers))
         }
         other => {
             let actual = runtime_phase_name(&other);
@@ -453,13 +524,18 @@ pub fn host_continue_turn(handle: u32) -> TurnResultResult {
     };
 
     match result {
-        Ok((events, actions)) => {
+        Ok((events, actions, markers)) => {
             let directives = try_conv!(convert_actions_to_directives(actions));
             let dto_events = try_conv!(convert_events(events));
+            let dto_markers = try_conv!(markers
+                .into_iter()
+                .map(|m| ChangeMarkerDto::try_from(m))
+                .collect::<Result<Vec<_>, _>>());
             put_host_agent(host_agent);
             ok(TurnResultOutput {
                 events: dto_events,
                 directives,
+                markers: dto_markers,
             })
         }
         Err(e) => {
@@ -505,7 +581,7 @@ pub fn host_tool_cancelled(
 
     let result = match host_agent.runtime {
         AgentRuntime::WaitingTools(waiting) => {
-            let (events, actions, new_runtime, transcript, artifacts, turn_number, _markers) =
+            let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) =
                 waiting
                     .cancel_tool(
                         id,
@@ -519,7 +595,14 @@ pub fn host_tool_cancelled(
             host_agent.transcript = transcript;
             host_agent.artifacts = artifacts;
             host_agent.turn_number = turn_number;
-            Ok((events, actions))
+            for marker in &markers {
+                if let pi_core::ChangeMarker::NewArtifacts { entry_ids } = marker {
+                    host_agent
+                        .host_state
+                        .sync_artifacts_from_core(&host_agent.artifacts, entry_ids);
+                }
+            }
+            Ok((events, actions, markers))
         }
         other => {
             let actual = runtime_phase_name(&other);
@@ -532,13 +615,18 @@ pub fn host_tool_cancelled(
     };
 
     match result {
-        Ok((events, actions)) => {
+        Ok((events, actions, markers)) => {
             let directives = try_conv!(convert_actions_to_directives(actions));
             let dto_events = try_conv!(convert_events(events));
+            let dto_markers = try_conv!(markers
+                .into_iter()
+                .map(|m| ChangeMarkerDto::try_from(m))
+                .collect::<Result<Vec<_>, _>>());
             put_host_agent(host_agent);
             ok(TurnResultOutput {
                 events: dto_events,
                 directives,
+                markers: dto_markers,
             })
         }
         Err(e) => {
@@ -625,6 +713,7 @@ pub fn host_abort(handle: u32) -> TurnResultResult {
             ok(TurnResultOutput {
                 events: dto_events,
                 directives,
+                markers: vec![],
             })
         }
         Err(e) => {
@@ -661,7 +750,8 @@ pub fn restore_host_agent(options: AgentOptions, data: PersistData) -> CreateHos
     let core_options: pi_core::AgentOptions = try_conv!(options.try_into());
     let core_data: crate::host_state::PersistData = try_conv!(data.try_into());
     let runtime = AgentRuntime::new(core_options);
-    let host_state = HostState::restore(core_data.clone());
+    let mut host_state = HostState::restore(core_data.clone());
+    host_state.sync_missing_artifacts_from_core(&core_data.artifacts);
     let agent = HostAgent {
         runtime,
         host_state,

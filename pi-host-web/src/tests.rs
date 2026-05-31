@@ -566,6 +566,7 @@ fn dto_turn_result_structure() {
         data: Some(TurnResultOutput {
             events: vec![AgentEvent::AgentStart],
             directives: vec![HostDirective::Persist],
+            markers: vec![],
         }),
         error: None,
     };
@@ -716,4 +717,616 @@ fn roundtrip_persist_data() {
 
     destroy_host_state(handle);
     destroy_host_state(handle2);
+}
+
+// -----------------------------------------------------------------------
+// Phase 8 — Marker and artifact sync verification
+// -----------------------------------------------------------------------
+
+#[test]
+fn sync_artifacts_from_core_guard() {
+    let mut state = HostState::new("sp".to_string(), "cp".to_string());
+    state.store_artifact("old-id".to_string(), "existing text".to_string());
+
+    let mut core_artifacts = pi_core::Artifacts::new();
+    core_artifacts.insert(
+        "old-id".to_string(),
+        pi_core::OriginalToolResult {
+            entry_id: "old-id".to_string(),
+            tool_call_id: pi_core::ToolCallId::new("tc1"),
+            tool_name: pi_core::ToolName::new("bash"),
+            content: vec![pi_core::Content::Text(pi_core::TextContent {
+                text: "new text".to_string(),
+            })],
+            is_error: false,
+            turn: 1,
+        },
+    );
+    core_artifacts.insert(
+        "new-id".to_string(),
+        pi_core::OriginalToolResult {
+            entry_id: "new-id".to_string(),
+            tool_call_id: pi_core::ToolCallId::new("tc2"),
+            tool_name: pi_core::ToolName::new("bash"),
+            content: vec![pi_core::Content::Text(pi_core::TextContent {
+                text: "new artifact".to_string(),
+            })],
+            is_error: false,
+            turn: 1,
+        },
+    );
+
+    state.sync_artifacts_from_core(&core_artifacts, &["old-id".to_string(), "new-id".to_string()]);
+
+    assert_eq!(
+        state.read_artifact("old-id"),
+        Some("existing text"),
+        "old-id should NOT be overwritten"
+    );
+    assert_eq!(
+        state.read_artifact("new-id"),
+        Some("new artifact"),
+        "new-id should be inserted"
+    );
+}
+
+#[test]
+fn sync_missing_artifacts_from_core() {
+    let mut state = HostState::new("sp".to_string(), "cp".to_string());
+    state.store_artifact("existing".to_string(), "existing text".to_string());
+
+    let mut core_artifacts = pi_core::Artifacts::new();
+    core_artifacts.insert(
+        "existing".to_string(),
+        pi_core::OriginalToolResult {
+            entry_id: "existing".to_string(),
+            tool_call_id: pi_core::ToolCallId::new("tc1"),
+            tool_name: pi_core::ToolName::new("bash"),
+            content: vec![pi_core::Content::Text(pi_core::TextContent {
+                text: "new text".to_string(),
+            })],
+            is_error: false,
+            turn: 1,
+        },
+    );
+    core_artifacts.insert(
+        "missing".to_string(),
+        pi_core::OriginalToolResult {
+            entry_id: "missing".to_string(),
+            tool_call_id: pi_core::ToolCallId::new("tc2"),
+            tool_name: pi_core::ToolName::new("bash"),
+            content: vec![pi_core::Content::Text(pi_core::TextContent {
+                text: "missing text".to_string(),
+            })],
+            is_error: false,
+            turn: 1,
+        },
+    );
+
+    state.sync_missing_artifacts_from_core(&core_artifacts);
+
+    assert_eq!(
+        state.read_artifact("existing"),
+        Some("existing text"),
+        "existing should be unchanged"
+    );
+    assert_eq!(
+        state.read_artifact("missing"),
+        Some("missing text"),
+        "missing should be inserted"
+    );
+}
+
+#[test]
+fn extract_text_from_tool_result_all_variants() {
+    let original = pi_core::OriginalToolResult {
+        entry_id: "entry-1".to_string(),
+        tool_call_id: pi_core::ToolCallId::new("tc1"),
+        tool_name: pi_core::ToolName::new("bash"),
+        content: vec![
+            pi_core::Content::Text(pi_core::TextContent {
+                text: "actual text".to_string(),
+            }),
+            pi_core::Content::Image(pi_core::ImageContent {
+                media_type: "image/png".to_string(),
+                data: "base64data".to_string(),
+            }),
+            pi_core::Content::ToolCall(pi_core::ToolCall {
+                id: pi_core::ToolCallId::new("tc2"),
+                name: pi_core::ToolName::new("read"),
+                arguments: pi_core::ToolArguments(serde_json::json!({})),
+            }),
+        ],
+        is_error: false,
+        turn: 1,
+    };
+
+    let text = crate::host_state::extract_text_from_tool_result(&original);
+    assert!(text.contains("actual text"), "should contain actual text");
+    assert!(
+        text.contains("[image: image/png]"),
+        "should contain image placeholder"
+    );
+    assert!(
+        text.contains("[tool_call: read]"),
+        "should contain tool_call placeholder"
+    );
+}
+
+#[test]
+fn marker_processing_in_start_turn() {
+    // Note: core's start_turn does not naturally produce NewArtifacts markers.
+    // This test verifies the handler infrastructure is in place.
+    let resp = create_host_agent(dummy_options(), default_budget());
+    let handle = resp.data.unwrap().handle;
+
+    let resp = start_turn(
+        handle,
+        StartTurnInput {
+            prompt: make_user_prompt("hello"),
+            tools: vec![],
+        },
+    );
+    assert!(resp.ok);
+    let output = resp.data.unwrap();
+
+    // start_turn returns empty markers from core, but the field is present
+    assert!(output.markers.is_empty());
+
+    // host_state.artifacts should be empty since no markers were produced
+    let persist = get_host_agent_persist_data(handle);
+    assert!(persist.ok);
+    let data = persist.data.unwrap().state;
+    assert!(data.host_artifacts.is_empty());
+
+    destroy_host_agent(handle);
+}
+
+#[test]
+fn marker_processing_in_host_llm_done() {
+    let resp = create_host_agent(dummy_options(), default_budget());
+    let handle = resp.data.unwrap().handle;
+
+    // Turn 1: execute a grep tool with a large result (>3000 chars)
+    let resp = start_turn(
+        handle,
+        StartTurnInput {
+            prompt: make_user_prompt("use tool"),
+            tools: vec![make_tool_def("grep")],
+        },
+    );
+    assert!(resp.ok);
+
+    let resp = host_llm_done(
+        handle,
+        LlmResult::Ok(make_assistant_with_tool("grep", "tc-1")),
+    );
+    assert!(resp.ok);
+
+    let large_text = "x".repeat(3001);
+    let tool_result = ToolResult {
+        content: vec![Content::Text(TextContent {
+            text: large_text.clone(),
+        })],
+        details: None,
+        terminate: None,
+    };
+    let resp = host_tool_done(handle, ToolCallId("tc-1".to_string()), tool_result);
+    assert!(resp.ok);
+
+    let resp = host_continue_turn(handle);
+    assert!(resp.ok);
+
+    let resp = host_llm_done(handle, LlmResult::Ok(make_assistant_text("done")));
+    assert!(resp.ok, "host_llm_done failed: {:?}", resp.error);
+    let output = resp.data.unwrap();
+
+    // Verify NewArtifacts marker was emitted in turn 1's llm_done
+    assert!(
+        output.markers.iter().any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
+        "should emit NewArtifacts marker after projection scan in turn 1"
+    );
+
+    // Verify host_state.artifacts was populated from the marker
+    let persist = get_host_agent_persist_data(handle);
+    assert!(persist.ok);
+    let data = persist.data.unwrap().state;
+    assert!(
+        data.host_artifacts.iter().any(|(k, _)| k == "entry-0"),
+        "host_state.artifacts should contain the projected artifact"
+    );
+
+    destroy_host_agent(handle);
+}
+
+#[test]
+fn restore_syncs_missing_only() {
+    let mut core_artifacts = pi_core::Artifacts::new();
+    core_artifacts.insert(
+        "existing".to_string(),
+        pi_core::OriginalToolResult {
+            entry_id: "existing".to_string(),
+            tool_call_id: pi_core::ToolCallId::new("tc1"),
+            tool_name: pi_core::ToolName::new("bash"),
+            content: vec![pi_core::Content::Text(pi_core::TextContent {
+                text: "core existing text".to_string(),
+            })],
+            is_error: false,
+            turn: 1,
+        },
+    );
+    core_artifacts.insert(
+        "missing".to_string(),
+        pi_core::OriginalToolResult {
+            entry_id: "missing".to_string(),
+            tool_call_id: pi_core::ToolCallId::new("tc2"),
+            tool_name: pi_core::ToolName::new("bash"),
+            content: vec![pi_core::Content::Text(pi_core::TextContent {
+                text: "core missing text".to_string(),
+            })],
+            is_error: false,
+            turn: 1,
+        },
+    );
+
+    let data = PersistData {
+        transcript: serde_json::Value::Array(vec![]),
+        artifacts: serde_json::to_value(&core_artifacts).unwrap(),
+        turn_number: 1,
+        host_artifacts: vec![("existing".to_string(), "host existing text".to_string())],
+        budget: ContextProjectionBudget::default(),
+        system_prompt: "You are helpful.".to_string(),
+        compaction_prompt: "Summarize.".to_string(),
+    };
+
+    let resp = restore_host_agent(dummy_options(), data);
+    assert!(resp.ok, "expected ok, got error: {:?}", resp.error);
+    let handle = resp.data.unwrap().handle;
+
+    let persist = get_host_agent_persist_data(handle);
+    assert!(persist.ok);
+    let restored = persist.data.unwrap().state;
+
+    // Existing host artifact should be preserved (not overwritten by core)
+    let existing = restored
+        .host_artifacts
+        .iter()
+        .find(|(k, _)| k == "existing")
+        .cloned();
+    assert_eq!(
+        existing,
+        Some(("existing".to_string(), "host existing text".to_string())),
+        "existing host artifact should be preserved"
+    );
+
+    // Missing artifact from core should be synced
+    let missing = restored
+        .host_artifacts
+        .iter()
+        .find(|(k, _)| k == "missing")
+        .cloned();
+    assert_eq!(
+        missing,
+        Some(("missing".to_string(), "core missing text".to_string())),
+        "missing artifact should be synced from core"
+    );
+
+    destroy_host_agent(handle);
+}
+
+#[test]
+fn compaction_marker_emission() {
+    let budget = ContextProjectionBudget {
+        max_tool_result_chars: 50000,
+        max_context_tokens: 30,
+        microcompact_after_turns: 5,
+        compaction_threshold: 0.5,
+    };
+    let resp = create_host_agent(dummy_options(), budget);
+    let handle = resp.data.unwrap().handle;
+
+    // Turn 1: execute a tool to create an OriginalTool in T
+    let resp = start_turn(
+        handle,
+        StartTurnInput {
+            prompt: make_user_prompt("use tool"),
+            tools: vec![make_tool_def("bash")],
+        },
+    );
+    assert!(resp.ok);
+
+    let resp = host_llm_done(
+        handle,
+        LlmResult::Ok(make_assistant_with_tool("bash", "tc-1")),
+    );
+    assert!(resp.ok);
+
+    let tool_result = ToolResult {
+        content: vec![Content::Text(TextContent {
+            text: "tool output".to_string(),
+        })],
+        details: None,
+        terminate: None,
+    };
+    let resp = host_tool_done(handle, ToolCallId("tc-1".to_string()), tool_result);
+    assert!(resp.ok);
+
+    let resp = host_continue_turn(handle);
+    assert!(resp.ok);
+
+    let resp = host_llm_done(handle, LlmResult::Ok(make_assistant_text("done")));
+    assert!(resp.ok);
+
+    // Turn 2: long prompt to trigger compaction
+    let long_prompt = "a".repeat(100);
+    let resp = start_turn(
+        handle,
+        StartTurnInput {
+            prompt: make_user_prompt(&long_prompt),
+            tools: vec![],
+        },
+    );
+    assert!(resp.ok);
+    let directives = resp.data.unwrap().directives;
+    assert!(
+        directives.iter().any(|d| matches!(d, HostDirective::Summarize { .. })),
+        "should emit Summarize directive when over budget"
+    );
+
+    // Accept compaction
+    let resp = host_accept_compaction(handle, "summary".to_string(), vec![]);
+    assert!(resp.ok);
+    let output = resp.data.unwrap();
+
+    // Verify NewArtifacts marker was emitted
+    assert!(
+        output.markers.iter().any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
+        "should emit NewArtifacts marker after compaction"
+    );
+
+    let new_artifacts = output
+        .markers
+        .iter()
+        .find_map(|m| match m {
+            ChangeMarkerDto::NewArtifacts { entry_ids } => Some(entry_ids.clone()),
+            _ => None,
+        })
+        .expect("should have NewArtifacts marker");
+    assert!(
+        new_artifacts.contains(&"entry-0".to_string()),
+        "entry_ids should contain the compacted OriginalTool entry"
+    );
+
+    // Verify host_state.artifacts was populated
+    let persist = get_host_agent_persist_data(handle);
+    assert!(persist.ok);
+    let data = persist.data.unwrap().state;
+    assert!(
+        data.host_artifacts.iter().any(|(k, _)| k == "entry-0"),
+        "host_state.artifacts should contain the compacted artifact"
+    );
+
+    destroy_host_agent(handle);
+}
+
+#[test]
+fn change_marker_dto_roundtrip() {
+    let markers = vec![
+        ChangeMarkerDto::CompactionApplied,
+        ChangeMarkerDto::NewArtifacts {
+            entry_ids: vec!["entry-1".to_string(), "entry-2".to_string()],
+        },
+    ];
+
+    let json = serde_json::to_string(&markers).unwrap();
+    let back: Vec<ChangeMarkerDto> = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(markers, back);
+    assert!(matches!(back[0], ChangeMarkerDto::CompactionApplied));
+    assert!(
+        matches!(&back[1], ChangeMarkerDto::NewArtifacts { entry_ids } if entry_ids == &["entry-1", "entry-2"])
+    );
+}
+
+#[test]
+fn marker_processing_in_host_tool_done() {
+    // Create agent
+    let resp = create_host_agent(dummy_options(), default_budget());
+    let handle = resp.data.unwrap().handle;
+
+    // Turn 1: start -> llm_done (tc-1) -> tool_done (large result) -> continue_turn -> llm_done (tc-2)
+    let resp = start_turn(
+        handle,
+        StartTurnInput {
+            prompt: make_user_prompt("use tool"),
+            tools: vec![make_tool_def("grep")],
+        },
+    );
+    assert!(resp.ok);
+
+    let resp = host_llm_done(
+        handle,
+        LlmResult::Ok(make_assistant_with_tool("grep", "tc-1")),
+    );
+    assert!(resp.ok);
+
+    let large_text = "x".repeat(3001);
+    let tool_result = ToolResult {
+        content: vec![Content::Text(TextContent {
+            text: large_text,
+        })],
+        details: None,
+        terminate: None,
+    };
+    let resp = host_tool_done(handle, ToolCallId("tc-1".to_string()), tool_result);
+    assert!(resp.ok);
+
+    let resp = host_continue_turn(handle);
+    assert!(resp.ok);
+
+    let resp = host_llm_done(
+        handle,
+        LlmResult::Ok(make_assistant_with_tool("grep", "tc-2")),
+    );
+    assert!(resp.ok);
+
+    // Turn 2: tool_done (large result for tc-2) — this triggers projection of the old tool from turn 1
+    let large_text2 = "y".repeat(3001);
+    let tool_result2 = ToolResult {
+        content: vec![Content::Text(TextContent {
+            text: large_text2,
+        })],
+        details: None,
+        terminate: None,
+    };
+    let resp = host_tool_done(handle, ToolCallId("tc-2".to_string()), tool_result2);
+    assert!(resp.ok);
+    let output = resp.data.unwrap();
+
+    // Verify NewArtifacts marker was emitted (for the old tool from turn 1)
+    assert!(
+        output.markers.iter().any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
+        "should emit NewArtifacts marker after tool_done when old tools are projected"
+    );
+
+    // Verify host_state.artifacts was populated
+    let persist = get_host_agent_persist_data(handle);
+    assert!(persist.ok);
+    let data = persist.data.unwrap().state;
+    assert!(
+        data.host_artifacts.iter().any(|(k, _)| k == "entry-0"),
+        "host_state.artifacts should contain the projected artifact"
+    );
+
+    destroy_host_agent(handle);
+}
+
+#[test]
+fn marker_processing_in_host_continue_turn() {
+    // Create agent
+    let resp = create_host_agent(dummy_options(), default_budget());
+    let handle = resp.data.unwrap().handle;
+
+    // Turn 1: start -> llm_done (tool_call) -> tool_done (large result) -> continue_turn
+    let resp = start_turn(
+        handle,
+        StartTurnInput {
+            prompt: make_user_prompt("use tool"),
+            tools: vec![make_tool_def("grep")],
+        },
+    );
+    assert!(resp.ok);
+
+    let resp = host_llm_done(
+        handle,
+        LlmResult::Ok(make_assistant_with_tool("grep", "tc-1")),
+    );
+    assert!(resp.ok);
+
+    let large_text = "x".repeat(3001);
+    let tool_result = ToolResult {
+        content: vec![Content::Text(TextContent {
+            text: large_text,
+        })],
+        details: None,
+        terminate: None,
+    };
+    let resp = host_tool_done(handle, ToolCallId("tc-1".to_string()), tool_result);
+    assert!(resp.ok);
+
+    // host_continue_turn should return a TurnResultOutput with a markers field
+    let resp = host_continue_turn(handle);
+    assert!(resp.ok);
+    let output = resp.data.unwrap();
+
+    // Verify markers field exists (continue_turn itself does not produce markers,
+    // but the infrastructure must be present)
+    assert!(output.markers.is_empty(), "continue_turn should return empty markers");
+
+    // Continue to llm_done to trigger projection of the tool result
+    let resp = host_llm_done(handle, LlmResult::Ok(make_assistant_text("done")));
+    assert!(resp.ok);
+    let output = resp.data.unwrap();
+
+    // Verify NewArtifacts marker was emitted
+    assert!(
+        output.markers.iter().any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
+        "should emit NewArtifacts marker after continue_turn + llm_done with projected artifact"
+    );
+
+    // Verify host_state.artifacts was populated
+    let persist = get_host_agent_persist_data(handle);
+    assert!(persist.ok);
+    let data = persist.data.unwrap().state;
+    assert!(
+        data.host_artifacts.iter().any(|(k, _)| k == "entry-0"),
+        "host_state.artifacts should contain the projected artifact"
+    );
+
+    destroy_host_agent(handle);
+}
+
+#[test]
+fn marker_processing_in_host_tool_cancelled() {
+    // Create agent
+    let resp = create_host_agent(dummy_options(), default_budget());
+    let handle = resp.data.unwrap().handle;
+
+    // Turn 1: start -> llm_done (tc-1) -> tool_done (large result) -> continue_turn -> llm_done (tc-2)
+    let resp = start_turn(
+        handle,
+        StartTurnInput {
+            prompt: make_user_prompt("use tool"),
+            tools: vec![make_tool_def("grep")],
+        },
+    );
+    assert!(resp.ok);
+
+    let resp = host_llm_done(
+        handle,
+        LlmResult::Ok(make_assistant_with_tool("grep", "tc-1")),
+    );
+    assert!(resp.ok);
+
+    let large_text = "x".repeat(3001);
+    let tool_result = ToolResult {
+        content: vec![Content::Text(TextContent {
+            text: large_text,
+        })],
+        details: None,
+        terminate: None,
+    };
+    let resp = host_tool_done(handle, ToolCallId("tc-1".to_string()), tool_result);
+    assert!(resp.ok);
+
+    let resp = host_continue_turn(handle);
+    assert!(resp.ok);
+
+    let resp = host_llm_done(
+        handle,
+        LlmResult::Ok(make_assistant_with_tool("grep", "tc-2")),
+    );
+    assert!(resp.ok);
+
+    // Turn 2: host_tool_cancelled for tc-2 — this triggers projection of the old tool from turn 1
+    let resp = host_tool_cancelled(handle, "tc-2".to_string(), CancelReason::UserRequested);
+    assert!(resp.ok);
+    let output = resp.data.unwrap();
+
+    // Verify NewArtifacts marker was emitted (for the old tool from turn 1)
+    assert!(
+        output.markers.iter().any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
+        "should emit NewArtifacts marker after tool_cancelled when old tools are projected"
+    );
+
+    // Verify host_state.artifacts was populated
+    let persist = get_host_agent_persist_data(handle);
+    assert!(persist.ok);
+    let data = persist.data.unwrap().state;
+    assert!(
+        data.host_artifacts.iter().any(|(k, _)| k == "entry-0"),
+        "host_state.artifacts should contain the projected artifact from cancelled tool flow"
+    );
+
+    destroy_host_agent(handle);
 }

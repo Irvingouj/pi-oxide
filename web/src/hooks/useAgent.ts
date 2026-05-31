@@ -178,7 +178,11 @@ export function useAgent() {
 
 			const tools = {
 				...createToolRegistry(runtimeRef.current),
-				...createArtifactToolRegistry(() => hostAgent.handle),
+				...createArtifactToolRegistry(
+					() => hostAgent.handle,
+					undefined,
+					() => hostAgent.getSessionId(),
+				),
 			};
 			const llmProvider = createLlmProvider(abortController.signal);
 

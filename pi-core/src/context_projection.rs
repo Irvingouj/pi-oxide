@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 
 /// Declarative hint about what changed in the session state so the host
 /// knows how to persist efficiently.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChangeMarker {
     /// Compaction mutated the entry tree; prefer full persist.
     CompactionApplied,
@@ -644,5 +645,20 @@ mod tests {
         assert!(tokens > 0);
         // "hello world" (11) + "hi there" (8) = 19 chars -> ceil(19/4) = 5
         assert_eq!(tokens, 19_usize.div_ceil(4));
+    }
+
+    #[test]
+    fn change_marker_serde_roundtrip() {
+        let marker = ChangeMarker::CompactionApplied;
+        let json = serde_json::to_string(&marker).unwrap();
+        let decoded: ChangeMarker = serde_json::from_str(&json).unwrap();
+        assert_eq!(marker, decoded);
+
+        let marker = ChangeMarker::NewArtifacts {
+            entry_ids: vec!["entry-1".to_string(), "entry-2".to_string()],
+        };
+        let json = serde_json::to_string(&marker).unwrap();
+        let decoded: ChangeMarker = serde_json::from_str(&json).unwrap();
+        assert_eq!(marker, decoded);
     }
 }

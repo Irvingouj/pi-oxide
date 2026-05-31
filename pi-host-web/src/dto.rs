@@ -352,6 +352,14 @@ pub enum CancelReason {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChangeMarkerDto {
+    CompactionApplied,
+    NewArtifacts { entry_ids: Vec<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct ToolExecutionUpdate {
     pub tool_call_id: ToolCallId,
     pub stream: ToolOutputStream,
@@ -612,6 +620,18 @@ pub struct StartTurnInput {
 pub struct TurnResultOutput {
     pub events: Vec<AgentEvent>,
     pub directives: Vec<HostDirective>,
+    #[serde(default)]
+    pub markers: Vec<ChangeMarkerDto>,
+}
+
+impl Default for TurnResultOutput {
+    fn default() -> Self {
+        Self {
+            events: vec![],
+            directives: vec![],
+            markers: vec![],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
@@ -788,5 +808,7 @@ dto_conv!(LlmContext, pi_core::LlmContext);
 dto_conv!(ContextProjectionBudget, pi_core::ContextProjectionBudget);
 
 dto_conv!(AgentOptions, pi_core::AgentOptions);
+
+dto_conv!(ChangeMarkerDto, pi_core::ChangeMarker);
 
 dto_conv!(PersistData, crate::host_state::PersistData);

@@ -11,6 +11,7 @@ import {
 	type ToolDefinition,
 } from "@pi-oxide/pi-host-web";
 import type { BrowserRuntime } from "../browser/browserRuntime.ts";
+import type { ArtifactStore } from "./agentService.ts";
 
 // Local type — not exported by the SDK
 export type ToolMap = Record<string, (call: ToolCall) => Promise<import("@pi-oxide/pi-host-web").ToolResult> | import("@pi-oxide/pi-host-web").ToolResult>;
@@ -95,14 +96,29 @@ export function createToolRegistry(runtime: BrowserRuntime): ToolMap {
 /**
  * Create artifact tool handlers that read from the host agent artifact store.
  */
-export function createArtifactToolRegistry(getHandle: () => number): ToolMap {
+export function createArtifactToolRegistry(
+	getHandle: () => number,
+	artifactStore?: ArtifactStore,
+	getSessionId?: () => string | undefined,
+): ToolMap {
 	return {
-		artifact_read: wrapToolHandler((call: ToolCall) => {
+		artifact_read: wrapToolHandler(async (call: ToolCall) => {
 			const artifactId = call.arguments.artifact_id as string;
 			if (typeof artifactId !== "string" || artifactId.length === 0) {
 				throw new Error("artifact_id must be a non-empty string");
 			}
-			const text = hostReadArtifact(getHandle(), artifactId);
+			let text: string;
+			if (artifactStore && getSessionId) {
+				const sessionId = getSessionId();
+				if (sessionId) {
+					const stored = await artifactStore.load(sessionId, artifactId);
+					text = stored ?? "";
+				} else {
+					text = "";
+				}
+			} else {
+				text = await Promise.resolve(hostReadArtifact(getHandle(), artifactId));
+			}
 			if (text === "") {
 				throw new Error(`artifact not found: ${artifactId}`);
 			}
@@ -110,22 +126,31 @@ export function createArtifactToolRegistry(getHandle: () => number): ToolMap {
 				content: [{ type: "text", text }],
 			};
 		}),
-		artifact_search: wrapToolHandler((call: ToolCall) => {
+		artifact_search: wrapToolHandler(async (call: ToolCall) => {
 			const pattern = call.arguments.pattern as string;
 			if (typeof pattern !== "string" || pattern.length === 0) {
 				throw new Error("pattern must be a non-empty string");
 			}
-			const result = hostSearchArtifacts(getHandle(), pattern);
-			const capped: Array<{
-				id: string;
-				snippet: string;
-				match_count: number;
-			}> = result.results.slice(0, MAX_SEARCH_RESULTS);
+			let results: Array<{ id: string; snippet: string; match_count: number }>;
+			if (artifactStore && getSessionId) {
+				const sessionId = getSessionId();
+				if (sessionId) {
+					results = await artifactStore.search(sessionId, pattern);
+				} else {
+					results = [];
+				}
+			} else {
+				const result = await Promise.resolve(
+					hostSearchArtifacts(getHandle(), pattern),
+				);
+				results = result.results;
+			}
+			const capped = results.slice(0, MAX_SEARCH_RESULTS);
 			const text = JSON.stringify(
-				capped.map((m) => ({
-					id: m.id,
-					snippet: m.snippet,
-					match_count: m.match_count,
+				capped.map((r) => ({
+					id: r.id,
+					snippet: r.snippet,
+					match_count: r.match_count,
 				})),
 				null,
 				2,

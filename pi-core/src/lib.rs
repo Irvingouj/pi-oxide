@@ -5,14 +5,13 @@
 //! into core via synchronous callbacks after completing async operations.
 
 pub mod agent;
+#[allow(non_snake_case)]
 pub mod agent_runtime;
 pub mod context;
-pub mod context_metadata;
 pub mod context_projection;
 pub mod events;
 pub mod llm;
 pub mod message;
-pub mod script_projection;
 pub mod session;
 pub mod timestamp;
 pub mod tool;
@@ -20,18 +19,16 @@ pub mod types;
 
 pub use agent::{Agent, AgentOptions, AgentState, Phase};
 pub use agent_runtime::{
-    AbortedAgent, AgentRuntime, FinishLlmTransition, FinishedAgent, IdleAgent, ReadyAgent,
-    StreamingAgent, ToolTransition, Transition, UserInputDuringTools, WaitingToolsAgent,
+    AbortedAgent, AgentRuntime, CompactingAgent, ContinueTurnTransition, FinishLlmTransition,
+    FinishedAgent, IdleAgent, ReadyAgent, StartTurnTransition, StreamingAgent, ToolTransition,
+    Transition, UserInputDuringTools, WaitingToolsAgent,
 };
 pub use context::{AgentContext, LlmContext};
-pub use context_metadata::{
-    fallback_strategy, ContentKind, ProjectionOutcome, ProjectionShape, ProjectionStrategy,
-    ToolResultContext,
-};
 pub use context_projection::{
-    estimate_tokens, estimate_tokens_for_text, project, ApiUsageSnapshot, ContextProjectionBudget,
-    ContextProjectionReport, ContextProjectionState, ContextReplacement, ProjectionInput,
-    ProjectionOutput, ToolProjectionState,
+    build_llm_context_from_trimmed, count_message_chars, default_compaction_threshold,
+    default_microcompact_after_turns, estimate_tokens, estimate_tokens_for_text,
+    estimate_tokens_for_trimmed, projection_scan, projection_strategy, ChangeMarker,
+    ContextProjectionBudget, NewProjectionStrategy,
 };
 pub use events::{
     AgentAction, AgentEvent, CancelReason, ContentDelta, QueueMode, ThinkingLevel,
@@ -40,13 +37,11 @@ pub use events::{
 pub use llm::{LlmChunk, LlmError, LlmResult, Model, ModelCapabilities, ModelCost, ModelProvider};
 pub use message::StopReason;
 pub use message::{
-    AgentMessage, AssistantMessage, Content, ImageContent, TextContent, ToolCall,
-    ToolResultMessage, UserMessage,
+    AgentMessage, Artifacts, AssistantMessage, CompactionSummary, Content, ImageContent,
+    OriginalToolResult, ProjectedToolResult, TextContent, ToolCall, ToolResultMessage,
+    TrimmedMessage, UserMessage,
 };
-pub use session::{
-    apply_compaction, plan_compaction, BranchSummary, CompactionPlan, EntryKind, SessionEntry,
-    SessionError, SessionState, SessionStorage,
-};
+pub use session::{apply_compaction, build_summary_messages, plan_compaction, CompactionPlan};
 pub use tool::{ExecutionMode, ToolDefinition, ToolError, ToolResult, ToolRunMode};
 pub use types::{
     ApiName, JsonSchema, ModelId, ModelName, ProviderName, SessionId, ToolArguments, ToolCallId,

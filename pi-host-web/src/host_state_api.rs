@@ -1,11 +1,10 @@
-use wasm_bindgen::prelude::*;
 use super::*;
+use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = "createHostState")]
-pub fn create_host_state(budget: ContextProjectionBudget) -> CreateHostStateResult {
+pub fn create_host_state(_budget: ContextProjectionBudget) -> CreateHostStateResult {
     console_error_panic_hook::set_once();
-    let core_budget: pi_core::ContextProjectionBudget = try_conv!(budget.try_into());
-    let state = HostState::new(String::new(), core_budget);
+    let state = HostState::new(String::new(), String::new());
     let handle = put_host_state(state);
     ok(CreateHostStateOutput { handle })
 }
@@ -22,7 +21,16 @@ pub fn destroy_host_state(handle: u32) -> EmptyResult {
 #[wasm_bindgen(js_name = "getHostStatePersistData")]
 pub fn get_host_state_persist_data(handle: u32) -> HostStatePersistDataResult {
     console_error_panic_hook::set_once();
-    let result = with_host_state(handle, |state| state.get_persist_data(&pi_core::SessionState::default()));
+    let transcript: Vec<pi_core::TrimmedMessage> = vec![];
+    let artifacts: pi_core::Artifacts = std::collections::BTreeMap::new();
+    let result = with_host_state(handle, |state| {
+        state.get_persist_data(
+            &transcript,
+            &artifacts,
+            0,
+            &pi_core::ContextProjectionBudget::default(),
+        )
+    });
     match result {
         Ok(data) => {
             let dto_data: PersistData = try_conv!(data.try_into());
@@ -44,17 +52,37 @@ pub fn restore_host_state(data: PersistData) -> CreateHostStateResult {
 #[wasm_bindgen(js_name = "restoreHostStateFromJson")]
 pub fn restore_host_state_from_json(json: String) -> CreateHostStateResult {
     console_error_panic_hook::set_once();
-    // Try new format first
+    // Try new format
     if let Ok(data) = serde_json::from_str::<crate::host_state::PersistData>(&json) {
         let state = HostState::restore(data);
         let handle = put_host_state(state);
         return ok(CreateHostStateOutput { handle });
     }
-    // Try old format
-    if let Ok(old) = serde_json::from_str::<crate::dto::OldSessionState>(&json) {
-        let (state, _session_state) = HostState::migrate_from_old_session(old);
-        let handle = put_host_state(state);
-        return ok(CreateHostStateOutput { handle });
-    }
     err(&HostError::InvalidSessionJson)
+}
+
+// ---------------------------------------------------------------------------
+// Stateless utility functions
+// ---------------------------------------------------------------------------
+
+#[wasm_bindgen(js_name = "estimateTokens")]
+pub fn estimate_tokens_export(input: EstimateTokensInput) -> EstimateTokensResult {
+    console_error_panic_hook::set_once();
+
+    let core_messages: Vec<pi_core::AgentMessage> = try_conv!(input
+        .messages
+        .into_iter()
+        .map(|m| m.try_into())
+        .collect::<Result<Vec<_>, _>>());
+
+    let tokens = pi_core::estimate_tokens(&core_messages);
+    ok(EstimateTokensOutput { tokens })
+}
+
+#[wasm_bindgen(js_name = "estimateTokensForText")]
+pub fn estimate_tokens_for_text_export(text: String) -> EstimateTokensResult {
+    console_error_panic_hook::set_once();
+
+    let tokens = pi_core::estimate_tokens_for_text(&text);
+    ok(EstimateTokensOutput { tokens })
 }

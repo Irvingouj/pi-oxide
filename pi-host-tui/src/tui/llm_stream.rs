@@ -5,10 +5,10 @@ use ratatui::text::Text;
 
 use pi_core::{message::TokenUsage, timestamp};
 use pi_core::{
-    AgentRuntime, Content, LlmChunk, LlmError, LlmResult, StopReason,
-    TextContent, ToolArguments, ToolCallId, ToolName,
+    AgentRuntime, Content, LlmChunk, LlmError, LlmResult, StopReason, TextContent, ToolArguments,
+    ToolCallId, ToolName,
 };
-use pi_core::{ApiName, ApiUsageSnapshot, AssistantMessage, ContextProjectionReport, ModelId, ProviderName};
+use pi_core::{ApiName, AssistantMessage, ModelId, ProviderName};
 
 use crate::app::{App, ChatEntry};
 use crate::markdown;
@@ -18,16 +18,14 @@ impl App {
         &mut self,
         terminal: &mut ratatui::DefaultTerminal,
         context: pi_core::LlmContext,
-        report: ContextProjectionReport,
     ) {
         self.running = true;
         self.streaming_text.clear();
 
-        match self.llm_client.stream_sync(
-            &context.system_prompt,
-            &context.messages,
-            &context.tools,
-        ) {
+        match self
+            .llm_client
+            .stream_sync(&context.system_prompt, &context.messages, &context.tools)
+        {
             Ok(mut stream) => {
                 // Take streaming agent out so we can feed chunks directly without
                 // borrowing self.agent inside the loop.
@@ -68,9 +66,22 @@ impl App {
                         }
                     }
                     if self.cancelled {
-                        let transition = streaming.abort(std::mem::take(&mut self.session_state));
-                        self.session_state = transition.session_state;
-                        self.agent = Some(transition.state.into_runtime());
+                        let transcript = std::mem::take(&mut self.transcript);
+                        let artifacts = std::mem::take(&mut self.artifacts);
+                        let transition = streaming.abort(transcript, artifacts, self.turn_number);
+                        let (
+                            _events,
+                            _actions,
+                            runtime,
+                            transcript,
+                            artifacts,
+                            turn_number,
+                            _markers,
+                        ) = transition.into_parts();
+                        self.transcript = transcript;
+                        self.artifacts = artifacts;
+                        self.turn_number = turn_number;
+                        self.agent = Some(runtime.into_runtime());
                         self.running = false;
                         self.entries.push(ChatEntry::System("Cancelled.".into()));
                         let _ = terminal.draw(|f| self.render(f));
@@ -103,11 +114,6 @@ impl App {
                 let usage = stream.usage();
                 if let Some((input, output, total)) = usage {
                     self.last_usage = Some((input, output, total));
-                    let host_state = self.host_state.as_mut().unwrap();
-                    host_state.projection_state.last_api_usage = Some(ApiUsageSnapshot {
-                        estimated_tokens: report.estimated_tokens,
-                        actual_input_tokens: input as usize,
-                    });
                 }
 
                 let stop_reason = stream.stop_reason().unwrap_or("end_turn");
@@ -159,9 +165,16 @@ impl App {
                 };
 
                 let result = LlmResult::Ok(assistant_msg);
-                let transition = streaming.finish_llm(result, std::mem::take(&mut self.session_state));
-                let (_events, actions, runtime, session_state) = transition.into_parts();
-                self.session_state = session_state;
+                let transcript = std::mem::take(&mut self.transcript);
+                let artifacts = std::mem::take(&mut self.artifacts);
+                let budget = self.budget.clone();
+                let transition =
+                    streaming.finish_llm(result, transcript, artifacts, self.turn_number, &budget);
+                let (_events, actions, runtime, transcript, artifacts, turn_number, _markers) =
+                    transition.into_parts();
+                self.transcript = transcript;
+                self.artifacts = artifacts;
+                self.turn_number = turn_number;
                 self.agent = Some(runtime);
                 self.handle_actions(terminal, actions);
             }
@@ -175,15 +188,40 @@ impl App {
                     aborted: false,
                 };
                 let runtime = self.agent.take().unwrap();
-                let session_state = std::mem::take(&mut self.session_state);
-                let (_events, actions, new_runtime, session_state) = match runtime {
-                    AgentRuntime::Streaming(streaming) => {
-                        let transition = streaming.finish_llm(err_result, session_state);
-                        transition.into_parts()
-                    }
-                    other => (vec![], vec![], other, session_state),
-                };
-                self.session_state = session_state;
+                let transcript = std::mem::take(&mut self.transcript);
+                let artifacts = std::mem::take(&mut self.artifacts);
+                let (_events, actions, new_runtime, transcript, artifacts, turn_number, _markers) =
+                    match runtime {
+                        AgentRuntime::Streaming(streaming) => {
+                            let budget = self.budget.clone();
+                            let transition = streaming.finish_llm(
+                                err_result,
+                                transcript,
+                                artifacts,
+                                self.turn_number,
+                                &budget,
+                            );
+                            transition.into_parts()
+                        }
+                        AgentRuntime::Compacting(compacting) => {
+                            let (ev, act, state, transcript, artifacts, tn, m) = compacting
+                                .abort(transcript, artifacts, self.turn_number)
+                                .into_parts();
+                            (ev, act, state.into_runtime(), transcript, artifacts, tn, m)
+                        }
+                        other => (
+                            vec![],
+                            vec![],
+                            other,
+                            transcript,
+                            artifacts,
+                            self.turn_number,
+                            vec![],
+                        ),
+                    };
+                self.transcript = transcript;
+                self.artifacts = artifacts;
+                self.turn_number = turn_number;
                 self.agent = Some(new_runtime);
                 self.handle_actions(terminal, actions);
             }

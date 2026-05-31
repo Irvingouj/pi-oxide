@@ -3,13 +3,15 @@
 //! Each phase struct exposes only valid operations for that phase,
 //! making illegal state transitions a compile-time error in Rust hosts.
 //!
-//! The underlying [`Agent`] API is unchanged; this layer is additive.
+//! transcript (Vec<TrimmedMessage>) and artifacts (Artifacts) are owned by the host
+//! and flow through typestate method parameters and back via Transition.
 
 use crate::agent::{Agent, Phase};
+use crate::context_projection::{ChangeMarker, ContextProjectionBudget};
 use crate::events::{AgentAction, AgentEvent, CancelReason, ToolExecutionUpdate};
 use crate::llm::{LlmChunk, LlmResult};
-use crate::message::AgentMessage;
-use crate::session::SessionState;
+use crate::message::{AgentMessage, Artifacts, TrimmedMessage};
+use crate::session::CompactionPlan;
 use crate::tool::{ToolDefinition, ToolError, ToolResult};
 use crate::types::ToolCallId;
 
@@ -17,12 +19,49 @@ use crate::types::ToolCallId;
 // Transition types
 // ---------------------------------------------------------------------------
 
-/// A state change carrying events and actions.
+/// A state change carrying events, actions, markers, transcript, artifacts, and turn_number.
 pub struct Transition<T> {
     pub events: Vec<AgentEvent>,
     pub actions: Vec<AgentAction>,
     pub state: T,
-    pub session_state: SessionState,
+    pub transcript: Vec<TrimmedMessage>,
+    pub artifacts: Artifacts,
+    pub turn_number: u32,
+    pub markers: Vec<ChangeMarker>,
+}
+
+impl<T> Transition<T> {
+    /// Destructure into the 7-tuple of components.
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<AgentEvent>,
+        Vec<AgentAction>,
+        T,
+        Vec<TrimmedMessage>,
+        Artifacts,
+        u32,
+        Vec<ChangeMarker>,
+    ) {
+        let Transition {
+            events,
+            actions,
+            state,
+            transcript,
+            artifacts,
+            turn_number,
+            markers,
+        } = self;
+        (
+            events,
+            actions,
+            state,
+            transcript,
+            artifacts,
+            turn_number,
+            markers,
+        )
+    }
 }
 
 /// Outcome of finishing an LLM stream.
@@ -36,52 +75,82 @@ pub enum FinishLlmTransition {
 
 impl FinishLlmTransition {
     /// Destructure into the common parts regardless of which phase we land in.
-    pub fn into_parts(self) -> (Vec<AgentEvent>, Vec<AgentAction>, AgentRuntime, SessionState) {
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<AgentEvent>,
+        Vec<AgentAction>,
+        AgentRuntime,
+        Vec<TrimmedMessage>,
+        Artifacts,
+        u32,
+        Vec<ChangeMarker>,
+    ) {
         match self {
             FinishLlmTransition::MoreStreaming(t) => {
-                let Transition {
+                let (events, actions, state, transcript, artifacts, turn_number, markers) =
+                    t.into_parts();
+                (
                     events,
                     actions,
-                    state,
-                    session_state,
-                } = t;
-                (events, actions, state.into_runtime(), session_state)
+                    state.into_runtime(),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    markers,
+                )
             }
             FinishLlmTransition::WaitingTools(t) => {
-                let Transition {
+                let (events, actions, state, transcript, artifacts, turn_number, markers) =
+                    t.into_parts();
+                (
                     events,
                     actions,
-                    state,
-                    session_state,
-                } = t;
-                (events, actions, state.into_runtime(), session_state)
+                    state.into_runtime(),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    markers,
+                )
             }
             FinishLlmTransition::Ready(t) => {
-                let Transition {
+                let (events, actions, state, transcript, artifacts, turn_number, markers) =
+                    t.into_parts();
+                (
                     events,
                     actions,
-                    state,
-                    session_state,
-                } = t;
-                (events, actions, state.into_runtime(), session_state)
+                    state.into_runtime(),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    markers,
+                )
             }
             FinishLlmTransition::Finished(t) => {
-                let Transition {
+                let (events, actions, state, transcript, artifacts, turn_number, markers) =
+                    t.into_parts();
+                (
                     events,
                     actions,
-                    state,
-                    session_state,
-                } = t;
-                (events, actions, state.into_runtime(), session_state)
+                    state.into_runtime(),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    markers,
+                )
             }
             FinishLlmTransition::Aborted(t) => {
-                let Transition {
+                let (events, actions, state, transcript, artifacts, turn_number, markers) =
+                    t.into_parts();
+                (
                     events,
                     actions,
-                    state,
-                    session_state,
-                } = t;
-                (events, actions, state.into_runtime(), session_state)
+                    state.into_runtime(),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    markers,
+                )
             }
         }
     }
@@ -95,34 +164,154 @@ pub enum ToolTransition {
 }
 
 impl ToolTransition {
-    pub fn into_parts(self) -> (Vec<AgentEvent>, Vec<AgentAction>, AgentRuntime, SessionState) {
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<AgentEvent>,
+        Vec<AgentAction>,
+        AgentRuntime,
+        Vec<TrimmedMessage>,
+        Artifacts,
+        u32,
+        Vec<ChangeMarker>,
+    ) {
         match self {
             ToolTransition::WaitingTools(t) => {
-                let Transition {
+                let (events, actions, state, transcript, artifacts, turn_number, markers) =
+                    t.into_parts();
+                (
                     events,
                     actions,
-                    state,
-                    session_state,
-                } = t;
-                (events, actions, state.into_runtime(), session_state)
+                    state.into_runtime(),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    markers,
+                )
             }
             ToolTransition::Ready(t) => {
-                let Transition {
+                let (events, actions, state, transcript, artifacts, turn_number, markers) =
+                    t.into_parts();
+                (
                     events,
                     actions,
-                    state,
-                    session_state,
-                } = t;
-                (events, actions, state.into_runtime(), session_state)
+                    state.into_runtime(),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    markers,
+                )
             }
             ToolTransition::Finished(t) => {
-                let Transition {
+                let (events, actions, state, transcript, artifacts, turn_number, markers) =
+                    t.into_parts();
+                (
                     events,
                     actions,
-                    state,
-                    session_state,
-                } = t;
-                (events, actions, state.into_runtime(), session_state)
+                    state.into_runtime(),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    markers,
+                )
+            }
+        }
+    }
+}
+
+/// Outcome of starting a new turn.
+pub enum StartTurnTransition {
+    Streaming(Transition<StreamingAgent>),
+    Compacting(Transition<CompactingAgent>),
+}
+
+impl StartTurnTransition {
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<AgentEvent>,
+        Vec<AgentAction>,
+        AgentRuntime,
+        Vec<TrimmedMessage>,
+        Artifacts,
+        u32,
+        Vec<ChangeMarker>,
+    ) {
+        match self {
+            StartTurnTransition::Streaming(t) => {
+                let (events, actions, state, transcript, artifacts, turn_number, markers) =
+                    t.into_parts();
+                (
+                    events,
+                    actions,
+                    state.into_runtime(),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    markers,
+                )
+            }
+            StartTurnTransition::Compacting(t) => {
+                let (events, actions, state, transcript, artifacts, turn_number, markers) =
+                    t.into_parts();
+                (
+                    events,
+                    actions,
+                    state.into_runtime(),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    markers,
+                )
+            }
+        }
+    }
+}
+
+/// Outcome of continuing a turn.
+pub enum ContinueTurnTransition {
+    Streaming(Transition<StreamingAgent>),
+    Compacting(Transition<CompactingAgent>),
+}
+
+impl ContinueTurnTransition {
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<AgentEvent>,
+        Vec<AgentAction>,
+        AgentRuntime,
+        Vec<TrimmedMessage>,
+        Artifacts,
+        u32,
+        Vec<ChangeMarker>,
+    ) {
+        match self {
+            ContinueTurnTransition::Streaming(t) => {
+                let (events, actions, state, transcript, artifacts, turn_number, markers) =
+                    t.into_parts();
+                (
+                    events,
+                    actions,
+                    state.into_runtime(),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    markers,
+                )
+            }
+            ContinueTurnTransition::Compacting(t) => {
+                let (events, actions, state, transcript, artifacts, turn_number, markers) =
+                    t.into_parts();
+                (
+                    events,
+                    actions,
+                    state.into_runtime(),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    markers,
+                )
             }
         }
     }
@@ -155,6 +344,7 @@ impl UserInputDuringTools {
 pub enum AgentRuntime {
     Idle(IdleAgent),
     Streaming(StreamingAgent),
+    Compacting(CompactingAgent),
     WaitingTools(WaitingToolsAgent),
     ReadyToContinue(ReadyAgent),
     Finished(FinishedAgent),
@@ -173,8 +363,16 @@ impl AgentRuntime {
                 }
             }
             Phase::Streaming => AgentRuntime::Streaming(StreamingAgent { agent }),
+            Phase::Compacting => {
+                unreachable!("Compacting phase is only entered via typestate transitions")
+            }
             Phase::WaitForInput => AgentRuntime::ReadyToContinue(ReadyAgent { agent }),
         }
+    }
+
+    /// Wrap an agent that is in the compacting phase.
+    pub fn compacting(agent: Agent, plan: CompactionPlan) -> Self {
+        AgentRuntime::Compacting(CompactingAgent { agent, plan })
     }
 
     /// Construct from options (starts in Idle).
@@ -182,10 +380,16 @@ impl AgentRuntime {
         Self::from_agent(Agent::new(options))
     }
 
+    /// Initialize entry_counter from restored transcript/artifacts to avoid collisions.
+    pub fn initialize_entry_counter(&mut self, t: &[TrimmedMessage], a: &Artifacts) {
+        self.as_agent_mut().initialize_entry_counter(t, a);
+    }
+
     fn as_agent(&self) -> &Agent {
         match self {
             AgentRuntime::Idle(a) => &a.agent,
             AgentRuntime::Streaming(a) => &a.agent,
+            AgentRuntime::Compacting(a) => &a.agent,
             AgentRuntime::WaitingTools(a) => &a.agent,
             AgentRuntime::ReadyToContinue(a) => &a.agent,
             AgentRuntime::Finished(a) => &a.agent,
@@ -197,6 +401,7 @@ impl AgentRuntime {
         match self {
             AgentRuntime::Idle(a) => &mut a.agent,
             AgentRuntime::Streaming(a) => &mut a.agent,
+            AgentRuntime::Compacting(a) => &mut a.agent,
             AgentRuntime::WaitingTools(a) => &mut a.agent,
             AgentRuntime::ReadyToContinue(a) => &mut a.agent,
             AgentRuntime::Finished(a) => &mut a.agent,
@@ -219,6 +424,7 @@ impl AgentRuntime {
         match self {
             AgentRuntime::Idle(a) => a.agent,
             AgentRuntime::Streaming(a) => a.agent,
+            AgentRuntime::Compacting(a) => a.agent,
             AgentRuntime::WaitingTools(a) => a.agent,
             AgentRuntime::ReadyToContinue(a) => a.agent,
             AgentRuntime::Finished(a) => a.agent,
@@ -227,6 +433,7 @@ impl AgentRuntime {
     }
 
     /// Reset the agent back to an idle state regardless of current phase.
+    /// transcript/artifacts/turn_number get defaults (empty).
     pub fn reset(self) -> Self {
         let mut agent = self.into_agent();
         agent.reset();
@@ -261,15 +468,53 @@ impl IdleAgent {
         mut self,
         msg: AgentMessage,
         tools: Vec<ToolDefinition>,
-        mut session_state: SessionState,
-    ) -> Transition<StreamingAgent> {
-        let (events, actions) = self.agent.start_turn(msg, tools, &mut session_state);
-        Transition {
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+        budget: &ContextProjectionBudget,
+        compaction_prompt: &str,
+    ) -> StartTurnTransition {
+        let (events, actions, markers, transcript, turn_number) = self.agent.start_turn(
+            msg,
+            tools,
+            transcript,
+            turn_number,
+            budget,
+            compaction_prompt,
+        );
+
+        let maybe_plan = actions.iter().find_map(|a| {
+            if let AgentAction::Summarize { plan, .. } = a {
+                Some(plan.clone())
+            } else {
+                None
+            }
+        });
+
+        if let Some(plan) = maybe_plan {
+            return StartTurnTransition::Compacting(Transition {
+                events,
+                actions,
+                state: CompactingAgent {
+                    agent: self.agent,
+                    plan,
+                },
+                transcript,
+                artifacts,
+                turn_number,
+                markers,
+            });
+        }
+
+        StartTurnTransition::Streaming(Transition {
             events,
             actions,
             state: StreamingAgent { agent: self.agent },
-            session_state,
-        }
+            transcript,
+            artifacts,
+            turn_number,
+            markers,
+        })
     }
 
     pub fn steer(&mut self, message: AgentMessage) -> Vec<AgentEvent> {
@@ -280,13 +525,17 @@ impl IdleAgent {
         self.agent.follow_up(message)
     }
 
+    /// Reset returns transcript/artifacts as empty defaults.
     pub fn reset(mut self) -> Transition<IdleAgent> {
         self.agent.reset();
         Transition {
             events: vec![],
             actions: vec![],
             state: IdleAgent { agent: self.agent },
-            session_state: SessionState::default(),
+            transcript: vec![],
+            artifacts: Artifacts::new(),
+            turn_number: 0,
+            markers: vec![],
         }
     }
 
@@ -312,8 +561,17 @@ impl StreamingAgent {
         self.agent.feed_llm_chunk(chunk)
     }
 
-    pub fn finish_llm(mut self, result: LlmResult, mut session_state: SessionState) -> FinishLlmTransition {
-        let (events, actions) = self.agent.on_llm_done(result, &mut session_state);
+    pub fn finish_llm(
+        mut self,
+        result: LlmResult,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+        budget: &ContextProjectionBudget,
+    ) -> FinishLlmTransition {
+        let (events, actions, markers, transcript, artifacts) =
+            self.agent
+                .on_llm_done(result, transcript, artifacts, turn_number, budget);
 
         // Abort / error path
         if self.agent.state().error_message.is_some() {
@@ -321,7 +579,10 @@ impl StreamingAgent {
                 events,
                 actions,
                 state: AbortedAgent { agent: self.agent },
-                session_state,
+                transcript,
+                artifacts,
+                turn_number,
+                markers,
             });
         }
 
@@ -334,11 +595,14 @@ impl StreamingAgent {
                 events,
                 actions,
                 state: StreamingAgent { agent: self.agent },
-                session_state,
+                transcript,
+                artifacts,
+                turn_number,
+                markers,
             });
         }
 
-        // Tool execution requested — host decides sync vs async; core always waits
+        // Tool execution requested
         if actions
             .iter()
             .any(|a| matches!(a, AgentAction::ExecuteTools { .. }))
@@ -347,20 +611,24 @@ impl StreamingAgent {
                 events,
                 actions,
                 state: WaitingToolsAgent { agent: self.agent },
-                session_state,
+                transcript,
+                artifacts,
+                turn_number,
+                markers,
             });
         }
 
         // Turn finished without tools
-        let is_finished = actions
-            .iter()
-            .any(|a| matches!(a, AgentAction::Finished { .. }));
+        let is_finished = actions.iter().any(|a| matches!(a, AgentAction::Finished));
         if is_finished {
             return FinishLlmTransition::Finished(Transition {
                 events,
                 actions,
                 state: FinishedAgent { agent: self.agent },
-                session_state,
+                transcript,
+                artifacts,
+                turn_number,
+                markers,
             });
         }
 
@@ -369,17 +637,28 @@ impl StreamingAgent {
             events,
             actions,
             state: ReadyAgent { agent: self.agent },
-            session_state,
+            transcript,
+            artifacts,
+            turn_number,
+            markers,
         })
     }
 
-    pub fn abort(mut self, session_state: SessionState) -> Transition<AbortedAgent> {
+    pub fn abort(
+        mut self,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+    ) -> Transition<AbortedAgent> {
         let events = self.agent.abort();
         Transition {
             events,
             actions: vec![],
             state: AbortedAgent { agent: self.agent },
-            session_state,
+            transcript,
+            artifacts,
+            turn_number,
+            markers: vec![],
         }
     }
 
@@ -405,19 +684,23 @@ impl WaitingToolsAgent {
         mut self,
         id: ToolCallId,
         result: Result<ToolResult, ToolError>,
-        mut session_state: SessionState,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
     ) -> ToolTransition {
-        let (events, actions) = self.agent.on_tool_done(id, result, &mut session_state);
+        let (events, actions, markers, transcript, artifacts) =
+            self.agent
+                .on_tool_done(id, result, transcript, artifacts, turn_number);
 
-        if actions
-            .iter()
-            .any(|a| matches!(a, AgentAction::Finished { .. }))
-        {
+        if actions.iter().any(|a| matches!(a, AgentAction::Finished)) {
             return ToolTransition::Finished(Transition {
                 events,
                 actions,
                 state: FinishedAgent { agent: self.agent },
-                session_state,
+                transcript,
+                artifacts,
+                turn_number,
+                markers,
             });
         }
 
@@ -426,7 +709,10 @@ impl WaitingToolsAgent {
                 events,
                 actions,
                 state: ReadyAgent { agent: self.agent },
-                session_state,
+                transcript,
+                artifacts,
+                turn_number: turn_number + 1,
+                markers,
             });
         }
 
@@ -434,7 +720,10 @@ impl WaitingToolsAgent {
             events,
             actions,
             state: WaitingToolsAgent { agent: self.agent },
-            session_state,
+            transcript,
+            artifacts,
+            turn_number,
+            markers,
         })
     }
 
@@ -446,18 +735,27 @@ impl WaitingToolsAgent {
         self.agent.on_tool_started(id)
     }
 
-    pub fn cancel_tool(mut self, id: ToolCallId, reason: CancelReason, mut session_state: SessionState) -> ToolTransition {
-        let (events, actions) = self.agent.on_tool_cancelled(id, reason, &mut session_state);
+    pub fn cancel_tool(
+        mut self,
+        id: ToolCallId,
+        reason: CancelReason,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+    ) -> ToolTransition {
+        let (events, actions, markers, transcript, artifacts) =
+            self.agent
+                .on_tool_cancelled(id, reason, transcript, artifacts, turn_number);
 
-        if actions
-            .iter()
-            .any(|a| matches!(a, AgentAction::Finished { .. }))
-        {
+        if actions.iter().any(|a| matches!(a, AgentAction::Finished)) {
             return ToolTransition::Finished(Transition {
                 events,
                 actions,
                 state: FinishedAgent { agent: self.agent },
-                session_state,
+                transcript,
+                artifacts,
+                turn_number,
+                markers,
             });
         }
 
@@ -466,7 +764,10 @@ impl WaitingToolsAgent {
                 events,
                 actions,
                 state: ReadyAgent { agent: self.agent },
-                session_state,
+                transcript,
+                artifacts,
+                turn_number,
+                markers,
             });
         }
 
@@ -474,25 +775,33 @@ impl WaitingToolsAgent {
             events,
             actions,
             state: WaitingToolsAgent { agent: self.agent },
-            session_state,
+            transcript,
+            artifacts,
+            turn_number,
+            markers,
         })
     }
 
     pub fn submit_user_message(&mut self, msg: AgentMessage) -> UserInputDuringTools {
-        // Simple heuristic: user messages sent while tools are pending
-        // are treated as follow-up queue entries.
-        // Future refinement: inspect msg intent for steering vs interrupt.
         self.agent.follow_up(msg);
         UserInputDuringTools::QueuedFollowUp(vec![])
     }
 
-    pub fn abort(mut self, session_state: SessionState) -> Transition<AbortedAgent> {
+    pub fn abort(
+        mut self,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+    ) -> Transition<AbortedAgent> {
         let events = self.agent.abort();
         Transition {
             events,
             actions: vec![],
             state: AbortedAgent { agent: self.agent },
-            session_state,
+            transcript,
+            artifacts,
+            turn_number,
+            markers: vec![],
         }
     }
 
@@ -514,32 +823,84 @@ impl ReadyAgent {
         self.agent
     }
 
-    pub fn continue_turn(mut self, mut session_state: SessionState) -> Transition<StreamingAgent> {
-        let (events, actions) = self.agent.continue_turn(&mut session_state);
-        Transition {
+    pub fn continue_turn(
+        mut self,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+        budget: &ContextProjectionBudget,
+        compaction_prompt: &str,
+    ) -> ContinueTurnTransition {
+        let (events, actions, markers, transcript) =
+            self.agent
+                .continue_turn(transcript, turn_number, budget, compaction_prompt);
+
+        let maybe_plan = actions.iter().find_map(|a| {
+            if let AgentAction::Summarize { plan, .. } = a {
+                Some(plan.clone())
+            } else {
+                None
+            }
+        });
+
+        if let Some(plan) = maybe_plan {
+            return ContinueTurnTransition::Compacting(Transition {
+                events,
+                actions,
+                state: CompactingAgent {
+                    agent: self.agent,
+                    plan,
+                },
+                transcript,
+                artifacts,
+                turn_number,
+                markers,
+            });
+        }
+
+        ContinueTurnTransition::Streaming(Transition {
             events,
             actions,
             state: StreamingAgent { agent: self.agent },
-            session_state,
-        }
+            transcript,
+            artifacts,
+            turn_number,
+            markers,
+        })
     }
 
-    pub fn wait_for_input(self, session_state: SessionState) -> Transition<IdleAgent> {
+    pub fn wait_for_input(
+        self,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+    ) -> Transition<IdleAgent> {
         Transition {
             events: vec![],
             actions: vec![],
             state: IdleAgent { agent: self.agent },
-            session_state,
+            transcript,
+            artifacts,
+            turn_number,
+            markers: vec![],
         }
     }
 
-    pub fn abort(mut self, session_state: SessionState) -> Transition<AbortedAgent> {
+    pub fn abort(
+        mut self,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+    ) -> Transition<AbortedAgent> {
         let events = self.agent.abort();
         Transition {
             events,
             actions: vec![],
             state: AbortedAgent { agent: self.agent },
-            session_state,
+            transcript,
+            artifacts,
+            turn_number,
+            markers: vec![],
         }
     }
 
@@ -569,22 +930,30 @@ impl FinishedAgent {
         self.agent
     }
 
+    /// Reset returns transcript/artifacts as empty defaults.
     pub fn restart(mut self) -> Transition<IdleAgent> {
         self.agent.reset();
         Transition {
             events: vec![],
             actions: vec![],
             state: IdleAgent { agent: self.agent },
-            session_state: SessionState::default(),
+            transcript: vec![],
+            artifacts: Artifacts::new(),
+            turn_number: 0,
+            markers: vec![],
         }
     }
 
     /// Transition back to Idle without clearing conversation history.
-    /// Used when the host wants to start a new turn after the previous one finished.
-    pub fn into_idle(self, session_state: SessionState) -> (IdleAgent, SessionState) {
+    pub fn into_idle(
+        self,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+    ) -> (IdleAgent, Vec<TrimmedMessage>, Artifacts, u32) {
         let mut agent = self.agent;
         agent.turn_tools.clear();
-        (IdleAgent { agent }, session_state)
+        (IdleAgent { agent }, transcript, artifacts, turn_number)
     }
 
     pub fn into_runtime(self) -> AgentRuntime {
@@ -605,25 +974,93 @@ impl AbortedAgent {
         self.agent
     }
 
+    /// Reset returns transcript/artifacts as empty defaults.
     pub fn restart(mut self) -> Transition<IdleAgent> {
         self.agent.reset();
         Transition {
             events: vec![],
             actions: vec![],
             state: IdleAgent { agent: self.agent },
-            session_state: SessionState::default(),
+            transcript: vec![],
+            artifacts: Artifacts::new(),
+            turn_number: 0,
+            markers: vec![],
         }
     }
 
     /// Transition back to Idle without clearing conversation history.
-    /// Used when the host wants to start a new turn after an abort/error.
-    pub fn into_idle(self, session_state: SessionState) -> (IdleAgent, SessionState) {
+    pub fn into_idle(
+        self,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+    ) -> (IdleAgent, Vec<TrimmedMessage>, Artifacts, u32) {
         let mut agent = self.agent;
         agent.turn_tools.clear();
-        (IdleAgent { agent }, session_state)
+        (IdleAgent { agent }, transcript, artifacts, turn_number)
     }
 
     pub fn into_runtime(self) -> AgentRuntime {
         AgentRuntime::Aborted(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CompactingAgent — waiting for host to run summarization LLM
+// ---------------------------------------------------------------------------
+
+pub struct CompactingAgent {
+    pub(crate) agent: Agent,
+    pub(crate) plan: CompactionPlan,
+}
+
+impl CompactingAgent {
+    pub fn into_agent(self) -> Agent {
+        self.agent
+    }
+
+    pub fn accept_summary(
+        mut self,
+        summary_text: String,
+        transcript: Vec<TrimmedMessage>,
+        mut artifacts: Artifacts,
+        turn_number: u32,
+        _budget: &ContextProjectionBudget,
+    ) -> Transition<StreamingAgent> {
+        let (events, actions, mut markers, transcript) =
+            self.agent
+                .accept_summary(summary_text, transcript, &mut artifacts, &self.plan);
+        markers.push(ChangeMarker::CompactionApplied);
+        Transition {
+            events,
+            actions,
+            state: StreamingAgent { agent: self.agent },
+            transcript,
+            artifacts,
+            turn_number,
+            markers,
+        }
+    }
+
+    pub fn abort(
+        mut self,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+    ) -> Transition<AbortedAgent> {
+        let events = self.agent.abort();
+        Transition {
+            events,
+            actions: vec![],
+            state: AbortedAgent { agent: self.agent },
+            transcript,
+            artifacts,
+            turn_number,
+            markers: vec![],
+        }
+    }
+
+    pub fn into_runtime(self) -> AgentRuntime {
+        AgentRuntime::Compacting(self)
     }
 }

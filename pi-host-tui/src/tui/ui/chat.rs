@@ -128,7 +128,7 @@ impl App {
         let mut spans = parts;
 
         if let Some((input, output, _total)) = self.last_usage {
-            let budget = &self.host_state.as_ref().unwrap().budget;
+            let budget = &pi_core::ContextProjectionBudget::default();
             let ctx_pct = if budget.max_context_tokens > 0 {
                 let est = (input as f64 / budget.max_context_tokens as f64 * 100.0) as u16;
                 est.min(100)

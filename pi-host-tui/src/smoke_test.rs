@@ -5,8 +5,8 @@ mod tests {
     use std::path::Path;
 
     use pi_core::{
-        AgentMessage, AgentOptions, AgentRuntime, Model, ModelCapabilities, ModelCost, ModelId,
-        ModelName, ProviderName, SessionState, ToolDefinition,
+        AgentMessage, AgentOptions, AgentRuntime, Artifacts, Model, ModelCapabilities, ModelCost,
+        ModelId, ModelName, ProviderName, TrimmedMessage,
     };
 
     use crate::extension::{BashExtension, BuiltinExtension, Extension, ExtensionContext};
@@ -32,7 +32,7 @@ mod tests {
         }
     }
 
-    fn build_tools() -> Vec<ToolDefinition> {
+    fn build_tools() -> Vec<pi_core::ToolDefinition> {
         let mut defs = BuiltinExtension::new().tools();
         defs.extend(BashExtension::new().tools());
         defs
@@ -60,30 +60,36 @@ mod tests {
             follow_up_mode: Default::default(),
             tool_execution_mode: Default::default(),
             session_id: None,
-            messages: vec![],
-            session_state: None,
         };
         let tools = build_tools();
+        let budget = pi_core::ContextProjectionBudget::default();
 
-        let mut runtime = AgentRuntime::new(options);
-        let mut session_state = SessionState::default();
+        let runtime = AgentRuntime::new(options);
 
         // Start turn
         let AgentRuntime::Idle(idle) = runtime else {
             panic!("expected Idle");
         };
-        let t = idle.start_turn(
-            AgentMessage::user("run 'sleep 1 && echo hello from bash'"),
-            tools,
-            session_state,
-        );
-        println!("start_turn events: {:?}", t.events);
-        println!("start_turn actions: {:?}", t.actions);
-        session_state = t.session_state;
-        runtime = t.state.into_runtime();
+        let transcript: Vec<TrimmedMessage> = vec![];
+        let artifacts: Artifacts = Artifacts::new();
+        let turn_number: u32 = 0;
+        let (events, actions, runtime, mut transcript, mut artifacts, mut turn_number, _markers) =
+            idle.start_turn(
+                AgentMessage::user("run 'sleep 1 && echo hello from bash'"),
+                tools,
+                transcript,
+                artifacts,
+                turn_number,
+                &budget,
+                "",
+            )
+            .into_parts();
+        let mut runtime: Option<AgentRuntime> = Some(runtime);
+        println!("start_turn events: {:?}", events);
+        println!("start_turn actions: {:?}", actions);
 
         // Expect StreamLlm
-        let context = match t.actions.into_iter().next() {
+        let context = match actions.into_iter().next() {
             Some(pi_core::AgentAction::StreamLlm { context, .. }) => context,
             other => panic!("expected StreamLlm, got {:?}", other),
         };
@@ -145,14 +151,30 @@ mod tests {
             usage: pi_core::message::TokenUsage::default(),
         };
 
-        let (events, actions, new_runtime, new_session_state) = match runtime {
+        let (
+            events,
+            actions,
+            new_runtime,
+            new_transcript,
+            new_artifacts,
+            new_turn_number,
+            _markers,
+        ) = match runtime.take().unwrap() {
             AgentRuntime::Streaming(streaming) => streaming
-                .finish_llm(pi_core::LlmResult::Ok(assistant_msg), session_state)
+                .finish_llm(
+                    pi_core::LlmResult::Ok(assistant_msg),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    &budget,
+                )
                 .into_parts(),
             _ => panic!("expected Streaming, got non-Streaming AgentRuntime"),
         };
-        runtime = new_runtime;
-        session_state = new_session_state;
+        runtime = Some(new_runtime);
+        transcript = new_transcript;
+        artifacts = new_artifacts;
+        turn_number = new_turn_number;
         println!("finish_llm events: {:?}", events);
         println!("finish_llm actions: {:?}", actions);
 
@@ -177,27 +199,28 @@ mod tests {
                         match outcome {
                             crate::extension::ExtensionOutcome::Complete(result) => {
                                 println!("Sync tool result: {:?}", result);
-                                runtime = match runtime {
+                                let next = match runtime.take().unwrap() {
                                     AgentRuntime::WaitingTools(waiting) => {
-                                        let transition =
-                                            waiting.on_tool_done(call.id.clone(), result, session_state);
-                                        match transition {
-                                            pi_core::ToolTransition::Ready(t) => {
-                                                session_state = t.session_state;
-                                                t.state.into_runtime()
-                                            }
-                                            pi_core::ToolTransition::Finished(t) => {
-                                                session_state = t.session_state;
-                                                t.state.into_runtime()
-                                            }
-                                            pi_core::ToolTransition::WaitingTools(t) => {
-                                                session_state = t.session_state;
-                                                t.state.into_runtime()
-                                            }
-                                        }
+                                        let transition = waiting.on_tool_done(
+                                            call.id.clone(),
+                                            result,
+                                            transcript,
+                                            artifacts,
+                                            turn_number,
+                                        );
+                                        Some(transition.into_parts())
                                     }
-                                    other => other,
+                                    other => {
+                                        runtime = Some(other);
+                                        continue;
+                                    }
                                 };
+                                let (_ev, _act, new_runtime, new_transcript, new_artifacts, tn, _m) =
+                                    next.unwrap();
+                                runtime = Some(new_runtime);
+                                turn_number = tn;
+                                transcript = new_transcript;
+                                artifacts = new_artifacts;
                             }
                             crate::extension::ExtensionOutcome::Running(stream) => {
                                 running_tasks.push((
@@ -226,26 +249,28 @@ mod tests {
                         }
                         crate::extension::ToolEvent::Done(result) => {
                             println!("Tool done: {} {:?}", name, result);
-                            runtime = match runtime {
+                            let next = match runtime.take().unwrap() {
                                 AgentRuntime::WaitingTools(waiting) => {
-                                    let transition = waiting.on_tool_done(id.clone(), result, session_state);
-                                    match transition {
-                                        pi_core::ToolTransition::WaitingTools(t) => {
-                                            session_state = t.session_state;
-                                            t.state.into_runtime()
-                                        }
-                                        pi_core::ToolTransition::Ready(t) => {
-                                            session_state = t.session_state;
-                                            t.state.into_runtime()
-                                        }
-                                        pi_core::ToolTransition::Finished(t) => {
-                                            session_state = t.session_state;
-                                            t.state.into_runtime()
-                                        }
-                                    }
+                                    let transition = waiting.on_tool_done(
+                                        id.clone(),
+                                        result,
+                                        transcript,
+                                        artifacts,
+                                        turn_number,
+                                    );
+                                    Some(transition.into_parts())
                                 }
-                                other => other,
+                                other => {
+                                    runtime = Some(other);
+                                    continue;
+                                }
                             };
+                            let (_ev, _act, new_runtime, new_transcript, new_artifacts, tn, _m) =
+                                next.unwrap();
+                            runtime = Some(new_runtime);
+                            turn_number = tn;
+                            transcript = new_transcript;
+                            artifacts = new_artifacts;
                             done = true;
                         }
                     }
@@ -263,16 +288,22 @@ mod tests {
         );
 
         // Auto-continue
-        let actions = match runtime {
+        let actions = match runtime.take().unwrap() {
             AgentRuntime::ReadyToContinue(ready) => {
-                let transition = ready.continue_turn(session_state);
-                println!("continue_turn events: {:?}", transition.events);
-                println!("continue_turn actions: {:?}", transition.actions);
-                session_state = transition.session_state;
-                runtime = transition.state.into_runtime();
-                transition.actions
+                let (events, actions, new_runtime, new_transcript, new_artifacts, tn, _markers) =
+                    ready
+                        .continue_turn(transcript, artifacts, turn_number, &budget, "")
+                        .into_parts();
+                println!("continue_turn events: {:?}", events);
+                println!("continue_turn actions: {:?}", actions);
+                runtime = Some(new_runtime);
+                turn_number = tn;
+                transcript = new_transcript;
+                artifacts = new_artifacts;
+                actions
             }
-            _ => {
+            other => {
+                runtime = Some(other);
                 println!(
                     "Not ReadyToContinue after tools: agent runtime not in ReadyToContinue state"
                 );
@@ -299,7 +330,6 @@ mod tests {
         }
 
         // Suppress unused warnings at end of test
-        let _ = runtime;
-        let _ = session_state;
+        let _ = runtime; // Option<AgentRuntime>
     }
 }

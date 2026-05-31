@@ -60,8 +60,10 @@ pub enum AgentAction {
     WaitForInput {
         mode: WaitMode,
     },
-    Finished {
-        messages: Vec<AgentMessage>,
+    Finished,
+    Summarize {
+        context: crate::context::LlmContext,
+        plan: crate::session::CompactionPlan,
     },
 }
 
@@ -70,9 +72,7 @@ pub enum AgentAction {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
     AgentStart,
-    AgentEnd {
-        messages: Vec<AgentMessage>,
-    },
+    AgentEnd,
     TurnStart,
     TurnEnd {
         message: AgentMessage,

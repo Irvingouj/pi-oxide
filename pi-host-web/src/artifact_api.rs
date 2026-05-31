@@ -1,13 +1,13 @@
-use crate::{
-    dto::ArtifactSearchResults,
-    handle_table::with_host_agent,
-};
+use crate::{dto::ArtifactSearchResults, handle_table::with_host_agent};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = "hostReadArtifact")]
 pub fn host_read_artifact(handle: u32, artifact_id: String) -> Result<String, JsValue> {
     let result = with_host_agent(handle, |host_agent| {
-        host_agent.host_state.read_artifact(&artifact_id).map(|s| s.to_string())
+        host_agent
+            .host_state
+            .read_artifact(&artifact_id)
+            .map(|s| s.to_string())
     });
     match result {
         Ok(Some(text)) => Ok(text),

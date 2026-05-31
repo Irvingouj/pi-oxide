@@ -3,38 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use tsify::Tsify;
 
-use pi_core::{
-    AgentMessage, CompactionPlan, Content, ContextProjectionBudget, ContextProjectionReport,
-    ContextProjectionState, SessionEntry, TextContent,
-};
-
-use crate::dto::OldSessionState;
+use pi_core::{Artifacts, ContextProjectionBudget, TrimmedMessage};
 
 const MAX_ARTIFACTS: usize = 1000;
-
-/// Extract the text content from a ToolResult message matching the given tool_call_id.
-fn extract_tool_result_text(messages: &[AgentMessage], tool_call_id: &str) -> Option<String> {
-    for msg in messages {
-        if let AgentMessage::ToolResult(tr) = msg {
-            if tr.tool_call_id.as_str() == tool_call_id {
-                let text = tr
-                    .content
-                    .iter()
-                    .filter_map(|c| {
-                        if let Content::Text(TextContent { text }) = c {
-                            Some(text.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                return Some(text);
-            }
-        }
-    }
-    None
-}
 
 /// Search result for a single artifact match.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
@@ -49,66 +20,33 @@ pub struct ArtifactSearchResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct PersistData {
-    pub entries: Vec<SessionEntry>,
-    pub leaf_id: String,
-    pub name: String,
-    pub projection_state: ContextProjectionState,
-    pub artifacts: Vec<(String, String)>,
+    #[serde(rename = "T")]
+    pub transcript: Vec<TrimmedMessage>,
+    #[serde(rename = "A")]
+    pub artifacts: Artifacts,
+    pub turn_number: u32,
+    pub host_artifacts: Vec<(String, String)>,
     pub budget: ContextProjectionBudget,
     pub system_prompt: String,
+    pub compaction_prompt: String,
 }
 
 /// Owns all host-side state: projection state, artifacts, and budget.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostState {
     pub system_prompt: String,
-    pub projection_state: ContextProjectionState,
+    pub compaction_prompt: String,
     pub artifacts: BTreeMap<String, String>,
-    pub budget: ContextProjectionBudget,
-    /// Compaction plans emitted with `Compact` directives, keyed by compact_up_to entry id.
-    pub pending_compaction_plans: Vec<(String, pi_core::CompactionPlan)>,
 }
 
 impl HostState {
-    /// Initialize with empty state and the given budget.
-    pub fn new(system_prompt: String, budget: ContextProjectionBudget) -> Self {
+    /// Initialize with empty state.
+    pub fn new(system_prompt: String, compaction_prompt: String) -> Self {
         Self {
             system_prompt,
-            projection_state: ContextProjectionState::default(),
+            compaction_prompt,
             artifacts: BTreeMap::new(),
-            budget,
-            pending_compaction_plans: Vec::new(),
         }
-    }
-
-    /// Run context projection using the current state and budget.
-    ///
-    /// Updates `self.projection_state` and stores the original tool result text
-    /// for every replacement in the artifact store.
-    pub fn project(
-        &mut self,
-        system_prompt: &str,
-        messages: &[AgentMessage],
-    ) -> (Vec<AgentMessage>, ContextProjectionReport) {
-        let input = pi_core::ProjectionInput {
-            system_prompt: system_prompt.to_string(),
-            messages: messages.to_vec(),
-            budget: self.budget.clone(),
-            state: self.projection_state.clone(),
-        };
-        let output = pi_core::project(input);
-        self.projection_state = output.updated_state;
-
-        // Store original tool result text for every replacement.
-        for replacement in &output.report.replacements {
-            let text =
-                extract_tool_result_text(messages, &replacement.tool_call_id).unwrap_or_default();
-            self.artifacts
-                .entry(replacement.artifact_id.clone())
-                .or_insert(text);
-        }
-
-        (output.projected_messages, output.report)
     }
 
     /// Store the full text of an artifact. Evicts the oldest entry when over
@@ -154,15 +92,25 @@ impl HostState {
     }
 
     /// Serialize host state for persistence.
-    pub fn get_persist_data(&self, session_state: &pi_core::SessionState) -> PersistData {
+    pub fn get_persist_data(
+        &self,
+        transcript: &[TrimmedMessage],
+        artifacts: &Artifacts,
+        turn_number: u32,
+        budget: &ContextProjectionBudget,
+    ) -> PersistData {
         PersistData {
-            entries: session_state.entries.clone(),
-            leaf_id: session_state.leaf_id.clone(),
-            name: session_state.name.clone(),
-            projection_state: self.projection_state.clone(),
-            artifacts: self.artifacts.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-            budget: self.budget.clone(),
+            transcript: transcript.to_vec(),
+            artifacts: artifacts.clone(),
+            turn_number,
+            host_artifacts: self
+                .artifacts
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            budget: budget.clone(),
             system_prompt: self.system_prompt.clone(),
+            compaction_prompt: self.compaction_prompt.clone(),
         }
     }
 
@@ -170,59 +118,15 @@ impl HostState {
     pub fn restore(data: PersistData) -> Self {
         Self {
             system_prompt: data.system_prompt,
-            projection_state: data.projection_state,
-            artifacts: data.artifacts.into_iter().collect(),
-            budget: data.budget,
-            pending_compaction_plans: Vec::new(),
+            compaction_prompt: data.compaction_prompt,
+            artifacts: data.host_artifacts.into_iter().collect(),
         }
-    }
-
-    /// Migrate from old session JSON that had `projection_state` and `artifacts`
-    /// nested inside the `SessionState` object.
-    pub fn migrate_from_old_session(old: OldSessionState) -> (Self, pi_core::SessionState) {
-        let host_state = Self {
-            system_prompt: String::new(),
-            projection_state: old.projection_state.unwrap_or_default().try_into().unwrap(),
-            artifacts: old.artifacts.into_iter().map(|a| (a.id, a.text)).collect(),
-            budget: ContextProjectionBudget::default(),
-            pending_compaction_plans: Vec::new(),
-        };
-        let session_state = pi_core::SessionState {
-            entries: old.entries.into_iter().map(|e| e.try_into().unwrap()).collect(),
-            leaf_id: old.leaf_id,
-            name: old.name,
-        };
-        (host_state, session_state)
-    }
-
-    /// Try to deserialize and migrate from old session JSON format.
-    pub fn try_migrate_old_session(json: &str) -> Option<(Self, pi_core::SessionState)> {
-        let old: OldSessionState = serde_json::from_str(json).ok()?;
-        Some(Self::migrate_from_old_session(old))
-    }
-
-    /// Plan which entries to compact based on the current budget.
-    pub fn plan_compaction(&self, entries: &[SessionEntry]) -> Option<CompactionPlan> {
-        pi_core::plan_compaction(entries, &self.budget)
-    }
-
-    /// Apply a compaction plan to entries and return the new entries.
-    pub fn accept_compaction(&self, entries: Vec<SessionEntry>, plan: CompactionPlan, summary: String) -> Vec<SessionEntry> {
-        pi_core::apply_compaction(entries, plan, summary)
-    }
-
-    /// Check whether a projection report signals that compaction is needed.
-    pub fn detect_needs_compaction(&self, report: &ContextProjectionReport) -> bool {
-        report.needs_compaction
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pi_core::{
-        AgentMessage, ContextProjectionBudget, ContextProjectionState, EntryKind, SessionEntry,
-    };
 
     fn default_budget() -> ContextProjectionBudget {
         ContextProjectionBudget {
@@ -233,38 +137,17 @@ mod tests {
         }
     }
 
-    fn empty_entry(id: &str, parent_id: Option<&str>) -> SessionEntry {
-        SessionEntry {
-            id: id.to_string(),
-            parent_id: parent_id.map(|s| s.to_string()),
-            kind: EntryKind::Message {
-                message: AgentMessage::user(""),
-            },
-            timestamp: 0,
-        }
-    }
-
     #[test]
     fn host_state_new_default() {
-        let state = HostState::new(String::new(), default_budget());
-        assert_eq!(state.projection_state, ContextProjectionState::default());
+        let state = HostState::new(String::new(), String::new());
         assert!(state.artifacts.is_empty());
-    }
-
-    #[test]
-    fn host_state_projection_lifecycle() {
-        let mut state = HostState::new(String::new(), default_budget());
-        let messages = vec![AgentMessage::user("hello")];
-        let (projected, report) = state.project("You are helpful.", &messages);
-        assert!(!projected.is_empty());
-        assert!(report.estimated_tokens > 0);
-        // projection_state should be updated (current_turn derived from messages)
-        assert_eq!(state.projection_state.current_turn, 0);
+        assert_eq!(state.system_prompt, "");
+        assert_eq!(state.compaction_prompt, "");
     }
 
     #[test]
     fn host_state_artifact_store() {
-        let mut state = HostState::new(String::new(), default_budget());
+        let mut state = HostState::new(String::new(), String::new());
         state.store_artifact("art-1".to_string(), "hello world".to_string());
         assert_eq!(state.read_artifact("art-1"), Some("hello world"));
         assert_eq!(state.read_artifact("missing"), None);
@@ -272,7 +155,7 @@ mod tests {
 
     #[test]
     fn host_state_artifact_eviction() {
-        let mut state = HostState::new(String::new(), default_budget());
+        let mut state = HostState::new(String::new(), String::new());
         for i in 0..1002 {
             state.store_artifact(format!("art-{i:04}"), "x".to_string());
         }
@@ -285,7 +168,7 @@ mod tests {
 
     #[test]
     fn host_state_artifact_read() {
-        let mut state = HostState::new(String::new(), default_budget());
+        let mut state = HostState::new(String::new(), String::new());
         state.store_artifact("a1".to_string(), "text content".to_string());
         assert_eq!(state.read_artifact("a1"), Some("text content"));
         assert_eq!(state.read_artifact("a2"), None);
@@ -293,7 +176,7 @@ mod tests {
 
     #[test]
     fn host_state_artifact_search() {
-        let mut state = HostState::new(String::new(), default_budget());
+        let mut state = HostState::new(String::new(), String::new());
         state.store_artifact("a1".to_string(), "the quick brown fox".to_string());
         state.store_artifact("a2".to_string(), "lazy dog sleeping".to_string());
         let results = state.search_artifacts("quick");
@@ -304,146 +187,36 @@ mod tests {
     }
 
     #[test]
-    fn host_state_budget_from_config() {
-        let budget = ContextProjectionBudget {
-            max_tool_result_chars: 42,
-            max_context_tokens: 1000,
-            microcompact_after_turns: 3,
-            compaction_threshold: 0.5,
-        };
-        let state = HostState::new(String::new(), budget.clone());
-        assert_eq!(state.budget.max_tool_result_chars, 42);
-        assert_eq!(state.budget.max_context_tokens, 1000);
-        assert_eq!(state.budget.microcompact_after_turns, 3);
-        assert_eq!(state.budget.compaction_threshold, 0.5);
-    }
-
-    #[test]
-    fn host_state_budget_override() {
-        let mut state = HostState::new(String::new(), default_budget());
-        state.budget.max_tool_result_chars = 999;
-        assert_eq!(state.budget.max_tool_result_chars, 999);
-    }
-
-    #[test]
     fn host_state_serialize_for_persist() {
-        let mut state = HostState::new("You are helpful.".to_string(), default_budget());
-        let mut session_state = pi_core::SessionState::default();
-        session_state.name = "test-session".to_string();
-        session_state.entries.push(empty_entry("e1", None));
+        let mut state = HostState::new("You are helpful.".to_string(), "Summarize.".to_string());
         state.store_artifact("art-1".to_string(), "data".to_string());
-        let data = state.get_persist_data(&session_state);
-        assert_eq!(data.name, "test-session");
-        assert_eq!(data.entries.len(), 1);
-        assert_eq!(data.artifacts.len(), 1);
-        assert_eq!(data.artifacts[0], ("art-1".to_string(), "data".to_string()));
+        let transcript: Vec<TrimmedMessage> = vec![];
+        let artifacts = Artifacts::new();
+        let data = state.get_persist_data(&transcript, &artifacts, 1, &default_budget());
+        assert_eq!(data.turn_number, 1);
+        assert_eq!(data.host_artifacts.len(), 1);
+        assert_eq!(
+            data.host_artifacts[0],
+            ("art-1".to_string(), "data".to_string())
+        );
         assert_eq!(data.system_prompt, "You are helpful.");
+        assert_eq!(data.compaction_prompt, "Summarize.");
     }
 
     #[test]
     fn host_state_restore_from_persist() {
         let data = PersistData {
-            entries: vec![empty_entry("e1", None)],
-            leaf_id: "e1".to_string(),
-            name: "restored".to_string(),
-            projection_state: ContextProjectionState::default(),
-            artifacts: vec![("a1".to_string(), "hello".to_string())],
+            transcript: vec![],
+            artifacts: Artifacts::new(),
+            turn_number: 1,
+            host_artifacts: vec![("a1".to_string(), "hello".to_string())],
             budget: default_budget(),
             system_prompt: "restored-prompt".to_string(),
+            compaction_prompt: "restored-compaction".to_string(),
         };
-        let state = HostState::restore(data.clone());
-        let session_state = pi_core::SessionState {
-            entries: data.entries,
-            leaf_id: data.leaf_id,
-            name: data.name,
-        };
+        let state = HostState::restore(data);
         assert_eq!(state.read_artifact("a1"), Some("hello"));
         assert_eq!(state.system_prompt, "restored-prompt");
-        assert_eq!(session_state.entries.len(), 1);
-        assert_eq!(session_state.leaf_id, "e1");
-        assert_eq!(session_state.name, "restored");
-    }
-
-    #[test]
-    fn host_state_restore_old_format() {
-        let old_json = r#"{
-            "entries": [{"id":"e1","parent_id":null,"kind":{"type":"message","role":"user","content":[{"type":"text","text":"hi"}],"timestamp":1},"timestamp":1}],
-            "leaf_id": "e1",
-            "name": "legacy",
-            "projection_state": {"tools":{},"current_turn":3,"turns_since_compaction":1},
-            "artifacts": [{"id": "a1", "text": "old-text"}],
-            "budget": {"max_tool_result_chars":50000,"max_context_tokens":100000,"microcompact_after_turns":5,"compaction_threshold":0.75}
-        }"#;
-        let (state, session_state) = HostState::try_migrate_old_session(old_json).unwrap();
-        assert_eq!(session_state.name, "legacy");
-        assert_eq!(session_state.leaf_id, "e1");
-        assert_eq!(state.projection_state.current_turn, 3);
-        assert_eq!(state.projection_state.turns_since_compaction, 1);
-        assert_eq!(state.read_artifact("a1"), Some("old-text"));
-        assert_eq!(state.system_prompt, "");
-    }
-
-    #[test]
-    fn host_state_compaction_detection() {
-        let state = HostState::new(String::new(), default_budget());
-        let report = ContextProjectionReport {
-            estimated_tokens: 100,
-            replacements: vec![],
-            dropped_messages: 0,
-            needs_compaction: true,
-            cache_breakpoints: vec![],
-        };
-        assert!(state.detect_needs_compaction(&report));
-        let report2 = ContextProjectionReport {
-            estimated_tokens: 100,
-            replacements: vec![],
-            dropped_messages: 0,
-            needs_compaction: false,
-            cache_breakpoints: vec![],
-        };
-        assert!(!state.detect_needs_compaction(&report2));
-    }
-
-    #[test]
-    fn host_state_compaction_apply() {
-        let state = HostState::new(String::new(), default_budget());
-        let mut entries = vec![
-            empty_entry("e1", None),
-            empty_entry("e2", Some("e1")),
-            empty_entry("e3", Some("e2")),
-        ];
-
-        let plan = CompactionPlan {
-            cut_index: 2,
-            entries_to_summarize: entries[..2].to_vec(),
-            tokens_to_free: 10,
-        };
-        entries = state.accept_compaction(entries, plan, "summary".to_string());
-        assert_eq!(entries.len(), 2);
-        assert!(matches!(entries[0].kind, EntryKind::Compaction { .. }));
-        assert_eq!(entries[1].id, "e3");
-    }
-
-    #[test]
-    fn dto_conversion_without_projection() {
-        let core = pi_core::SessionState {
-            entries: vec![SessionEntry {
-                id: "e1".to_string(),
-                parent_id: None,
-                kind: EntryKind::Message {
-                    message: AgentMessage::user("hi"),
-                },
-                timestamp: 1,
-            }],
-            leaf_id: "e1".to_string(),
-            name: "test".to_string(),
-        };
-        let json = serde_json::to_string(&core).unwrap();
-        let back: pi_core::SessionState = serde_json::from_str(&json).unwrap();
-        assert_eq!(core, back);
-        // Old format with extra fields should be ignored
-        let old_json = r#"{"entries":[],"leaf_id":"","name":"old","projection_state":{},"artifacts":[]}"#;
-        let old: pi_core::SessionState = serde_json::from_str(old_json).unwrap();
-        assert_eq!(old.name, "old");
+        assert_eq!(state.compaction_prompt, "restored-compaction");
     }
 }

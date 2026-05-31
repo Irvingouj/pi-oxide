@@ -25,9 +25,6 @@ pub(crate) use handle_table::*;
 mod directive;
 pub(crate) use directive::*;
 
-mod old_api;
-pub(crate) use old_api::*;
-
 mod host_state_api;
 pub(crate) use host_state_api::*;
 
@@ -36,12 +33,10 @@ pub(crate) use host_agent_api::*;
 
 mod artifact_api;
 
-pub(crate) use pi_core::{AgentRuntime, SessionState, Transition};
+pub(crate) use pi_core::AgentRuntime;
 pub(crate) use tracing::info;
 
 thread_local! {
-    pub(crate) static AGENT_SLOTS: RefCell<Vec<Option<(AgentRuntime, SessionState)>>> = const { RefCell::new(Vec::new()) };
-    pub(crate) static SESSION_STATE_SLOTS: RefCell<Vec<Option<SessionState>>> = const { RefCell::new(Vec::new()) };
     pub(crate) static HOST_STATE_SLOTS: RefCell<Vec<Option<HostState>>> = const { RefCell::new(Vec::new()) };
     pub(crate) static HOST_AGENT_SLOTS: RefCell<Vec<Option<HostAgent>>> = const { RefCell::new(Vec::new()) };
     pub(crate) static TRACING_INIT: Cell<bool> = const { Cell::new(false) };
@@ -163,15 +158,12 @@ pub(crate) fn runtime_phase_name(runtime: &AgentRuntime) -> &'static str {
     match runtime {
         AgentRuntime::Idle(_) => "Idle",
         AgentRuntime::Streaming(_) => "Streaming",
+        AgentRuntime::Compacting(_) => "Compacting",
         AgentRuntime::WaitingTools(_) => "WaitingTools",
         AgentRuntime::ReadyToContinue(_) => "ReadyToContinue",
         AgentRuntime::Finished(_) => "Finished",
         AgentRuntime::Aborted(_) => "Aborted",
     }
-}
-
-pub(crate) fn project_context(input: pi_core::ProjectionInput) -> pi_core::ProjectionOutput {
-    pi_core::project(input)
 }
 
 #[cfg(test)]

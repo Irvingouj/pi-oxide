@@ -8,13 +8,13 @@ use ratatui::widgets::ListState;
 use ratatui::Frame;
 
 use pi_core::{
-    AgentAction, AgentMessage, AgentOptions, AgentRuntime, ApiName, ContextProjectionBudget,
-    ExecutionMode, Model, ModelId, ModelName, ProviderName, QueueMode,
-    SessionId, SessionState, ThinkingLevel, ToolCallId, ToolDefinition, WaitMode,
+    AgentAction, AgentMessage, AgentOptions, AgentRuntime, ApiName, Artifacts,
+    ContextProjectionBudget, ExecutionMode, Model, ModelId, ModelName, ProviderName, QueueMode,
+    SessionId, ThinkingLevel, ToolCallId, ToolDefinition, TrimmedMessage, WaitMode,
 };
 
 use crate::extension::{BashExtension, BuiltinExtension, Extension};
-use crate::host_state::{CompactReason, HostDirective, HostState};
+use crate::host_state::{HostDirective, HostState};
 use crate::llm::LlmClient;
 use crate::session::FileSystemSessionBackend;
 
@@ -78,7 +78,6 @@ pub struct App {
     pub(crate) session_id: Option<String>,
     pub(crate) session_backend: FileSystemSessionBackend,
     pub(crate) cwd: std::path::PathBuf,
-    pub(crate) session_state: SessionState,
 
     // New: cancellation
     pub(crate) cancelled: bool,
@@ -96,6 +95,12 @@ pub struct App {
     // Extension-based tool execution
     pub(crate) extensions: Vec<Box<dyn Extension>>,
     pub(crate) running_tasks: Vec<RunningTask>,
+
+    // New transcript/artifacts model
+    pub(crate) transcript: Vec<TrimmedMessage>,
+    pub(crate) artifacts: Artifacts,
+    pub(crate) turn_number: u32,
+    pub(crate) budget: ContextProjectionBudget,
 }
 
 pub(crate) struct RunningTask {
@@ -142,7 +147,6 @@ impl App {
         for ext in &extensions {
             tool_defs.extend(ext.tools());
         }
-        let session_state = host_state.as_ref().map(|h| h.to_session_state()).unwrap_or_default();
         let agent = AgentRuntime::new(AgentOptions {
             system_prompt: system_prompt.to_string(),
             model,
@@ -151,8 +155,6 @@ impl App {
             follow_up_mode: QueueMode::OneAtATime,
             tool_execution_mode: ExecutionMode::Parallel,
             session_id: session_id.as_ref().map(SessionId::new),
-            messages: Vec::new(),
-            session_state: None,
         });
 
         let llm_client = LlmClient::new(api_key, base_url, model_id);
@@ -184,12 +186,11 @@ impl App {
             current_tools: Vec::new(),
             tool_definitions: tool_defs,
             llm_client,
-            host_state: Some(host_state.unwrap_or_else(|| HostState::new(system_prompt.to_string(), ContextProjectionBudget::default()))),
+            host_state: Some(host_state.unwrap_or_else(|| HostState::new(system_prompt.to_string(), "Summarize the following conversation into a concise summary that preserves the key information, decisions, and context.".to_string()))),
             last_usage: None,
             session_id,
             session_backend: FileSystemSessionBackend::new(),
             cwd: cwd.to_path_buf(),
-            session_state,
             cancelled: false,
             history: Vec::new(),
             history_index: None,
@@ -199,6 +200,10 @@ impl App {
             suggestion_state: ListState::default(),
             extensions,
             running_tasks: Vec::new(),
+            transcript: Vec::new(),
+            artifacts: Artifacts::new(),
+            turn_number: 0,
+            budget: ContextProjectionBudget::default(),
         }
     }
 
@@ -424,46 +429,110 @@ impl App {
 
         let runtime = self.agent.take().unwrap();
         let tool_defs = self.tool_definitions.clone();
-        let (_events, actions, new_runtime) = match runtime {
-            AgentRuntime::Idle(idle) => {
-                let t = idle.start_turn(AgentMessage::user(text), tool_defs, std::mem::take(&mut self.session_state));
-                self.session_state = t.session_state;
-                (t.events, t.actions, t.state.into_runtime())
-            }
-            AgentRuntime::ReadyToContinue(ready) => {
-                let t1 = ready.wait_for_input(std::mem::take(&mut self.session_state));
-                self.session_state = t1.session_state;
-                let t2 = t1.state.start_turn(AgentMessage::user(text), tool_defs, std::mem::take(&mut self.session_state));
-                self.session_state = t2.session_state;
-                (t2.events, t2.actions, t2.state.into_runtime())
-            }
-            AgentRuntime::Finished(finished) => {
-                let (idle, session_state) = finished.into_idle(std::mem::take(&mut self.session_state));
-                self.session_state = session_state;
-                let t2 = idle.start_turn(AgentMessage::user(text), tool_defs, std::mem::take(&mut self.session_state));
-                self.session_state = t2.session_state;
-                (t2.events, t2.actions, t2.state.into_runtime())
-            }
-            AgentRuntime::Aborted(aborted) => {
-                let (idle, session_state) = aborted.into_idle(std::mem::take(&mut self.session_state));
-                self.session_state = session_state;
-                let t2 = idle.start_turn(AgentMessage::user(text), tool_defs, std::mem::take(&mut self.session_state));
-                self.session_state = t2.session_state;
-                (t2.events, t2.actions, t2.state.into_runtime())
-            }
-            AgentRuntime::WaitingTools(mut waiting) => {
-                let disposition = waiting.submit_user_message(AgentMessage::user(text));
-                let (events, actions) = disposition.into_events_actions();
-                (events, actions, waiting.into_runtime())
-            }
-            other => (
-                vec![],
-                vec![AgentAction::WaitForInput {
-                    mode: WaitMode::Any,
-                }],
-                other,
-            ),
-        };
+        let compaction_prompt = self
+            .host_state
+            .as_ref()
+            .map(|h| h.compaction_prompt.clone())
+            .unwrap_or_default();
+        let transcript = std::mem::take(&mut self.transcript);
+        let artifacts = std::mem::take(&mut self.artifacts);
+        let turn_number = self.turn_number;
+        let budget = self.budget.clone();
+        let (_events, actions, new_runtime, transcript, artifacts, turn_number, _markers) =
+            match runtime {
+                AgentRuntime::Idle(idle) => idle
+                    .start_turn(
+                        AgentMessage::user(text),
+                        tool_defs,
+                        transcript,
+                        artifacts,
+                        turn_number,
+                        &budget,
+                        &compaction_prompt,
+                    )
+                    .into_parts(),
+                AgentRuntime::ReadyToContinue(ready) => {
+                    let (_ev, _act, idle, transcript, artifacts, turn_number, _m) = ready
+                        .wait_for_input(transcript, artifacts, turn_number)
+                        .into_parts();
+                    idle.start_turn(
+                        AgentMessage::user(text),
+                        tool_defs,
+                        transcript,
+                        artifacts,
+                        turn_number,
+                        &budget,
+                        &compaction_prompt,
+                    )
+                    .into_parts()
+                }
+                AgentRuntime::Finished(finished) => {
+                    let (idle, transcript, artifacts, turn_number) =
+                        finished.into_idle(transcript, artifacts, turn_number);
+                    idle.start_turn(
+                        AgentMessage::user(text),
+                        tool_defs,
+                        transcript,
+                        artifacts,
+                        turn_number,
+                        &budget,
+                        &compaction_prompt,
+                    )
+                    .into_parts()
+                }
+                AgentRuntime::Aborted(aborted) => {
+                    let (idle, transcript, artifacts, turn_number) =
+                        aborted.into_idle(transcript, artifacts, turn_number);
+                    idle.start_turn(
+                        AgentMessage::user(text),
+                        tool_defs,
+                        transcript,
+                        artifacts,
+                        turn_number,
+                        &budget,
+                        &compaction_prompt,
+                    )
+                    .into_parts()
+                }
+                AgentRuntime::WaitingTools(mut waiting) => {
+                    let disposition = waiting.submit_user_message(AgentMessage::user(text));
+                    let (events, actions) = disposition.into_events_actions();
+                    (
+                        events,
+                        actions,
+                        waiting.into_runtime(),
+                        transcript,
+                        artifacts,
+                        turn_number,
+                        vec![],
+                    )
+                }
+                AgentRuntime::Compacting(compacting) => (
+                    vec![],
+                    vec![AgentAction::WaitForInput {
+                        mode: WaitMode::Any,
+                    }],
+                    compacting.into_runtime(),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    vec![],
+                ),
+                other => (
+                    vec![],
+                    vec![AgentAction::WaitForInput {
+                        mode: WaitMode::Any,
+                    }],
+                    other,
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    vec![],
+                ),
+            };
+        self.transcript = transcript;
+        self.artifacts = artifacts;
+        self.turn_number = turn_number;
         self.agent = Some(new_runtime);
         self.handle_actions(terminal, actions);
         self.save_session();
@@ -477,6 +546,9 @@ impl App {
             "/clear" => {
                 let agent = self.agent.take().unwrap().reset();
                 self.agent = Some(agent);
+                self.transcript.clear();
+                self.artifacts.clear();
+                self.turn_number = 0;
                 self.entries.clear();
                 self.entries.push(ChatEntry::System("Chat cleared.".into()));
             }
@@ -516,14 +588,12 @@ impl App {
                     "load" => {
                         if let Some(id) = parts.get(2) {
                             if let Some(data) = self.session_backend.load(id) {
-                                let host_state = HostState::restore(data);
-                                let session_state = host_state.to_session_state();
+                                let host_state = HostState::restore(data.clone());
                                 let agent = self.agent.take().unwrap().reset();
                                 self.agent = Some(agent);
-                                self.session_state = session_state;
-                                // Rebuild messages from the loaded session tree so the LLM sees the full transcript
-                                let messages = self.session_state.build_context();
-                                self.agent_mut().state_mut().messages = messages;
+                                self.transcript = data.transcript;
+                                self.artifacts = data.artifacts;
+                                self.turn_number = data.turn_number;
                                 self.host_state = Some(host_state);
                                 self.session_id = Some(id.to_string());
                                 self.entries.clear();
@@ -541,6 +611,9 @@ impl App {
                     "new" => {
                         let agent = self.agent.take().unwrap().reset();
                         self.agent = Some(agent);
+                        self.transcript.clear();
+                        self.artifacts.clear();
+                        self.turn_number = 0;
                         self.session_id = None;
                         self.entries.clear();
                         self.entries
@@ -555,7 +628,7 @@ impl App {
             }
             "/tokens" => {
                 if let Some((input, output, total)) = self.last_usage {
-                    let budget = &self.host_state.as_ref().unwrap().budget;
+                    let budget = &self.budget;
                     let ctx_pct = if budget.max_context_tokens > 0 {
                         (input as f64 / budget.max_context_tokens as f64 * 100.0) as u16
                     } else {
@@ -570,24 +643,12 @@ impl App {
                 }
             }
             "/undo" => {
-                let msgs = &self.agent_mut().state().messages.clone();
-                if let Some(last_user_idx) = msgs
+                if let Some(last_user_idx) = self
+                    .transcript
                     .iter()
-                    .rposition(|m| matches!(m, AgentMessage::User(_)))
+                    .rposition(|m| matches!(m, TrimmedMessage::User(_)))
                 {
-                    let new_len = last_user_idx;
-                    self.agent_mut().state_mut().messages.truncate(new_len);
-                    // Rebuild session tree from truncated messages so it stays in sync
-                    let truncated = self.agent().state().messages.clone();
-                    let new_session_state = pi_core::SessionState::from_messages(&truncated);
-                    self.session_state = new_session_state.clone();
-                    // Sync host_state entries/leaf with the truncated session state
-                    if let Some(ref mut hs) = self.host_state {
-                        hs.entries = new_session_state.entries;
-                        hs.leaf_id = new_session_state.leaf_id;
-                        hs.name = new_session_state.name;
-                    }
-                    // Also truncate entries to remove the last user+assistant+tools round
+                    self.transcript.truncate(last_user_idx);
                     if let Some(last_user_entry) = self
                         .entries
                         .iter()
@@ -617,32 +678,18 @@ impl App {
         for action in actions {
             match action {
                 AgentAction::StreamLlm { context, .. } => {
-                    let system_prompt = context.system_prompt.clone();
-                    let (projected_messages, report) =
-                        self.host_state.as_mut().unwrap().project(&system_prompt, &context.messages);
-                    if report.needs_compaction {
-                        let compact_up_to = self.host_state.as_ref().unwrap().leaf_id.clone();
-                        directives.push(HostDirective::Compact {
-                            compact_up_to,
-                            reason: CompactReason::OverBudget {
-                                estimated_tokens: report.estimated_tokens,
-                                budget_tokens: self.host_state.as_ref().unwrap().budget.max_context_tokens,
-                            },
-                        });
-                    }
-                    directives.push(HostDirective::StreamLlm {
-                        context: pi_core::LlmContext {
-                            system_prompt,
-                            messages: projected_messages,
-                            tools: context.tools,
-                        },
-                        report,
-                    });
+                    directives.push(HostDirective::StreamLlm { context });
+                }
+                AgentAction::Summarize { context, .. } => {
+                    directives.push(HostDirective::Summarize { context });
                 }
                 AgentAction::ExecuteTools { calls } => {
                     directives.push(HostDirective::ExecuteTools { calls });
                 }
-                AgentAction::CancelTools { tool_call_ids, reason } => {
+                AgentAction::CancelTools {
+                    tool_call_ids,
+                    reason,
+                } => {
                     directives.push(HostDirective::CancelTools {
                         tool_call_ids,
                         reason,
@@ -651,13 +698,79 @@ impl App {
                 AgentAction::WaitForInput { mode } => {
                     directives.push(HostDirective::WaitForInput { mode });
                 }
-                AgentAction::Finished { .. } => {
+                AgentAction::Finished => {
                     directives.push(HostDirective::Finished);
                     directives.push(HostDirective::Persist);
                 }
             }
         }
         directives
+    }
+
+    fn handle_summarize(
+        &mut self,
+        terminal: &mut ratatui::DefaultTerminal,
+        context: pi_core::LlmContext,
+    ) {
+        self.running = true;
+        let mut summary_text = String::new();
+
+        match self
+            .llm_client
+            .stream_sync(&context.system_prompt, &context.messages, &context.tools)
+        {
+            Ok(mut stream) => {
+                for chunk in stream.by_ref() {
+                    match chunk {
+                        pi_core::LlmChunk::TextDelta { text } => {
+                            summary_text.push_str(&text);
+                        }
+                        pi_core::LlmChunk::Done => break,
+                        _ => {}
+                    }
+                }
+                let runtime = self.agent.take().unwrap();
+                let AgentRuntime::Compacting(compacting) = runtime else {
+                    self.agent = Some(runtime);
+                    return;
+                };
+                let transcript = std::mem::take(&mut self.transcript);
+                let artifacts = std::mem::take(&mut self.artifacts);
+                let transition = compacting.accept_summary(
+                    summary_text,
+                    transcript,
+                    artifacts,
+                    self.turn_number,
+                    &self.budget,
+                );
+                let (_events, actions, runtime, transcript, artifacts, turn_number, _markers) =
+                    transition.into_parts();
+                self.transcript = transcript;
+                self.artifacts = artifacts;
+                self.turn_number = turn_number;
+                self.agent = Some(runtime.into_runtime());
+                self.handle_actions(terminal, actions);
+            }
+            Err(e) => {
+                self.entries
+                    .push(ChatEntry::System(format!("Summary LLM Error: {e}")));
+                let runtime = self.agent.take().unwrap();
+                if let AgentRuntime::Compacting(compacting) = runtime {
+                    let transcript = std::mem::take(&mut self.transcript);
+                    let artifacts = std::mem::take(&mut self.artifacts);
+                    let transition = compacting.abort(transcript, artifacts, self.turn_number);
+                    let (_events, _actions, runtime, transcript, artifacts, turn_number, _markers) =
+                        transition.into_parts();
+                    self.transcript = transcript;
+                    self.artifacts = artifacts;
+                    self.turn_number = turn_number;
+                    self.agent = Some(runtime.into_runtime());
+                } else {
+                    self.agent = Some(runtime);
+                }
+                self.running = false;
+            }
+        }
     }
 
     pub(crate) fn handle_actions(
@@ -669,14 +782,35 @@ impl App {
         for directive in directives {
             if self.cancelled {
                 let runtime = self.agent.take().unwrap();
-                let (_events, new_runtime) = match runtime {
-                    AgentRuntime::Streaming(streaming) => {
-                        let t = streaming.abort(std::mem::take(&mut self.session_state));
-                        self.session_state = t.session_state;
-                        (t.events, t.state.into_runtime())
-                    }
-                    other => (vec![], other),
-                };
+                let transcript = std::mem::take(&mut self.transcript);
+                let artifacts = std::mem::take(&mut self.artifacts);
+                let (_events, _actions, new_runtime, transcript, artifacts, turn_number, _markers) =
+                    match runtime {
+                        AgentRuntime::Streaming(streaming) => {
+                            let (ev, act, state, transcript, artifacts, tn, m) = streaming
+                                .abort(transcript, artifacts, self.turn_number)
+                                .into_parts();
+                            (ev, act, state.into_runtime(), transcript, artifacts, tn, m)
+                        }
+                        AgentRuntime::Compacting(compacting) => {
+                            let (ev, act, state, transcript, artifacts, tn, m) = compacting
+                                .abort(transcript, artifacts, self.turn_number)
+                                .into_parts();
+                            (ev, act, state.into_runtime(), transcript, artifacts, tn, m)
+                        }
+                        other => (
+                            vec![],
+                            vec![],
+                            other,
+                            transcript,
+                            artifacts,
+                            self.turn_number,
+                            vec![],
+                        ),
+                    };
+                self.transcript = transcript;
+                self.artifacts = artifacts;
+                self.turn_number = turn_number;
                 self.agent = Some(new_runtime);
                 self.running = false;
                 self.entries.push(ChatEntry::System("Cancelled.".into()));
@@ -684,8 +818,11 @@ impl App {
                 return;
             }
             match directive {
-                HostDirective::StreamLlm { context, report } => {
-                    self.stream_llm(terminal, context, report);
+                HostDirective::StreamLlm { context } => {
+                    self.stream_llm(terminal, context);
+                }
+                HostDirective::Summarize { context } => {
+                    self.handle_summarize(terminal, context);
                 }
                 HostDirective::ExecuteTools { calls } => {
                     self.execute_tools(terminal, calls);
@@ -701,20 +838,6 @@ impl App {
                 }
                 HostDirective::Persist => {
                     self.save_session();
-                }
-                HostDirective::Compact { .. } => {
-                    if let Some(plan) = self.host_state.as_ref().unwrap().plan_compaction() {
-                        self.entries.push(ChatEntry::System(
-                            "Compacting old context...".into(),
-                        ));
-                        let _ = terminal.draw(|f| self.render(f));
-                        self.host_state.as_mut().unwrap().accept_compaction(
-                            plan,
-                            "Context compacted by host.".to_string(),
-                        );
-                        let session_state = self.host_state.as_ref().unwrap().to_session_state();
-                        self.session_state = session_state;
-                    }
                 }
                 _ => {}
             }

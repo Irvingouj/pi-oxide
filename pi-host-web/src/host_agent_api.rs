@@ -1,25 +1,26 @@
-use wasm_bindgen::prelude::*;
 use super::*;
+use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = "createHostAgent")]
-pub fn create_host_agent(options: AgentOptions, budget: ContextProjectionBudget) -> CreateHostAgentResult {
+pub fn create_host_agent(
+    options: AgentOptions,
+    budget: ContextProjectionBudget,
+) -> CreateHostAgentResult {
     console_error_panic_hook::set_once();
     init_tracing();
     info!("createHostAgent called");
     let core_options: pi_core::AgentOptions = try_conv!(options.try_into());
     let core_budget: pi_core::ContextProjectionBudget = try_conv!(budget.try_into());
     let runtime = AgentRuntime::new(core_options.clone());
-    let mut host_state = HostState::new(core_options.system_prompt.clone(), core_budget);
-    let mut session_state = core_options.session_state.unwrap_or_default();
-    if session_state.entries.is_empty() && !core_options.messages.is_empty() {
-        session_state = pi_core::SessionState::from_messages(&core_options.messages);
-    }
-    session_state.name = core_options
-        .session_id
-        .as_ref()
-        .map(|s| s.0.clone())
-        .unwrap_or_default();
-    let agent = HostAgent { runtime, host_state, session_state };
+    let host_state = HostState::new(core_options.system_prompt.clone(), "Summarize the following conversation into a concise summary that preserves the key information, decisions, and context.".to_string());
+    let agent = HostAgent {
+        runtime,
+        host_state,
+        transcript: vec![],
+        artifacts: std::collections::BTreeMap::new(),
+        turn_number: 0,
+        budget: core_budget,
+    };
     let handle = put_host_agent(agent);
     info!(handle, "host agent created");
     ok(CreateHostAgentOutput { handle })
@@ -50,41 +51,72 @@ pub fn start_turn(handle: u32, input: StartTurnInput) -> TurnResultResult {
         Ok(a) => a,
         Err(e) => return err(&e),
     };
+    let budget = host_agent.budget.clone();
+    let compaction_prompt = host_agent.host_state.compaction_prompt.clone();
 
     let result = match host_agent.runtime {
         AgentRuntime::Idle(idle) => {
-            let Transition {
-                events,
-                actions,
-                state,
-                session_state,
-            } = idle.start_turn(core_prompt, core_tools, host_agent.session_state);
-            host_agent.runtime = state.into_runtime();
-            host_agent.session_state = session_state;
+            let transition = idle.start_turn(
+                core_prompt,
+                core_tools,
+                host_agent.transcript,
+                host_agent.artifacts,
+                host_agent.turn_number,
+                &budget,
+                &compaction_prompt,
+            );
+            let (events, actions, runtime, transcript, artifacts, turn_number, _markers) =
+                transition.into_parts();
+            host_agent.runtime = runtime;
+            host_agent.transcript = transcript;
+            host_agent.artifacts = artifacts;
+            host_agent.turn_number = turn_number;
             Ok((events, actions))
         }
         AgentRuntime::Finished(finished) => {
-            let (idle, session_state) = finished.into_idle(host_agent.session_state);
-            let Transition {
-                events,
-                actions,
-                state,
-                session_state,
-            } = idle.start_turn(core_prompt, core_tools, session_state);
-            host_agent.runtime = state.into_runtime();
-            host_agent.session_state = session_state;
+            let (idle, transcript, artifacts, turn_number) = finished.into_idle(
+                host_agent.transcript,
+                host_agent.artifacts,
+                host_agent.turn_number,
+            );
+            let transition = idle.start_turn(
+                core_prompt,
+                core_tools,
+                transcript,
+                artifacts,
+                turn_number,
+                &budget,
+                &compaction_prompt,
+            );
+            let (events, actions, runtime, transcript, artifacts, turn_number, _markers) =
+                transition.into_parts();
+            host_agent.runtime = runtime;
+            host_agent.transcript = transcript;
+            host_agent.artifacts = artifacts;
+            host_agent.turn_number = turn_number;
             Ok((events, actions))
         }
         AgentRuntime::Aborted(aborted) => {
-            let (idle, session_state) = aborted.into_idle(host_agent.session_state);
-            let Transition {
-                events,
-                actions,
-                state,
-                session_state,
-            } = idle.start_turn(core_prompt, core_tools, session_state);
-            host_agent.runtime = state.into_runtime();
-            host_agent.session_state = session_state;
+            let (idle, transcript, artifacts, turn_number) = aborted.into_idle(
+                host_agent.transcript,
+                host_agent.artifacts,
+                host_agent.turn_number,
+            );
+            let transition = idle.start_turn(
+                core_prompt,
+                core_tools,
+                transcript,
+                artifacts,
+                turn_number,
+                &budget,
+                &compaction_prompt,
+            );
+            let (events, actions, runtime, transcript, artifacts, turn_number, _markers) =
+                transition.into_parts();
+            host_agent.runtime = runtime;
+            host_agent.transcript = transcript;
+            host_agent.artifacts = artifacts;
+            host_agent.turn_number = turn_number;
             Ok((events, actions))
         }
         AgentRuntime::WaitingTools(mut waiting) => {
@@ -106,12 +138,7 @@ pub fn start_turn(handle: u32, input: StartTurnInput) -> TurnResultResult {
 
     match result {
         Ok((events, actions)) => {
-            let directives = try_conv!(convert_actions_to_directives(
-                &mut host_agent.host_state,
-                &host_agent.session_state.entries,
-                &host_agent.session_state.leaf_id,
-                actions
-            ));
+            let directives = try_conv!(convert_actions_to_directives(actions));
             let dto_events = try_conv!(convert_events(events));
             put_host_agent(host_agent);
             ok(TurnResultOutput {
@@ -174,11 +201,24 @@ pub fn host_llm_done(handle: u32, result: LlmResult) -> TurnResultResult {
         Err(e) => return err(&e),
     };
 
+    let budget = host_agent.budget.clone();
+
     let result = match host_agent.runtime {
         AgentRuntime::Streaming(streaming) => {
-            let (events, actions, new_runtime, session_state) = streaming.finish_llm(core_result, host_agent.session_state).into_parts();
+            let (events, actions, new_runtime, transcript, artifacts, turn_number, _markers) =
+                streaming
+                    .finish_llm(
+                        core_result,
+                        host_agent.transcript,
+                        host_agent.artifacts,
+                        host_agent.turn_number,
+                        &budget,
+                    )
+                    .into_parts();
             host_agent.runtime = new_runtime;
-            host_agent.session_state = session_state;
+            host_agent.transcript = transcript;
+            host_agent.artifacts = artifacts;
+            host_agent.turn_number = turn_number;
             Ok((events, actions))
         }
         other => {
@@ -193,12 +233,7 @@ pub fn host_llm_done(handle: u32, result: LlmResult) -> TurnResultResult {
 
     match result {
         Ok((events, actions)) => {
-            let directives = try_conv!(convert_actions_to_directives(
-                &mut host_agent.host_state,
-                &host_agent.session_state.entries,
-                &host_agent.session_state.leaf_id,
-                actions
-            ));
+            let directives = try_conv!(convert_actions_to_directives(actions));
             let dto_events = try_conv!(convert_events(events));
             put_host_agent(host_agent);
             ok(TurnResultOutput {
@@ -221,20 +256,6 @@ pub fn host_tool_done(handle: u32, id: ToolCallId, result: ToolResult) -> TurnRe
     let core_id: pi_core::ToolCallId = try_conv!(id.try_into());
     let core_result: pi_core::ToolResult = try_conv!(result.try_into());
 
-    // Extract text for artifact storage before consuming the result.
-    let artifact_text = core_result
-        .content
-        .iter()
-        .filter_map(|c| {
-            if let pi_core::Content::Text(tc) = c {
-                Some(tc.text.clone())
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
     let mut host_agent = match take_host_agent(handle) {
         Ok(a) => a,
         Err(e) => return err(&e),
@@ -242,18 +263,20 @@ pub fn host_tool_done(handle: u32, id: ToolCallId, result: ToolResult) -> TurnRe
 
     let result = match host_agent.runtime {
         AgentRuntime::WaitingTools(waiting) => {
-            let (events, actions, new_runtime, session_state) =
-                waiting.on_tool_done(core_id.clone(), Ok(core_result), host_agent.session_state).into_parts();
+            let (events, actions, new_runtime, transcript, artifacts, turn_number, _markers) =
+                waiting
+                    .on_tool_done(
+                        core_id,
+                        Ok(core_result),
+                        host_agent.transcript,
+                        host_agent.artifacts,
+                        host_agent.turn_number,
+                    )
+                    .into_parts();
             host_agent.runtime = new_runtime;
-            host_agent.session_state = session_state;
-            // Store artifact text if this tool call was replaced by projection.
-            if let Some(pi_core::ToolProjectionState::Replaced { replacement, .. }) =
-                host_agent.host_state.projection_state.tools.get(core_id.as_str())
-            {
-                host_agent
-                    .host_state
-                    .store_artifact(replacement.artifact_id.clone(), artifact_text);
-            }
+            host_agent.transcript = transcript;
+            host_agent.artifacts = artifacts;
+            host_agent.turn_number = turn_number;
             Ok((events, actions))
         }
         other => {
@@ -268,12 +291,7 @@ pub fn host_tool_done(handle: u32, id: ToolCallId, result: ToolResult) -> TurnRe
 
     match result {
         Ok((events, actions)) => {
-            let mut directives = try_conv!(convert_actions_to_directives(
-                &mut host_agent.host_state,
-                &host_agent.session_state.entries,
-                &host_agent.session_state.leaf_id,
-                actions
-            ));
+            let mut directives = try_conv!(convert_actions_to_directives(actions));
             // If the agent is ready to continue but didn't emit any directive,
             // tell the host to wait for input (it should then call hostContinueTurn).
             if matches!(host_agent.runtime, AgentRuntime::ReadyToContinue(_)) {
@@ -307,19 +325,50 @@ pub fn host_accept_compaction(
         Err(e) => return err(&e),
     };
 
-    if let Some((_, plan)) = host_agent.host_state.pending_compaction_plans.pop() {
-        let entries = std::mem::take(&mut host_agent.session_state.entries);
-        host_agent.session_state.entries = host_agent.host_state.accept_compaction(entries, plan, summary);
-        if let Some(last) = host_agent.session_state.entries.last() {
-            host_agent.session_state.leaf_id = last.id.clone();
+    let result = match host_agent.runtime {
+        AgentRuntime::Compacting(compacting) => {
+            let transition = compacting.accept_summary(
+                summary,
+                host_agent.transcript,
+                host_agent.artifacts,
+                host_agent.turn_number,
+                &host_agent.budget,
+            );
+            host_agent.runtime = transition.state.into_runtime();
+            host_agent.transcript = transition.transcript;
+            host_agent.artifacts = transition.artifacts;
+            host_agent.turn_number = transition.turn_number;
+            Ok((transition.events, transition.actions))
+        }
+        other => {
+            let actual = runtime_phase_name(&other);
+            host_agent.runtime = other;
+            Err(HostError::WrongPhase {
+                expected: "Compacting",
+                actual,
+            })
+        }
+    };
+
+    match result {
+        Ok((events, actions)) => {
+            let directives = if actions.is_empty() {
+                vec![HostDirective::Persist]
+            } else {
+                try_conv!(convert_actions_to_directives(actions))
+            };
+            let dto_events = try_conv!(convert_events(events));
+            put_host_agent(host_agent);
+            ok(TurnResultOutput {
+                events: dto_events,
+                directives,
+            })
+        }
+        Err(e) => {
+            put_host_agent(host_agent);
+            err(&e)
         }
     }
-
-    put_host_agent(host_agent);
-    ok(TurnResultOutput {
-        events: vec![],
-        directives: vec![HostDirective::Persist],
-    })
 }
 
 #[wasm_bindgen(js_name = "hostSteer")]
@@ -373,16 +422,24 @@ pub fn host_continue_turn(handle: u32) -> TurnResultResult {
         Err(e) => return err(&e),
     };
 
+    let budget = host_agent.budget.clone();
+    let compaction_prompt = host_agent.host_state.compaction_prompt.clone();
+
     let result = match host_agent.runtime {
         AgentRuntime::ReadyToContinue(ready) => {
-            let Transition {
-                events,
-                actions,
-                state,
-                session_state,
-            } = ready.continue_turn(host_agent.session_state);
-            host_agent.runtime = state.into_runtime();
-            host_agent.session_state = session_state;
+            let transition = ready.continue_turn(
+                host_agent.transcript,
+                host_agent.artifacts,
+                host_agent.turn_number,
+                &budget,
+                &compaction_prompt,
+            );
+            let (events, actions, runtime, transcript, artifacts, turn_number, _markers) =
+                transition.into_parts();
+            host_agent.runtime = runtime;
+            host_agent.transcript = transcript;
+            host_agent.artifacts = artifacts;
+            host_agent.turn_number = turn_number;
             Ok((events, actions))
         }
         other => {
@@ -397,12 +454,7 @@ pub fn host_continue_turn(handle: u32) -> TurnResultResult {
 
     match result {
         Ok((events, actions)) => {
-            let directives = try_conv!(convert_actions_to_directives(
-                &mut host_agent.host_state,
-                &host_agent.session_state.entries,
-                &host_agent.session_state.leaf_id,
-                actions
-            ));
+            let directives = try_conv!(convert_actions_to_directives(actions));
             let dto_events = try_conv!(convert_events(events));
             put_host_agent(host_agent);
             ok(TurnResultOutput {
@@ -425,16 +477,22 @@ pub fn host_reset(handle: u32) -> EmptyResult {
         Err(e) => return err(&e),
     };
     let system_prompt = host_agent.host_state.system_prompt.clone();
-    let budget = host_agent.host_state.budget.clone();
+    let compaction_prompt = host_agent.host_state.compaction_prompt.clone();
     host_agent.runtime = host_agent.runtime.reset();
-    host_agent.session_state = SessionState::default();
-    host_agent.host_state = HostState::new(system_prompt, budget);
+    host_agent.transcript = vec![];
+    host_agent.artifacts = std::collections::BTreeMap::new();
+    host_agent.turn_number = 0;
+    host_agent.host_state = HostState::new(system_prompt, compaction_prompt);
     put_host_agent(host_agent);
     ok(())
 }
 
 #[wasm_bindgen(js_name = "hostToolCancelled")]
-pub fn host_tool_cancelled(handle: u32, tool_call_id: String, reason: CancelReason) -> TurnResultResult {
+pub fn host_tool_cancelled(
+    handle: u32,
+    tool_call_id: String,
+    reason: CancelReason,
+) -> TurnResultResult {
     console_error_panic_hook::set_once();
     info!(handle, "hostToolCancelled called");
 
@@ -447,9 +505,20 @@ pub fn host_tool_cancelled(handle: u32, tool_call_id: String, reason: CancelReas
 
     let result = match host_agent.runtime {
         AgentRuntime::WaitingTools(waiting) => {
-            let (events, actions, new_runtime, session_state) = waiting.cancel_tool(id, core_reason, host_agent.session_state).into_parts();
+            let (events, actions, new_runtime, transcript, artifacts, turn_number, _markers) =
+                waiting
+                    .cancel_tool(
+                        id,
+                        core_reason,
+                        host_agent.transcript,
+                        host_agent.artifacts,
+                        host_agent.turn_number,
+                    )
+                    .into_parts();
             host_agent.runtime = new_runtime;
-            host_agent.session_state = session_state;
+            host_agent.transcript = transcript;
+            host_agent.artifacts = artifacts;
+            host_agent.turn_number = turn_number;
             Ok((events, actions))
         }
         other => {
@@ -464,12 +533,7 @@ pub fn host_tool_cancelled(handle: u32, tool_call_id: String, reason: CancelReas
 
     match result {
         Ok((events, actions)) => {
-            let directives = try_conv!(convert_actions_to_directives(
-                &mut host_agent.host_state,
-                &host_agent.session_state.entries,
-                &host_agent.session_state.leaf_id,
-                actions
-            ));
+            let directives = try_conv!(convert_actions_to_directives(actions));
             let dto_events = try_conv!(convert_events(events));
             put_host_agent(host_agent);
             ok(TurnResultOutput {
@@ -496,43 +560,58 @@ pub fn host_abort(handle: u32) -> TurnResultResult {
 
     let result = match host_agent.runtime {
         AgentRuntime::Streaming(streaming) => {
-            let Transition {
-                events,
-                actions,
-                state,
-                session_state,
-            } = streaming.abort(host_agent.session_state);
-            host_agent.runtime = state.into_runtime();
-            host_agent.session_state = session_state;
-            Ok((events, actions))
+            let transition = streaming.abort(
+                host_agent.transcript,
+                host_agent.artifacts,
+                host_agent.turn_number,
+            );
+            host_agent.runtime = transition.state.into_runtime();
+            host_agent.transcript = transition.transcript;
+            host_agent.artifacts = transition.artifacts;
+            host_agent.turn_number = transition.turn_number;
+            Ok((transition.events, transition.actions))
         }
         AgentRuntime::WaitingTools(waiting) => {
-            let Transition {
-                events,
-                actions,
-                state,
-                session_state,
-            } = waiting.abort(host_agent.session_state);
-            host_agent.runtime = state.into_runtime();
-            host_agent.session_state = session_state;
-            Ok((events, actions))
+            let transition = waiting.abort(
+                host_agent.transcript,
+                host_agent.artifacts,
+                host_agent.turn_number,
+            );
+            host_agent.runtime = transition.state.into_runtime();
+            host_agent.transcript = transition.transcript;
+            host_agent.artifacts = transition.artifacts;
+            host_agent.turn_number = transition.turn_number;
+            Ok((transition.events, transition.actions))
         }
         AgentRuntime::ReadyToContinue(ready) => {
-            let Transition {
-                events,
-                actions,
-                state,
-                session_state,
-            } = ready.abort(host_agent.session_state);
-            host_agent.runtime = state.into_runtime();
-            host_agent.session_state = session_state;
-            Ok((events, actions))
+            let transition = ready.abort(
+                host_agent.transcript,
+                host_agent.artifacts,
+                host_agent.turn_number,
+            );
+            host_agent.runtime = transition.state.into_runtime();
+            host_agent.transcript = transition.transcript;
+            host_agent.artifacts = transition.artifacts;
+            host_agent.turn_number = transition.turn_number;
+            Ok((transition.events, transition.actions))
+        }
+        AgentRuntime::Compacting(compacting) => {
+            let transition = compacting.abort(
+                host_agent.transcript,
+                host_agent.artifacts,
+                host_agent.turn_number,
+            );
+            host_agent.runtime = transition.state.into_runtime();
+            host_agent.transcript = transition.transcript;
+            host_agent.artifacts = transition.artifacts;
+            host_agent.turn_number = transition.turn_number;
+            Ok((transition.events, transition.actions))
         }
         other => {
             let actual = runtime_phase_name(&other);
             host_agent.runtime = other;
             Err(HostError::WrongPhase {
-                expected: "Streaming, WaitingTools, or ReadyToContinue",
+                expected: "Streaming, WaitingTools, ReadyToContinue, or Compacting",
                 actual,
             })
         }
@@ -540,12 +619,7 @@ pub fn host_abort(handle: u32) -> TurnResultResult {
 
     match result {
         Ok((events, actions)) => {
-            let directives = try_conv!(convert_actions_to_directives(
-                &mut host_agent.host_state,
-                &host_agent.session_state.entries,
-                &host_agent.session_state.leaf_id,
-                actions
-            ));
+            let directives = try_conv!(convert_actions_to_directives(actions));
             let dto_events = try_conv!(convert_events(events));
             put_host_agent(host_agent);
             ok(TurnResultOutput {
@@ -564,7 +638,12 @@ pub fn host_abort(handle: u32) -> TurnResultResult {
 pub fn get_host_agent_persist_data(handle: u32) -> HostStatePersistDataResult {
     console_error_panic_hook::set_once();
     let result = with_host_agent(handle, |host_agent| {
-        host_agent.host_state.get_persist_data(&host_agent.session_state)
+        host_agent.host_state.get_persist_data(
+            &host_agent.transcript,
+            &host_agent.artifacts,
+            host_agent.turn_number,
+            &host_agent.budget,
+        )
     });
     match result {
         Ok(data) => {
@@ -583,12 +662,14 @@ pub fn restore_host_agent(options: AgentOptions, data: PersistData) -> CreateHos
     let core_data: crate::host_state::PersistData = try_conv!(data.try_into());
     let runtime = AgentRuntime::new(core_options);
     let host_state = HostState::restore(core_data.clone());
-    let session_state = SessionState {
-        entries: core_data.entries,
-        leaf_id: core_data.leaf_id,
-        name: core_data.name,
+    let agent = HostAgent {
+        runtime,
+        host_state,
+        transcript: core_data.transcript,
+        artifacts: core_data.artifacts,
+        turn_number: core_data.turn_number,
+        budget: core_data.budget.clone(),
     };
-    let agent = HostAgent { runtime, host_state, session_state };
     let handle = put_host_agent(agent);
     info!(handle, "host agent restored");
     ok(CreateHostAgentOutput { handle })

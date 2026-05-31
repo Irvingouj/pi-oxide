@@ -363,11 +363,9 @@ pub struct ToolExecutionUpdate {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum AgentAction {
+pub enum HostDirective {
     StreamLlm {
         context: LlmContext,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        session_id: Option<SessionId>,
     },
     ExecuteTools {
         calls: Vec<ToolCall>,
@@ -376,40 +374,14 @@ pub enum AgentAction {
         tool_call_ids: Vec<ToolCallId>,
         reason: CancelReason,
     },
+    Persist,
+    Summarize {
+        context: LlmContext,
+    },
+    Finished,
     WaitForInput {
         mode: WaitMode,
     },
-    Finished {
-        messages: Vec<AgentMessage>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum HostDirective {
-    StreamLlm { context: LlmContext },
-    ExecuteTools { calls: Vec<ToolCall> },
-    CancelTools { tool_call_ids: Vec<ToolCallId>, reason: CancelReason },
-    Persist,
-    Compact {
-        compact_up_to: String,
-        first_kept_entry_id: String,
-        tokens_before: usize,
-        reason: CompactReason,
-        compacted_entry_ids: Vec<String>,
-        summary_context: LlmContext,
-    },
-    Finished,
-    WaitForInput { mode: WaitMode },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-#[serde(rename_all = "snake_case")]
-pub enum CompactReason {
-    OverBudget { estimated_tokens: usize, budget_tokens: usize },
-    EntryCount { count: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
@@ -417,9 +389,7 @@ pub enum CompactReason {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
     AgentStart,
-    AgentEnd {
-        messages: Vec<AgentMessage>,
-    },
+    AgentEnd,
     TurnStart,
     TurnEnd {
         message: AgentMessage,
@@ -548,316 +518,35 @@ pub struct LlmContext {
 // Projection types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify, Default)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct ContextProjectionBudget {
+    #[serde(default = "default_max_tool_result_chars")]
     pub max_tool_result_chars: usize,
+    #[serde(default = "default_max_context_tokens")]
     pub max_context_tokens: usize,
-    #[serde(default = "pi_core::context_projection::default_microcompact_after_turns")]
+    #[serde(default = "default_microcompact_after_turns")]
     pub microcompact_after_turns: u32,
-    #[serde(default = "pi_core::context_projection::default_compaction_threshold")]
+    #[serde(default = "default_compaction_threshold")]
     pub compaction_threshold: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct ApiUsageSnapshot {
-    pub estimated_tokens: usize,
-    pub actual_input_tokens: usize,
+fn default_max_tool_result_chars() -> usize {
+    50000
 }
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct ContextReplacement {
-    pub tool_call_id: String,
-    pub tool_name: String,
-    pub artifact_id: String,
-    pub original_chars: usize,
-    pub preview_chars: usize,
-    pub strategy: ProjectionStrategy,
-    #[serde(default)]
-    pub outcome: ProjectionOutcome,
+fn default_max_context_tokens() -> usize {
+    100000
 }
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-#[serde(rename_all = "snake_case", tag = "type")]
-pub enum ToolProjectionState {
-    #[serde(rename = "inline")]
-    #[default]
-    Inline,
-    #[serde(rename = "deferred")]
-    Deferred {
-        until_turn: u32,
-        #[serde(default)]
-        inserted_at_turn: u32,
-    },
-    #[serde(rename = "replaced")]
-    Replaced {
-        replacement: ContextReplacement,
-        #[serde(default)]
-        inserted_at_turn: u32,
-    },
+fn default_microcompact_after_turns() -> u32 {
+    5
 }
-
-/// Backward-compat: old session JSON used flat strategy structs.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-#[serde(rename_all = "snake_case", tag = "type")]
-pub enum OldContextStrategy {
-    KeepFull,
-    Head {
-        max_chars: usize,
-    },
-    Tail {
-        max_chars: usize,
-    },
-    HeadTail {
-        head_chars: usize,
-        tail_chars: usize,
-    },
-    DropIfOld,
-    Microcompacted,
-    Script {
-        script: String,
-    },
-}
-
-/// Backward-compat: old session JSON used `replacements` instead of `tools`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct OldContextReplacement {
-    pub tool_call_id: String,
-    pub tool_name: String,
-    pub artifact_id: String,
-    pub original_chars: usize,
-    pub preview_chars: usize,
-    pub strategy: OldContextStrategy,
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct ContextProjectionState {
-    #[serde(default)]
-    pub tools: std::collections::BTreeMap<String, ToolProjectionState>,
-    /// Backward-compat: old session JSON with `replacements` instead of `tools`.
-    #[serde(default)]
-    pub replacements: std::collections::BTreeMap<String, OldContextReplacement>,
-    #[serde(default, alias = "turn_count")]
-    pub current_turn: u32,
-    #[serde(default)]
-    pub last_api_usage: Option<ApiUsageSnapshot>,
-    #[serde(default)]
-    pub turns_since_compaction: u32,
-}
-
-/// NOTE: Only `replacements` is currently consumed by the web host. The other
-/// fields are computed for future use and are verified by Rust unit tests.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct ContextProjectionReport {
-    pub estimated_tokens: usize,
-    pub replacements: Vec<ContextReplacement>,
-    pub dropped_messages: usize,
-    #[serde(default)]
-    pub needs_compaction: bool,
-    #[serde(default)]
-    pub cache_breakpoints: Vec<usize>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct ProjectionInput {
-    pub system_prompt: String,
-    pub messages: Vec<AgentMessage>,
-    pub budget: ContextProjectionBudget,
-    pub state: ContextProjectionState,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct ProjectionOutput {
-    pub projected_messages: Vec<AgentMessage>,
-    pub updated_state: ContextProjectionState,
-    pub report: ContextProjectionReport,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-#[serde(rename_all = "snake_case")]
-pub enum ContentKind {
-    FileRead,
-    CommandOutput,
-    Diff,
-    SearchResults,
-    DirectoryListing,
-    GenericText,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-#[serde(rename_all = "snake_case", tag = "type")]
-pub enum ProjectionShape {
-    #[serde(rename = "keep_full")]
-    KeepFull,
-    #[serde(rename = "head")]
-    Head { max_chars: usize },
-    #[serde(rename = "tail")]
-    Tail { max_chars: usize },
-    #[serde(rename = "head_tail")]
-    HeadTail {
-        head_chars: usize,
-        tail_chars: usize,
-    },
-    #[serde(rename = "microcompacted")]
-    Microcompacted,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-#[serde(rename_all = "snake_case", tag = "type")]
-pub enum ProjectionStrategy {
-    #[serde(rename = "fixed")]
-    Fixed {
-        shape: ProjectionShape,
-        #[serde(default)]
-        min_age: u32,
-    },
-    #[serde(rename = "dynamic")]
-    Dynamic { script: String },
-}
-
-impl Default for ProjectionStrategy {
-    fn default() -> Self {
-        ProjectionStrategy::Fixed {
-            shape: ProjectionShape::KeepFull,
-            min_age: 0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct ProjectionOutcome {
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct ToolResultContext {
-    pub content_kind: ContentKind,
-    pub strategy: ProjectionStrategy,
-    pub original_chars: usize,
-    pub truncated_by_tool: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
+fn default_compaction_threshold() -> f32 {
+    0.75
 }
 
 // ---------------------------------------------------------------------------
-// Agent types
+// Estimate tokens types
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct AgentState {
-    pub system_prompt: String,
-    pub model: Model,
-    pub thinking_level: ThinkingLevel,
-    pub messages: Vec<AgentMessage>,
-    pub is_streaming: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub streaming_message: Option<AgentMessage>,
-    pub pending_tool_calls: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
-// Session types
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct SessionEntry {
-    pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
-    pub kind: EntryKind,
-    pub timestamp: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum EntryKind {
-    Message {
-        #[serde(flatten)]
-        message: AgentMessage,
-    },
-    Compaction {
-        summary: String,
-        first_kept_entry_id: String,
-        tokens_before: u32,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        details: Option<JsonSchema>,
-    },
-    BranchSummary {
-        summary: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        details: Option<JsonSchema>,
-    },
-    ModelChange {
-        provider: String,
-        model_id: String,
-    },
-    ThinkingLevelChange(ThinkingLevel),
-    Custom {
-        custom_type: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        data: Option<JsonSchema>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct SessionState {
-    pub entries: Vec<SessionEntry>,
-    pub leaf_id: String,
-    #[serde(default)]
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct BranchSummary {
-    pub summary: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<JsonSchema>,
-}
-
-// ---------------------------------------------------------------------------
-// Session result envelopes
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct SessionStateOutput {
-    pub state: SessionState,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct SessionBranchOutput {
-    pub entries: Vec<SessionEntry>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct MoveToOutput {
-    pub summary_entry_id: Option<String>,
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
@@ -869,36 +558,6 @@ pub struct EstimateTokensInput {
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct EstimateTokensOutput {
     pub tokens: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct SessionStateResult {
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<SessionStateOutput>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ErrorDto>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct SessionBranchResult {
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<SessionBranchOutput>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ErrorDto>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct MoveToResult {
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<MoveToOutput>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ErrorDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
@@ -930,19 +589,6 @@ pub struct AgentOptions {
     pub tool_execution_mode: ExecutionMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<SessionId>,
-    #[serde(default)]
-    pub messages: Vec<AgentMessage>,
-    #[serde(default)]
-    pub session_state: Option<SessionState>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-#[serde(rename_all = "snake_case")]
-pub enum Phase {
-    Idle,
-    Streaming,
-    WaitForInput,
 }
 
 // ---------------------------------------------------------------------------
@@ -957,82 +603,9 @@ pub struct StartTurnInput {
     pub tools: Vec<ToolDefinition>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-#[serde(untagged)]
-pub enum PromptRequest {
-    Message(AgentMessage),
-    Text { text: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct PromptInput {
-    pub prompt: PromptRequest,
-    #[serde(default)]
-    pub tools: Vec<ToolDefinition>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-#[serde(untagged)]
-pub enum ToolDonePayload {
-    Failure { error: ToolError },
-    Success { result: ToolResult },
-}
-
 // ---------------------------------------------------------------------------
-// Output types
+// New API output types
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct StepOutput {
-    pub events: Vec<AgentEvent>,
-    pub actions: Vec<AgentAction>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct EventsOutput {
-    pub events: Vec<AgentEvent>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct StateOutput {
-    pub state: AgentState,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct CreateAgentOutput {
-    pub handle: u32,
-}
-
-// ---------------------------------------------------------------------------
-// Concrete result envelopes — wasm-bindgen cannot handle generics
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct CreateAgentResult {
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<CreateAgentOutput>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ErrorDto>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct StepResult {
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<StepOutput>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ErrorDto>,
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
@@ -1053,40 +626,10 @@ pub struct TurnResultResult {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct EventsResult {
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<EventsOutput>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ErrorDto>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct StateResult {
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<StateOutput>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ErrorDto>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct EmptyResult {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<()>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ErrorDto>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-pub struct ProjectionResult {
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<ProjectionOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ErrorDto>,
 }
@@ -1127,37 +670,27 @@ pub struct CreateHostAgentResult {
     pub error: Option<ErrorDto>,
 }
 
+/// PersistData DTO. Uses serde_json::Value for transcript/artifacts since TrimmedMessage/Artifacts
+/// are pi-core types without Tsify. The dto_conv! macro handles serde roundtrip.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct PersistData {
-    pub entries: Vec<SessionEntry>,
-    pub leaf_id: String,
-    pub name: String,
-    pub projection_state: ContextProjectionState,
-    pub artifacts: Vec<(String, String)>,
+    /// TrimmedMessage list as JSON value (serde roundtrip via dto_conv).
+    #[serde(rename = "T", default)]
+    pub transcript: serde_json::Value,
+    /// Artifacts map as JSON value (serde roundtrip via dto_conv).
+    #[serde(rename = "A", default)]
+    pub artifacts: serde_json::Value,
+    #[serde(default)]
+    pub turn_number: u32,
+    #[serde(default)]
+    pub host_artifacts: Vec<(String, String)>,
+    #[serde(default)]
     pub budget: ContextProjectionBudget,
+    #[serde(default)]
     pub system_prompt: String,
-}
-
-/// Backward-compat: old session JSON used object-shaped artifacts `{id, text}`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct OldArtifactEntry {
-    pub id: String,
-    pub text: String,
-}
-
-/// Backward-compat: old session JSON with `projection_state` and `artifacts`
-/// nested inside the `SessionState` object.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct OldSessionState {
-    pub entries: Vec<SessionEntry>,
-    pub leaf_id: String,
     #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub projection_state: Option<ContextProjectionState>,
-    #[serde(default)]
-    pub artifacts: Vec<OldArtifactEntry>,
+    pub compaction_prompt: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
@@ -1243,7 +776,6 @@ dto_conv!(ToolError, pi_core::ToolError);
 dto_conv!(ToolOutputStream, pi_core::ToolOutputStream);
 dto_conv!(CancelReason, pi_core::CancelReason);
 dto_conv!(ToolExecutionUpdate, pi_core::ToolExecutionUpdate);
-dto_conv!(AgentAction, pi_core::AgentAction);
 dto_conv!(AgentEvent, pi_core::AgentEvent);
 dto_conv!(ContentDelta, pi_core::ContentDelta);
 dto_conv!(QueueMode, pi_core::QueueMode);
@@ -1254,25 +786,7 @@ dto_conv!(AgentContext, pi_core::AgentContext);
 dto_conv!(LlmContext, pi_core::LlmContext);
 
 dto_conv!(ContextProjectionBudget, pi_core::ContextProjectionBudget);
-dto_conv!(ApiUsageSnapshot, pi_core::ApiUsageSnapshot);
-dto_conv!(ContextReplacement, pi_core::ContextReplacement);
-dto_conv!(ContextProjectionState, pi_core::ContextProjectionState);
-dto_conv!(ContextProjectionReport, pi_core::ContextProjectionReport);
-dto_conv!(ProjectionInput, pi_core::ProjectionInput);
-dto_conv!(ProjectionOutput, pi_core::ProjectionOutput);
-dto_conv!(ContentKind, pi_core::ContentKind);
-dto_conv!(ProjectionShape, pi_core::ProjectionShape);
-dto_conv!(ProjectionStrategy, pi_core::ProjectionStrategy);
-dto_conv!(ProjectionOutcome, pi_core::ProjectionOutcome);
-dto_conv!(ToolProjectionState, pi_core::ToolProjectionState);
-dto_conv!(ToolResultContext, pi_core::ToolResultContext);
 
-dto_conv!(AgentState, pi_core::AgentState);
 dto_conv!(AgentOptions, pi_core::AgentOptions);
-dto_conv!(Phase, pi_core::Phase);
 
-dto_conv!(SessionEntry, pi_core::SessionEntry);
-dto_conv!(EntryKind, pi_core::EntryKind);
-dto_conv!(SessionState, pi_core::SessionState);
-dto_conv!(BranchSummary, pi_core::BranchSummary);
 dto_conv!(PersistData, crate::host_state::PersistData);

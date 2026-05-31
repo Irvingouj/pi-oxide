@@ -1,4 +1,4 @@
-use pi_core::{AgentRuntime, Content, ToolCall, ToolCallId, ToolError, ToolResult};
+use pi_core::{AgentRuntime, ToolCall, ToolCallId, ToolError, ToolResult};
 
 use crate::app::{App, ChatEntry};
 use crate::extension::{ExtensionContext, ExtensionOutcome, ToolEvent};
@@ -61,39 +61,40 @@ impl App {
         // If all tools were sync and are now done, auto-continue
         if self.agent().state().pending_tool_calls.is_empty() && self.running_tasks.is_empty() {
             let runtime = self.agent.take().unwrap();
-            let (_events, actions, new_runtime) = match runtime {
-                AgentRuntime::ReadyToContinue(ready) => {
-                    let t = ready.continue_turn(std::mem::take(&mut self.session_state));
-                    self.session_state = t.session_state;
-                    (t.events, t.actions, t.state.into_runtime())
-                }
-                other => (vec![], vec![], other),
-            };
+            let compaction_prompt = self
+                .host_state
+                .as_ref()
+                .map(|h| h.compaction_prompt.clone())
+                .unwrap_or_default();
+            let budget = self.budget.clone();
+            let transcript = std::mem::take(&mut self.transcript);
+            let artifacts = std::mem::take(&mut self.artifacts);
+            let (_events, actions, new_runtime, transcript, artifacts, turn_number, _markers) =
+                match runtime {
+                    AgentRuntime::ReadyToContinue(ready) => ready
+                        .continue_turn(
+                            transcript,
+                            artifacts,
+                            self.turn_number,
+                            &budget,
+                            &compaction_prompt,
+                        )
+                        .into_parts(),
+                    other => (
+                        vec![],
+                        vec![],
+                        other,
+                        transcript,
+                        artifacts,
+                        self.turn_number,
+                        vec![],
+                    ),
+                };
+            self.transcript = transcript;
+            self.artifacts = artifacts;
+            self.turn_number = turn_number;
             self.agent = Some(new_runtime);
             self.handle_actions(terminal, actions);
-        }
-    }
-
-    fn store_artifact_from_tool_result(&mut self, tool_call_id: &ToolCallId, result: &Result<ToolResult, ToolError>) {
-        if let Ok(tool_result) = result {
-            let text = tool_result
-                .content
-                .iter()
-                .filter_map(|c| {
-                    if let Content::Text(t) = c {
-                        Some(t.text.as_str())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            let tcid = tool_call_id.as_str();
-            if let Some(ref mut hs) = self.host_state {
-                if let Some(pi_core::ToolProjectionState::Replaced { replacement, .. }) = hs.projection_state.tools.get(tcid) {
-                    hs.store_artifact(replacement.artifact_id.clone(), text);
-                }
-            }
         }
     }
 
@@ -103,14 +104,12 @@ impl App {
         tool_call_id: ToolCallId,
         result: Result<ToolResult, ToolError>,
     ) {
-        self.store_artifact_from_tool_result(&tool_call_id, &result);
-
         let output_text = match &result {
             Ok(tool_result) => tool_result
                 .content
                 .iter()
                 .filter_map(|c| {
-                    if let Content::Text(t) = c {
+                    if let pi_core::Content::Text(t) = c {
                         Some(t.text.as_str())
                     } else {
                         None
@@ -139,14 +138,38 @@ impl App {
         let _ = terminal.draw(|f| self.render(f));
 
         let runtime = self.agent.take().unwrap();
-        let session_state = std::mem::take(&mut self.session_state);
-        let (_events, actions, new_runtime, session_state) = match runtime {
-            AgentRuntime::WaitingTools(waiting) => {
-                waiting.on_tool_done(tool_call_id, result, session_state).into_parts()
-            }
-            other => (vec![], vec![], other, session_state),
-        };
-        self.session_state = session_state;
+        let transcript = std::mem::take(&mut self.transcript);
+        let artifacts = std::mem::take(&mut self.artifacts);
+        let (_events, actions, new_runtime, transcript, artifacts, turn_number, _markers) =
+            match runtime {
+                AgentRuntime::WaitingTools(waiting) => waiting
+                    .on_tool_done(
+                        tool_call_id,
+                        result,
+                        transcript,
+                        artifacts,
+                        self.turn_number,
+                    )
+                    .into_parts(),
+                AgentRuntime::Compacting(compacting) => {
+                    let (ev, act, state, transcript, artifacts, tn, m) = compacting
+                        .abort(transcript, artifacts, self.turn_number)
+                        .into_parts();
+                    (ev, act, state.into_runtime(), transcript, artifacts, tn, m)
+                }
+                other => (
+                    vec![],
+                    vec![],
+                    other,
+                    transcript,
+                    artifacts,
+                    self.turn_number,
+                    vec![],
+                ),
+            };
+        self.transcript = transcript;
+        self.artifacts = artifacts;
+        self.turn_number = turn_number;
         self.agent = Some(new_runtime);
         self.handle_actions(terminal, actions);
     }
@@ -176,18 +199,18 @@ impl App {
         self.running_tasks = remaining;
 
         // Apply UI updates and typestate transitions atomically per completed task
+        let mut transcript = std::mem::take(&mut self.transcript);
+        let mut artifacts = std::mem::take(&mut self.artifacts);
+        let mut turn_number = self.turn_number;
         let mut runtime = self.agent.take().unwrap();
         let mut all_actions = Vec::new();
-        let mut session_state = std::mem::take(&mut self.session_state);
         for (tool_call_id, result) in just_completed {
-            self.store_artifact_from_tool_result(&tool_call_id, &result);
-
             let output_text = match &result {
                 Ok(r) => r
                     .content
                     .iter()
                     .filter_map(|c| {
-                        if let Content::Text(t) = c {
+                        if let pi_core::Content::Text(t) = c {
                             Some(t.text.as_str())
                         } else {
                             None
@@ -204,20 +227,45 @@ impl App {
             });
             let _ = terminal.draw(|f| self.render(f));
 
-            let (events, actions, new_runtime, new_session_state) = match runtime {
-                AgentRuntime::WaitingTools(waiting) => {
-                    waiting.on_tool_done(tool_call_id, result, session_state).into_parts()
+            let (
+                events,
+                actions,
+                new_runtime,
+                new_transcript,
+                new_artifacts,
+                new_turn_number,
+                _markers,
+            ) = match runtime {
+                AgentRuntime::WaitingTools(waiting) => waiting
+                    .on_tool_done(tool_call_id, result, transcript, artifacts, turn_number)
+                    .into_parts(),
+                AgentRuntime::Compacting(compacting) => {
+                    let (ev, act, state, transcript, artifacts, tn, m) = compacting
+                        .abort(transcript, artifacts, turn_number)
+                        .into_parts();
+                    (ev, act, state.into_runtime(), transcript, artifacts, tn, m)
                 }
-                other => (vec![], vec![], other, session_state),
+                other => (
+                    vec![],
+                    vec![],
+                    other,
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    vec![],
+                ),
             };
             runtime = new_runtime;
-            session_state = new_session_state;
+            transcript = new_transcript;
+            artifacts = new_artifacts;
+            turn_number = new_turn_number;
             all_actions.extend(actions);
-            // Discard core events in async path (TUI reconstructs its own transcript)
             let _ = events;
         }
 
-        self.session_state = session_state;
+        self.transcript = transcript;
+        self.artifacts = artifacts;
+        self.turn_number = turn_number;
         self.agent = Some(runtime);
         self.handle_actions(terminal, all_actions);
     }

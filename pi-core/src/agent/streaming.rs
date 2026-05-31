@@ -1,12 +1,16 @@
 use super::{Agent, Phase};
+use crate::context_projection::projection_scan;
 use crate::events::{AgentAction, AgentEvent, ContentDelta};
 use crate::llm::{LlmChunk, LlmResult};
-use crate::message::{AgentMessage, Content, StopReason, TextContent, ToolCall};
-use crate::session::SessionState;
+use crate::message::{
+    AgentMessage, Artifacts, Content, StopReason, TextContent, ToolCall, TrimmedMessage,
+};
 use tracing::{debug, trace, warn};
 
 impl Agent {
     /// Feed a streaming chunk from the LLM.
+    ///
+    /// Accumulates into self.streaming_assistant. Does NOT modify T.
     pub(crate) fn feed_llm_chunk(&mut self, chunk: LlmChunk) -> Vec<AgentEvent> {
         if self.phase != Phase::Streaming {
             trace!(phase = ?self.phase, "ignored llm chunk outside streaming phase");
@@ -19,25 +23,23 @@ impl Agent {
             LlmChunk::Start { mut partial } => {
                 trace!("llm stream started");
                 partial.timestamp = super::current_timestamp();
-                let msg = AgentMessage::Assistant(partial.clone());
-                self.replace_last_assistant_or_push(msg.clone());
-                self.state.streaming_message = Some(msg.clone());
+                self.streaming_assistant = Some(partial.clone());
+                let msg = AgentMessage::Assistant(partial);
                 events.push(AgentEvent::MessageStart { message: msg });
             }
             LlmChunk::TextDelta { text } => {
                 trace!(bytes = text.len(), "llm text delta");
-                if let Some(AgentMessage::Assistant(ref mut a)) = self.state.messages.last_mut() {
-                    let delta_text = text.clone();
+                if let Some(ref mut a) = self.streaming_assistant {
                     if let Some(Content::Text(ref mut t)) = a.content.last_mut() {
                         t.text.push_str(&text);
                     } else {
-                        a.content.push(Content::Text(TextContent { text }));
+                        a.content
+                            .push(Content::Text(TextContent { text: text.clone() }));
                     }
                     let msg = AgentMessage::Assistant(a.clone());
-                    self.state.streaming_message = Some(msg.clone());
                     events.push(AgentEvent::MessageUpdate {
                         message: msg.clone(),
-                        delta: ContentDelta::TextDelta { text: delta_text },
+                        delta: ContentDelta::TextDelta { text },
                     });
                 }
             }
@@ -45,7 +47,7 @@ impl Agent {
                 tool_call_id,
                 delta,
             } => {
-                if let Some(AgentMessage::Assistant(ref mut a)) = self.state.messages.last_mut() {
+                if let Some(ref a) = self.streaming_assistant {
                     events.push(AgentEvent::MessageUpdate {
                         message: AgentMessage::Assistant(a.clone()),
                         delta: ContentDelta::ToolCallDelta {
@@ -56,7 +58,7 @@ impl Agent {
                 }
             }
             LlmChunk::ThinkingDelta { text } => {
-                if let Some(AgentMessage::Assistant(ref mut a)) = self.state.messages.last_mut() {
+                if let Some(ref a) = self.streaming_assistant {
                     events.push(AgentEvent::MessageUpdate {
                         message: AgentMessage::Assistant(a.clone()),
                         delta: ContentDelta::ThinkingDelta { text },
@@ -72,25 +74,39 @@ impl Agent {
     }
 
     /// Called by the host when the LLM stream ends.
+    ///
+    /// Finalizes the assistant message, pushes to T, runs projection_scan at turn end
+    /// (when EndTurn with no tools, or all tools completed).
     pub(crate) fn on_llm_done(
         &mut self,
         result: LlmResult,
-        session_state: &mut SessionState,
-    ) -> (Vec<AgentEvent>, Vec<AgentAction>) {
+        mut t: Vec<TrimmedMessage>,
+        mut a: Artifacts,
+        turn_number: u32,
+        _budget: &crate::context_projection::ContextProjectionBudget,
+    ) -> (
+        Vec<AgentEvent>,
+        Vec<AgentAction>,
+        Vec<crate::context_projection::ChangeMarker>,
+        Vec<TrimmedMessage>,
+        Artifacts,
+    ) {
         if self.phase != Phase::Streaming {
             warn!(phase = ?self.phase, "on_llm_done requested outside streaming phase");
-            return (vec![], vec![]);
+            return (vec![], vec![], vec![], t, a);
         }
 
         let mut events = Vec::new();
         let mut actions = Vec::new();
+        let mut markers = Vec::new();
 
         let assistant_msg = result.finalize_message();
         let msg = AgentMessage::Assistant(assistant_msg.clone());
 
-        self.replace_last_assistant_or_push(msg.clone());
-        self.state.streaming_message = None;
-        self.append_session_message(session_state, &msg);
+        // Push finalized assistant message to T
+        t.push(TrimmedMessage::Assistant(assistant_msg.clone()));
+        self.streaming_assistant = None;
+
         events.push(AgentEvent::MessageEnd {
             message: msg.clone(),
         });
@@ -110,15 +126,10 @@ impl Agent {
                 message: msg,
                 tool_results: vec![],
             });
-            events.push(AgentEvent::AgentEnd {
-                messages: self.state.messages.clone(),
-            });
+            events.push(AgentEvent::AgentEnd);
             self.phase = Phase::Idle;
-            self.state.is_streaming = false;
-            actions.push(AgentAction::Finished {
-                messages: self.state.messages.clone(),
-            });
-            return (events, actions);
+            actions.push(AgentAction::Finished);
+            return (events, actions, markers, t, a);
         }
 
         // Check for tool calls
@@ -132,34 +143,20 @@ impl Agent {
             .collect();
 
         if tool_calls.is_empty() {
-            debug!("assistant turn finished without tool calls");
-            // No tools: turn ends
+            debug!("assistant turn finished without tool calls — running projection_scan");
+            // EndTurn without tools: run projection_scan
+            let scan_markers = projection_scan(&mut t, &mut a, turn_number);
+            markers.extend(scan_markers);
+
             events.push(AgentEvent::TurnEnd {
                 message: msg,
                 tool_results: vec![],
             });
 
-            // Check steering / follow-up queues
-            let steering = self.drain_steering();
-            if !steering.is_empty() {
-                return self.inject_messages_and_stream(steering, session_state);
-            }
-
-            let follow = self.drain_follow_up();
-            if !follow.is_empty() {
-                return self.inject_messages_and_stream(follow, session_state);
-            }
-
-            // Run complete
-            events.push(AgentEvent::AgentEnd {
-                messages: self.state.messages.clone(),
-            });
+            events.push(AgentEvent::AgentEnd);
             self.phase = Phase::Idle;
-            self.state.is_streaming = false;
-            actions.push(AgentAction::Finished {
-                messages: self.state.messages.clone(),
-            });
-            return (events, actions);
+            actions.push(AgentAction::Finished);
+            return (events, actions, markers, t, a);
         }
 
         // Track all tools uniformly — execution strategy is a host concern
@@ -174,12 +171,11 @@ impl Agent {
         }
 
         self.phase = Phase::Idle;
-        self.state.is_streaming = false;
         debug!(
             tool_count = tool_calls.len(),
             "assistant requested tool execution"
         );
         actions.push(AgentAction::ExecuteTools { calls: tool_calls });
-        (events, actions)
+        (events, actions, markers, t, a)
     }
 }

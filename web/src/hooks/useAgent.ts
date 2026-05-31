@@ -4,12 +4,16 @@
  * Uses the new HostDirective protocol. No local projection state or artifacts.
  */
 
-import type { AgentEvent, PersistData } from "@pi-oxide/pi-host-web";
+import type {
+	AgentEvent,
+	AgentMessage,
+	PersistData,
+} from "@pi-oxide/pi-host-web";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LiveBrowserRuntime } from "../browser/liveRuntime.ts";
 import {
 	createHostAgentInstance,
-	HostAgent,
+	type HostAgent,
 	runTurnWithHostAgent,
 	stopAgent,
 } from "../services/agentService.ts";
@@ -31,7 +35,8 @@ function isPersistData(v: unknown): v is PersistData {
 	return (
 		typeof v === "object" &&
 		v !== null &&
-		Array.isArray((v as Record<string, unknown>).entries) &&
+		"T" in (v as Record<string, unknown>) &&
+		"A" in (v as Record<string, unknown>) &&
 		typeof (v as Record<string, unknown>).budget === "object"
 	);
 }
@@ -177,33 +182,35 @@ export function useAgent() {
 			};
 			const llmProvider = createLlmProvider(abortController.signal);
 
-			const result = await runTurnWithHostAgent(hostAgent, text, {
-				llm: llmProvider,
-				tools,
-				llmTools: [...BROWSER_TOOLS, ...ARTIFACT_TOOLS],
-				onEvent: (event) => eventToStoreAction(event, store),
-				onPersist: async (data) => {
-					await sessionStore.saveSession(SESSION_ID, data);
-				},
-				signal: abortController.signal,
-			});
-
-			if (result.aborted) {
-				store.addMessage({
-					id: `abort-${Date.now()}`,
-					type: "assistant",
-					text: "Stopped by user.",
+			try {
+				const result = await runTurnWithHostAgent(hostAgent, text, {
+					llm: llmProvider,
+					tools,
+					llmTools: [...BROWSER_TOOLS, ...ARTIFACT_TOOLS],
+					onEvent: (event) => eventToStoreAction(event, store),
+					onPersist: async (data) => {
+						await sessionStore.saveSession(SESSION_ID, data);
+					},
+					signal: abortController.signal,
 				});
-			} else if (result.error) {
+
+				if (result.aborted) {
+					store.addMessage({
+						id: `abort-${Date.now()}`,
+						type: "assistant",
+						text: "Stopped by user.",
+					});
+				}
+			} catch (e) {
 				store.addMessage({
 					id: `err-${Date.now()}`,
 					type: "error",
-					text: result.error,
+					text: e instanceof Error ? e.message : String(e),
 				});
+			} finally {
+				store.setRunning(false);
+				abortControllerRef.current = null;
 			}
-
-			store.setRunning(false);
-			abortControllerRef.current = null;
 		},
 		[hostAgent, store, sessionStore],
 	);
@@ -211,10 +218,25 @@ export function useAgent() {
 	const steerPrompt = useCallback(
 		async (text: string) => {
 			if (!hostAgent || !text.trim()) return;
-			// Steering is not yet supported in the HostAgent API
-			console.warn("steering is not yet supported in the HostAgent API");
+			const message: AgentMessage = {
+				role: "user",
+				content: [{ type: "text", text }],
+				timestamp: Date.now(),
+			};
+			try {
+				const step = hostAgent.steer(message);
+				for (const event of step.events) {
+					eventToStoreAction(event, store);
+				}
+			} catch (e) {
+				store.addMessage({
+					id: `err-${Date.now()}`,
+					type: "error",
+					text: e instanceof Error ? e.message : String(e),
+				});
+			}
 		},
-		[hostAgent],
+		[hostAgent, store],
 	);
 
 	const stopPrompt = useCallback(() => {

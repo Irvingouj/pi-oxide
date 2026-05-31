@@ -8,8 +8,8 @@ import type {
 	LlmChunk,
 	LlmContext,
 	LlmResult,
-	LlmStream,
 } from "@pi-oxide/pi-host-web";
+import type { LlmStream } from "./agentService.ts";
 import { getApiBaseUrl, getApiKey, getModel } from "../browser/config.ts";
 
 // --- Internal types ---

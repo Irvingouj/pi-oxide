@@ -9,9 +9,11 @@ import {
 	hostSearchArtifacts,
 	type ToolCall,
 	type ToolDefinition,
-	type ToolMap,
 } from "@pi-oxide/pi-host-web";
 import type { BrowserRuntime } from "../browser/browserRuntime.ts";
+
+// Local type — not exported by the SDK
+export type ToolMap = Record<string, (call: ToolCall) => Promise<import("@pi-oxide/pi-host-web").ToolResult> | import("@pi-oxide/pi-host-web").ToolResult>;
 import {
 	BROWSER_TOOLS,
 	executeBrowserTool,

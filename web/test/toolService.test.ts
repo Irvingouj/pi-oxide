@@ -11,6 +11,7 @@ import {
 } from "@pi-oxide/pi-host-web";
 
 await ensureInit();
+
 import type { BrowserRuntime } from "../src/browser/browserRuntime.ts";
 import {
 	ARTIFACT_TOOLS,
@@ -95,7 +96,6 @@ describe("createArtifactToolRegistry", () => {
 				steering_mode: "one_at_a_time",
 				follow_up_mode: "one_at_a_time",
 				tool_execution_mode: "parallel",
-				messages: [],
 			},
 			{
 				max_tool_result_chars: 50000,
@@ -148,7 +148,8 @@ describe("createArtifactToolRegistry", () => {
 			id: "1",
 		});
 		assert.ok("content" in result);
-		assert.ok(result.content[0].text.includes("not found"));
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		assert.ok(text.includes("not found"));
 		cleanup();
 	});
 
@@ -162,7 +163,8 @@ describe("createArtifactToolRegistry", () => {
 			id: "1",
 		});
 		assert.ok("content" in result);
-		assert.ok(result.content[0].text.includes("artifact_id"));
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		assert.ok(text.includes("artifact_id"));
 		cleanup();
 	});
 
@@ -176,7 +178,8 @@ describe("createArtifactToolRegistry", () => {
 			id: "1",
 		});
 		assert.ok("content" in result);
-		assert.ok(result.content[0].text.includes("artifact_id"));
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		assert.ok(text.includes("artifact_id"));
 		cleanup();
 	});
 
@@ -190,7 +193,8 @@ describe("createArtifactToolRegistry", () => {
 			id: "1",
 		});
 		assert.ok("content" in result);
-		assert.ok(result.content[0].text.includes("pattern"));
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		assert.ok(text.includes("pattern"));
 		cleanup();
 	});
 
@@ -204,7 +208,8 @@ describe("createArtifactToolRegistry", () => {
 			id: "1",
 		});
 		assert.ok("content" in result);
-		assert.ok(result.content[0].text.includes("pattern"));
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		assert.ok(text.includes("pattern"));
 		cleanup();
 	});
 });

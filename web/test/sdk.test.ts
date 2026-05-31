@@ -1,19 +1,19 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import {
-	ensureInit,
-	createHostState,
-	destroyHostState,
 	createHostAgent,
+	createHostState,
 	destroyHostAgent,
-	startTurn,
+	destroyHostState,
+	ensureInit,
+	getHostStatePersistData,
+	hostAcceptCompaction,
+	hostContinueTurn,
 	hostFeedLlmChunk,
 	hostLlmDone,
 	hostToolDone,
-	hostAcceptCompaction,
-	hostContinueTurn,
-	getHostStatePersistData,
 	restoreHostState,
+	startTurn,
 } from "@pi-oxide/pi-host-web";
 
 await ensureInit();
@@ -49,7 +49,6 @@ describe("SDK exports new HostDirective API", () => {
 				steering_mode: "one_at_a_time",
 				follow_up_mode: "one_at_a_time",
 				tool_execution_mode: "parallel",
-				messages: [],
 			},
 			{
 				max_tool_result_chars: 50000,
@@ -79,9 +78,8 @@ describe("SDK exports new HostDirective API", () => {
 		assert.ok(persistResult.data, "getHostStatePersistData should return data");
 		const data = persistResult.data.state;
 		assert.equal(data.system_prompt, "");
-		assert.equal(data.name, "");
-		assert.ok(Array.isArray(data.entries));
-		assert.ok(Array.isArray(data.artifacts));
+		assert.ok(Array.isArray(data.T));
+		assert.ok(data.A !== undefined);
 
 		const restoreResult = restoreHostState(data);
 		assert.ok(restoreResult.ok, "restoreHostState should succeed");
@@ -114,7 +112,6 @@ describe("SDK exports new HostDirective API", () => {
 				steering_mode: "one_at_a_time",
 				follow_up_mode: "one_at_a_time",
 				tool_execution_mode: "parallel",
-				messages: [],
 			},
 			{
 				max_tool_result_chars: 50000,
@@ -163,7 +160,6 @@ describe("SDK exports new HostDirective API", () => {
 				steering_mode: "one_at_a_time",
 				follow_up_mode: "one_at_a_time",
 				tool_execution_mode: "parallel",
-				messages: [],
 			},
 			{
 				max_tool_result_chars: 50000,
@@ -194,9 +190,8 @@ describe("SDK exports new HostDirective API", () => {
 		destroyHostAgent(handle);
 	});
 
-	it("sdk_backward_compat", () => {
-		// Old API (createAgent, prompt, onLlmDone) should still exist and work
-		const oldAgent = createHostAgent(
+	it("sdk_createHostAgent_still_works", () => {
+		const agent = createHostAgent(
 			{
 				system_prompt: "test",
 				model: {
@@ -212,7 +207,6 @@ describe("SDK exports new HostDirective API", () => {
 				steering_mode: "one_at_a_time",
 				follow_up_mode: "one_at_a_time",
 				tool_execution_mode: "parallel",
-				messages: [],
 			},
 			{
 				max_tool_result_chars: 50000,
@@ -221,8 +215,8 @@ describe("SDK exports new HostDirective API", () => {
 				compaction_threshold: 0.75,
 			},
 		);
-		assert.ok(oldAgent.ok, "old-style createHostAgent should still work");
-		assert.ok(oldAgent.data, "old-style createHostAgent should return data");
-		destroyHostAgent(oldAgent.data!.handle);
+		assert.ok(agent.ok, "createHostAgent should still work");
+		assert.ok(agent.data, "createHostAgent should return data");
+		destroyHostAgent(agent.data!.handle);
 	});
 });

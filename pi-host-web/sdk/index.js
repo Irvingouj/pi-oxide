@@ -1,37 +1,16 @@
 /**
  * High-level JS SDK for @pi-oxide/pi-host-web.
  *
- * Hides WASM loading, numeric handles, and the agent drive-loop.
+ * Hides WASM loading and numeric handles.
  * Supports streaming LLM responses and full agent lifecycle.
  *
  * Import from the package root:
- *   import { Agent, toolResult } from "@pi-oxide/pi-host-web";
+ *   import { ensureInit, toolResult } from "@pi-oxide/pi-host-web";
  */
 
 import {
-	abort,
-	createAgent,
-	continueTurn,
-	destroyAgent,
-	feedLlmChunk,
-	followUp,
-	getSessionState,
-	initSync,
-	onLlmDone,
-	onToolCancelled,
-	onToolDone,
-	onToolStarted,
-	projectContext,
-	prompt,
-	reset,
-	setSessionState,
-	state,
-	steer,
 	default as init,
-	// HostState API
-	createHostState,
-	destroyHostState,
-	// New API (HostDirective protocol)
+	initSync,
 	createHostAgent,
 	destroyHostAgent,
 	startTurn,
@@ -43,16 +22,21 @@ import {
 	getHostStatePersistData,
 	restoreHostState,
 	restoreHostStateFromJson,
-	// Phase 5 — artifact access
 	hostReadArtifact,
 	hostSearchArtifacts,
 	hostToolCancelled,
 	hostAbort,
 	getHostAgentPersistData,
 	restoreHostAgent,
+	createHostState,
+	destroyHostState,
+	hostSteer,
+	hostReset,
+	estimateTokens,
+	estimateTokensForText,
+	setLogLevel,
 } from "../pi_host_web.js";
 
-export { projectContext };
 export {
 	createHostState,
 	destroyHostState,
@@ -73,6 +57,11 @@ export {
 	hostAbort,
 	getHostAgentPersistData,
 	restoreHostAgent,
+	hostSteer,
+	hostReset,
+	estimateTokens,
+	estimateTokensForText,
+	setLogLevel,
 };
 
 let initialized = false;
@@ -92,7 +81,7 @@ export async function ensureInit() {
 	initialized = true;
 }
 
-class HostError extends Error {
+export class HostError extends Error {
 	constructor(code, message) {
 		super(message);
 		this.code = code;
@@ -100,7 +89,7 @@ class HostError extends Error {
 	}
 }
 
-function unwrap(result) {
+export function unwrap(result) {
 	if (!result.ok) {
 		throw new HostError(result.error.code, result.error.message);
 	}
@@ -119,180 +108,4 @@ export function toolResult(text, opts = {}) {
 		payload.details = opts.details;
 	}
 	return payload;
-}
-
-/** Build an error tool result payload. */
-export function toolError(code, message) {
-	return { error: { code, message } };
-}
-
-/**
- * High-level agent that manages the WASM handle and drive-loop.
- *
- * Usage:
- *   const agent = await Agent.create(options);
- *   const finalAction = await agent.run("hello", { llm, tools, onEvent });
- *   agent.destroy();
- */
-export class Agent {
-	/** @type {number} */
-	#handle;
-
-	constructor(handle) {
-		this.#handle = handle;
-	}
-
-	/** Create a new agent. Loads WASM on first call automatically. */
-	static async create(options) {
-		await ensureInit();
-		const result = unwrap(createAgent(options));
-		return new Agent(result.handle);
-	}
-
-	/**
-	 * Run one user prompt through the full turn loop.
-	 *
-	 * @param {string} promptText
-	 * @param {object} config
-	 * @param {LlmProvider} config.llm
-	 * @param {Record<string, (call: ToolCall) => Promise<ToolResult> | ToolResult>} config.tools
-	 * @param {(event: AgentEvent) => void} [config.onEvent]
-	 * @param {AbortSignal} [config.signal] — abort to stop mid-stream or mid-tool
-	 * @returns {Promise<AgentAction>} terminal action (finished or wait_for_input)
-	 */
-	async run(promptText, config) {
-		const signal = config.signal;
-		const checkAbort = () => {
-			if (signal?.aborted) {
-				this.stop();
-				throw new HostError("user_aborted", "Turn stopped by user");
-			}
-		};
-
-		const llmTools = config.llmTools ?? [];
-		let step = unwrap(
-			prompt(this.#handle, {
-				prompt: { text: promptText },
-				tools: llmTools,
-			}),
-		);
-		for (const event of step.events) {
-			config.onEvent?.(event);
-		}
-
-		while (true) {
-			checkAbort();
-			const actions = step.actions ?? [];
-
-			for (const action of actions) {
-				checkAbort();
-				switch (action.type) {
-					case "stream_llm": {
-						const stream = await config.llm.call(action.context, signal);
-						for await (const chunk of stream.chunks) {
-							checkAbort();
-							const ev = unwrap(feedLlmChunk(this.#handle, chunk));
-							for (const e of ev.events) config.onEvent?.(e);
-						}
-						checkAbort();
-						const result = await stream.result;
-						step = unwrap(onLlmDone(this.#handle, result));
-						for (const e of step.events) config.onEvent?.(e);
-						break;
-					}
-
-					case "execute_tools": {
-						for (const call of action.calls) {
-							checkAbort();
-							const started = unwrap(onToolStarted(this.#handle, call.id));
-							for (const e of started.events) config.onEvent?.(e);
-
-							const handler = config.tools[call.name];
-							let result;
-							if (handler) {
-								result = await handler(call);
-							} else {
-								result = toolError(
-									"unknown_tool",
-									`No handler for ${call.name}`,
-								);
-							}
-							step = unwrap(onToolDone(this.#handle, call.id, result));
-							for (const e of step.events) config.onEvent?.(e);
-						}
-						if ((step.actions ?? []).length === 0) {
-							step = unwrap(continueTurn(this.#handle));
-							for (const e of step.events) config.onEvent?.(e);
-						}
-						break;
-					}
-
-					case "cancel_tools": {
-						for (const id of action.tool_call_ids) {
-							step = unwrap(onToolCancelled(this.#handle, id, action.reason));
-							for (const e of step.events) config.onEvent?.(e);
-						}
-						break;
-					}
-
-					case "finished":
-						return action;
-
-					case "wait_for_input":
-						return action;
-
-					default:
-						throw new HostError(
-							"unknown_action",
-							`Unknown action type: ${action.type}`,
-						);
-				}
-			}
-		}
-	}
-
-	/** Abort a running turn mid-stream or mid-tool. */
-	stop() {
-		try {
-			unwrap(abort(this.#handle));
-		} catch (e) {
-			if (e.code !== "wrong_phase") throw e;
-		}
-	}
-
-	/** Reset agent state (clear messages, return to idle). */
-	reset() {
-		unwrap(reset(this.#handle));
-	}
-
-	/** Get public agent state. */
-	state() {
-		return unwrap(state(this.#handle));
-	}
-
-	/** Get session state for persistence. */
-	getSessionState() {
-		return unwrap(getSessionState(this.#handle));
-	}
-
-	/** Set session state (e.g. after restoring from storage). */
-	setSessionState(sessionState) {
-		unwrap(setSessionState(this.#handle, sessionState));
-	}
-
-	/** Send a steering message mid-turn. */
-	steer(message) {
-		const out = unwrap(steer(this.#handle, message));
-		return out.events;
-	}
-
-	/** Queue a follow-up message. */
-	followUp(message) {
-		unwrap(followUp(this.#handle, message));
-	}
-
-	/** Destroy the underlying WASM handle. */
-	destroy() {
-		destroyAgent(this.#handle);
-	}
 }

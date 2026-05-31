@@ -16,7 +16,8 @@ function isPersistData(v: unknown): v is PersistData {
 	return (
 		typeof v === "object" &&
 		v !== null &&
-		Array.isArray((v as Record<string, unknown>).entries) &&
+		"T" in (v as Record<string, unknown>) &&
+		"A" in (v as Record<string, unknown>) &&
 		typeof (v as Record<string, unknown>).budget === "object"
 	);
 }
@@ -31,18 +32,12 @@ export const useSessionStore = create<SessionStore>((set) => ({
 			if (loaded && isPersistData(loaded)) {
 				set({ restoredState: loaded });
 			} else if (loaded) {
-				console.warn("Session state missing entries/budget fields, clearing");
+				console.warn("Session state missing T/A/budget fields, clearing");
 				const empty: PersistData = {
-					entries: [],
-					leaf_id: "",
-					name: "",
-					projection_state: {
-						tools: {},
-						current_turn: 0,
-						last_api_usage: null,
-						turns_since_compaction: 0,
-					},
-					artifacts: [],
+					T: [],
+					A: {},
+					turn_number: 0,
+					host_artifacts: [],
 					budget: {
 						max_tool_result_chars: 50000,
 						max_context_tokens: 100000,
@@ -50,6 +45,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
 						compaction_threshold: 0.75,
 					},
 					system_prompt: "",
+					compaction_prompt: "",
 				};
 				await backend.save(sessionId, empty);
 				set({ restoredState: undefined });

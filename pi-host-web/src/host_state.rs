@@ -16,9 +16,8 @@ pub struct ArtifactSearchResult {
     pub match_count: usize,
 }
 
-/// Serializable snapshot of host state for persistence.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
+/// Serializable snapshot of host state for persistence (internal only).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PersistData {
     #[serde(rename = "T")]
     pub transcript: Vec<TrimmedMessage>,

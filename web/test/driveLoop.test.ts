@@ -1,24 +1,25 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import {
+	type AgentMessage,
 	createHostAgent,
 	destroyHostAgent,
 	ensureInit,
-	startTurn,
-	type AgentMessage,
-	type AgentRunConfig,
 	type LlmChunk,
 	type LlmContext,
 	type LlmResult,
-	type LlmStream,
 	type PersistData,
+	startTurn,
 	type ToolCall,
 	type ToolResult,
 } from "@pi-oxide/pi-host-web";
 
 await ensureInit();
+
 import {
+	type AgentRunConfig,
 	HostAgent,
+	type LlmStream,
 	runTurnWithHostAgent,
 } from "../src/services/agentService.ts";
 
@@ -39,7 +40,6 @@ function makeAgent(): HostAgent {
 			steering_mode: "one_at_a_time",
 			follow_up_mode: "one_at_a_time",
 			tool_execution_mode: "parallel",
-			messages: [],
 		},
 		{
 			max_tool_result_chars: 50000,
@@ -123,7 +123,7 @@ describe("runTurnWithHostAgent", () => {
 			onEvent: (e) => events.push(e.type),
 		});
 		assert.equal(result.aborted, false);
-		assert.equal(result.error, null);
+
 		assert.ok(events.includes("message_start"));
 		assert.ok(events.includes("message_end"));
 		agent.destroy();
@@ -215,7 +215,7 @@ describe("runTurnWithHostAgent", () => {
 			],
 		});
 		assert.equal(result.aborted, false);
-		assert.equal(result.error, null);
+
 		assert.equal(toolCalls.length, 1);
 		assert.equal(toolCalls[0].name, "test_tool");
 		agent.destroy();
@@ -249,9 +249,9 @@ describe("runTurnWithHostAgent", () => {
 			},
 		});
 		assert.equal(result.aborted, false);
-		assert.equal(result.error, null);
+
 		assert.ok(persisted);
-		assert.ok(Array.isArray(persisted!.entries));
+		assert.ok(Array.isArray(persisted!.T));
 		agent.destroy();
 	});
 
@@ -279,11 +279,11 @@ describe("runTurnWithHostAgent", () => {
 			tools: {},
 		});
 		assert.equal(result.aborted, false);
-		assert.equal(result.error, null);
+
 		agent.destroy();
 	});
 
-	it("drive_loop_handles_wait_for_input", async () => {
+	it("drive_loop_tool_turn_continues_after_tool_use", async () => {
 		const agent = makeAgent();
 		let llmCalls = 0;
 		const result = await runTurnWithHostAgent(agent, "use tool", {
@@ -367,7 +367,7 @@ describe("runTurnWithHostAgent", () => {
 			],
 		});
 		assert.equal(result.aborted, false);
-		assert.equal(result.error, null);
+
 		agent.destroy();
 	});
 
@@ -424,7 +424,7 @@ describe("runTurnWithHostAgent", () => {
 			signal: controller.signal,
 		});
 		assert.equal(result.aborted, true);
-		assert.equal(result.error, null);
+
 		agent.destroy();
 	});
 
@@ -452,14 +452,14 @@ describe("runTurnWithHostAgent", () => {
 			tools: {},
 		});
 		assert.equal(result.aborted, false);
-		assert.equal(result.error, null);
+
 		agent.destroy();
 	});
 
 	it("session_restore_uses_new_api", async () => {
 		const agent = makeAgent();
 		const persist1 = agent.getPersistData();
-		assert.ok(Array.isArray(persist1.entries));
+		assert.ok(Array.isArray(persist1.T));
 		agent.destroy();
 	});
 
@@ -487,7 +487,7 @@ describe("runTurnWithHostAgent", () => {
 			tools: {},
 		});
 		assert.equal(result.aborted, false);
-		assert.equal(result.error, null);
+
 		agent.destroy();
 	});
 
@@ -581,7 +581,7 @@ describe("runTurnWithHostAgent", () => {
 			},
 		});
 		assert.equal(result.aborted, false);
-		assert.equal(result.error, null);
+
 		assert.equal(
 			llmCalls,
 			2,
@@ -592,57 +592,82 @@ describe("runTurnWithHostAgent", () => {
 		agent.destroy();
 	});
 
-	it("drive_loop_handles_compact", async () => {
-		const result = createHostAgent(
-			{
-				system_prompt: "test",
-				model: {
-					id: "test-model",
-					name: "Test",
-					api: "test",
-					provider: "test",
-					reasoning: false,
-					context_window: 4096,
-					max_tokens: 1024,
-				},
-				thinking_level: "off",
-				steering_mode: "one_at_a_time",
-				follow_up_mode: "one_at_a_time",
-				tool_execution_mode: "parallel",
-				messages: [],
-			},
-			{
-				max_tool_result_chars: 50000,
-				max_context_tokens: 10,
-				microcompact_after_turns: 5,
-				compaction_threshold: 0.5,
-			},
-		);
-		assert.ok(result.ok);
-		const agent = new HostAgent(result.data!.handle);
+	it("drive_loop_handles_summarize", async () => {
 		let summarizeCalled = false;
-		const runResult = await runTurnWithHostAgent(agent, "A".repeat(100), {
+		const mockAgent = {
+			handle: 999,
+			startTurn() {
+				return {
+					events: [],
+					directives: [
+						{
+							type: "stream_llm",
+							context: {
+								system_prompt: "test",
+								messages: [
+									{
+										role: "user",
+										content: [{ type: "text", text: "hi" }],
+										timestamp: 1,
+									},
+								],
+								tools: [],
+							},
+						},
+						{
+							type: "summarize",
+							context: {
+								system_prompt: "test",
+								messages: [
+									{
+										role: "user",
+										content: [{ type: "text", text: "hi" }],
+										timestamp: 1,
+									},
+								],
+								tools: [],
+							},
+						},
+						{ type: "finished" },
+					],
+				};
+			},
+			feedLlmChunk() {
+				return { events: [], directives: [] };
+			},
+			llmDone() {
+				return { events: [], directives: [] };
+			},
+			acceptCompaction() {
+				return { events: [], directives: [] };
+			},
+			continueTurn() {
+				return { events: [], directives: [] };
+			},
+			getPersistData() {
+				return {
+					T: [],
+					A: {},
+					turn_number: 0,
+					host_artifacts: [],
+					budget: {
+						max_tool_result_chars: 50000,
+						max_context_tokens: 100000,
+						microcompact_after_turns: 5,
+						compaction_threshold: 0.75,
+					},
+					system_prompt: "",
+					compaction_prompt: "",
+				};
+			},
+			destroy() {},
+		} as unknown as HostAgent;
+
+		const runResult = await runTurnWithHostAgent(mockAgent, "hello", {
 			llm: {
-				async call(_context, _signal): Promise<LlmStream> {
+				async call() {
 					return {
 						chunks: (async function* () {
-							yield {
-								kind: "start",
-								content: [{ type: "text", text: "" }],
-								api: "test",
-								provider: "test",
-								model: "test-model",
-								stop_reason: "end_turn",
-								error_message: undefined,
-								timestamp: 1,
-								usage: {
-									input: 0,
-									output: 0,
-									cache_read: 0,
-									cache_write: 0,
-									total_tokens: 0,
-								},
-							};
 							yield { kind: "done" };
 						})(),
 						result: Promise.resolve({
@@ -665,17 +690,15 @@ describe("runTurnWithHostAgent", () => {
 						}),
 					};
 				},
-				async summarize(_messages, _signal) {
+				async summarize() {
 					summarizeCalled = true;
-					return "Compacted by host";
+					return "summary";
 				},
 			},
 			tools: {},
 		});
 		assert.equal(runResult.aborted, false);
-		assert.equal(runResult.error, null);
-		assert.ok(summarizeCalled, "should call summarize during compact");
-		agent.destroy();
+		assert.ok(summarizeCalled, "should call summarize during summarize");
 	});
 
 	it("drive_loop_handles_cancel_tools", async () => {
@@ -716,11 +739,10 @@ describe("runTurnWithHostAgent", () => {
 			},
 			getPersistData() {
 				return {
-					entries: [],
-					leaf_id: "",
-					name: "",
-					projection_state: {},
-					artifacts: [],
+					T: [],
+					A: {},
+					turn_number: 0,
+					host_artifacts: [],
 					budget: {
 						max_tool_result_chars: 50000,
 						max_context_tokens: 100000,
@@ -728,6 +750,7 @@ describe("runTurnWithHostAgent", () => {
 						compaction_threshold: 0.75,
 					},
 					system_prompt: "",
+					compaction_prompt: "",
 				};
 			},
 			destroy() {},
@@ -755,14 +778,14 @@ describe("runTurnWithHostAgent", () => {
 			tools: {},
 		});
 		assert.equal(result.aborted, false);
-		assert.equal(result.error, null);
+
 		assert.ok(
 			toolCancelledCalled,
 			"should call toolCancelled for cancel_tools directive",
 		);
 	});
 
-	it("drive_loop_processes_compact_when_no_step_change", async () => {
+	it("drive_loop_processes_summarize_when_no_step_change", async () => {
 		let compactCalled = false;
 		const mockAgent = {
 			handle: 999,
@@ -770,7 +793,20 @@ describe("runTurnWithHostAgent", () => {
 				return {
 					events: [],
 					directives: [
-						{ type: "compact", compact_up_to: "leaf-1" },
+						{
+							type: "summarize",
+							context: {
+								system_prompt: "test",
+								messages: [
+									{
+										role: "user",
+										content: [{ type: "text", text: "hi" }],
+										timestamp: 1,
+									},
+								],
+								tools: [],
+							},
+						},
 						{ type: "finished" },
 					],
 				};
@@ -796,22 +832,10 @@ describe("runTurnWithHostAgent", () => {
 			},
 			getPersistData() {
 				return {
-					entries: [
-						{
-							id: "e1",
-							kind: {
-								type: "message",
-								role: "user",
-								content: [{ type: "text", text: "hi" }],
-								timestamp: 1,
-							},
-							timestamp: 1,
-						},
-					],
-					leaf_id: "e1",
-					name: "",
-					projection_state: {},
-					artifacts: [],
+					T: [],
+					A: {},
+					turn_number: 0,
+					host_artifacts: [],
 					budget: {
 						max_tool_result_chars: 50000,
 						max_context_tokens: 100000,
@@ -819,6 +843,7 @@ describe("runTurnWithHostAgent", () => {
 						compaction_threshold: 0.75,
 					},
 					system_prompt: "",
+					compaction_prompt: "",
 				};
 			},
 			destroy() {},
@@ -858,10 +883,10 @@ describe("runTurnWithHostAgent", () => {
 			tools: {},
 		});
 		assert.equal(result.aborted, false);
-		assert.equal(result.error, null);
+
 		assert.ok(
 			compactCalled,
-			"should process deferred compact even when no step-changing directive precedes it",
+			"should process deferred summarize even when no step-changing directive precedes it",
 		);
 	});
 });

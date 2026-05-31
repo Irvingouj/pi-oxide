@@ -64,6 +64,7 @@ impl LlmStream {
     }
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CollectedToolCall {
     pub id: String,
     pub name: String,
@@ -98,6 +99,8 @@ impl LlmClient {
         let url = format!("{}/v1/messages", self.base_url);
         let body = self.build_body(system_prompt, messages, tools);
 
+        tracing::debug!(url, model = %self.model, messages = messages.len(), tools = tools.len(), "POST /v1/messages");
+
         let resp = self
             .client
             .post(&url)
@@ -106,6 +109,8 @@ impl LlmClient {
             .header("content-type", "application/json")
             .json(&body)
             .send()?;
+
+        tracing::debug!(status = %resp.status(), "API response");
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -218,6 +223,8 @@ impl LlmStream {
         if data.is_empty() {
             return None;
         }
+
+        tracing::trace!(event_type, data_len = data.len(), "SSE event");
 
         match event_type {
             "message_start" => {
@@ -442,3 +449,72 @@ mod tests {
         assert_eq!(converted[0]["role"], "assistant");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Provider trait + feature-gated backend
+// ---------------------------------------------------------------------------
+
+/// Post-iteration accessors shared by live, recording, and replay streams.
+pub trait LlmStreamState {
+    fn usage(&self) -> Option<(u32, u32, u32)>;
+    fn stop_reason(&self) -> Option<&str>;
+    fn tool_calls(&self) -> Vec<CollectedToolCall>;
+}
+
+impl LlmStreamState for LlmStream {
+    fn usage(&self) -> Option<(u32, u32, u32)> {
+        LlmStream::usage(self)
+    }
+    fn stop_reason(&self) -> Option<&str> {
+        LlmStream::stop_reason(self)
+    }
+    fn tool_calls(&self) -> Vec<CollectedToolCall> {
+        LlmStream::tool_calls(self)
+    }
+}
+
+/// The interface the TUI uses to talk to an LLM provider.
+pub trait LlmProvider: Sized {
+    type Stream: Iterator<Item = pi_core::LlmChunk> + LlmStreamState;
+
+    fn stream_sync(
+        &self,
+        system_prompt: &str,
+        messages: &[pi_core::AgentMessage],
+        tools: &[pi_core::ToolDefinition],
+    ) -> Result<Self::Stream, Box<dyn std::error::Error>>;
+
+    fn model_id(&self) -> &str;
+    fn set_model(&mut self, model: &str);
+}
+
+impl LlmProvider for LlmClient {
+    type Stream = LlmStream;
+
+    fn stream_sync(
+        &self,
+        system_prompt: &str,
+        messages: &[pi_core::AgentMessage],
+        tools: &[pi_core::ToolDefinition],
+    ) -> Result<LlmStream, Box<dyn std::error::Error>> {
+        LlmClient::stream_sync(self, system_prompt, messages, tools)
+    }
+
+    fn model_id(&self) -> &str {
+        LlmClient::model_id(self)
+    }
+
+    fn set_model(&mut self, model: &str) {
+        LlmClient::set_model(self, model);
+    }
+}
+
+// Feature-gated backend type alias.
+#[cfg(not(any(feature = "record", feature = "replay")))]
+pub type LlmBackend = LlmClient;
+
+#[cfg(feature = "record")]
+pub type LlmBackend = crate::llm_record::RecordingLlmClient;
+
+#[cfg(feature = "replay")]
+pub type LlmBackend = crate::llm_replay::ReplayLlmClient;

@@ -6,11 +6,21 @@ mod app;
 mod extension;
 mod host_state;
 mod llm;
+#[cfg(any(feature = "record", feature = "replay"))]
+mod llm_cassette;
+#[cfg(feature = "record")]
+mod llm_record;
+#[cfg(feature = "replay")]
+mod llm_replay;
 mod markdown;
 mod session;
 mod smoke_test;
 mod tools;
 mod tui;
+
+#[cfg(test)]
+#[cfg(feature = "replay")]
+mod replay_e2e;
 
 #[derive(Parser)]
 #[command(name = "pi", about = "Terminal coding agent")]
@@ -27,6 +37,14 @@ struct Cli {
     /// Session ID for persistent conversation history
     #[arg(short, long, env = "PI_SESSION_ID")]
     session_id: Option<String>,
+    /// Record LLM calls to a cassette file (requires `record` feature)
+    #[cfg(feature = "record")]
+    #[arg(long)]
+    record_to: Option<std::path::PathBuf>,
+    /// Replay LLM calls from a cassette file (requires `replay` feature)
+    #[cfg(feature = "replay")]
+    #[arg(long)]
+    replay_from: Option<std::path::PathBuf>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -57,7 +75,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cli.session_id,
         host_state,
         &cwd,
-    );
+        #[cfg(feature = "record")]
+        cli.record_to,
+        #[cfg(feature = "replay")]
+        cli.replay_from,
+    )?;
     let result = app.run(&mut terminal, &session_backend);
     ratatui::restore();
     result

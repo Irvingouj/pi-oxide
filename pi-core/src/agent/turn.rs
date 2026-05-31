@@ -71,7 +71,7 @@ impl Agent {
         let (context, markers) = self.build_llm_context(&t);
 
         // Check compaction (using plan_compaction on T)
-        let total_chars: usize = t.iter().map(|m| trimmed_message_chars(m)).sum();
+        let total_chars: usize = t.iter().map(trimmed_message_chars).sum();
         let threshold = (budget.compaction_threshold * budget.max_context_tokens as f32) as usize;
         let estimated_tokens = total_chars.div_ceil(4);
 
@@ -169,7 +169,7 @@ impl Agent {
         let (context, markers) = self.build_llm_context(&t);
 
         // Check compaction
-        let total_chars: usize = t.iter().map(|m| trimmed_message_chars(m)).sum();
+        let total_chars: usize = t.iter().map(trimmed_message_chars).sum();
         let threshold = (budget.compaction_threshold * budget.max_context_tokens as f32) as usize;
         let estimated_tokens = total_chars.div_ceil(4);
 

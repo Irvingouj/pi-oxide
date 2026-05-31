@@ -465,6 +465,63 @@ mod tests {
         assert!(markers.is_empty());
     }
 
+    // Boundary: age == min_age exactly
+    #[test]
+    fn new_projection_scan_exact_min_age_projects() {
+        let mut t = vec![
+            trimmed_user("hello"),
+            trimmed_original_tool("e1", "tc1", "read", &"A".repeat(3000), 1),
+        ];
+        let mut a = crate::message::Artifacts::new();
+        let markers = projection_scan(&mut t, &mut a, 3); // age=2, min_age=2, 3000>2000
+        assert_eq!(
+            markers.len(),
+            1,
+            "read tool at exact min_age should project"
+        );
+        assert!(matches!(
+            t[1],
+            crate::message::TrimmedMessage::ProjectedTool(_)
+        ));
+    }
+
+    // Boundary: size == max_chars exactly (not >, so should NOT project)
+    #[test]
+    fn new_projection_scan_exact_max_chars_does_not_project() {
+        let mut t = vec![
+            trimmed_user("hello"),
+            trimmed_original_tool("e1", "tc1", "read", &"A".repeat(2000), 1),
+        ];
+        let mut a = crate::message::Artifacts::new();
+        let markers = projection_scan(&mut t, &mut a, 5); // age=4, min_age=2, 2000==2000
+        assert!(markers.is_empty(), "exactly max_chars should NOT project");
+        assert!(matches!(
+            t[1],
+            crate::message::TrimmedMessage::OriginalTool(_)
+        ));
+    }
+
+    // Mixed tools: one projects, one stays full
+    #[test]
+    fn new_projection_scan_mixed_tools() {
+        let mut t = vec![
+            trimmed_user("hello"),
+            trimmed_original_tool("e1", "tc1", "read", &"A".repeat(3000), 1),
+            trimmed_original_tool("e2", "tc2", "edit", &"A".repeat(3000), 1),
+        ];
+        let mut a = crate::message::Artifacts::new();
+        let markers = projection_scan(&mut t, &mut a, 5); // age=4, read min_age=2, edit KeepFull
+        assert_eq!(markers.len(), 1, "only read should project");
+        assert!(matches!(
+            t[1],
+            crate::message::TrimmedMessage::ProjectedTool(_)
+        ));
+        assert!(matches!(
+            t[2],
+            crate::message::TrimmedMessage::OriginalTool(_)
+        ));
+    }
+
     #[test]
     fn new_projection_strategy_by_name() {
         assert_eq!(

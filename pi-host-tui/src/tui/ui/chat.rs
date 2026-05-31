@@ -7,6 +7,7 @@ use ratatui::widgets::{
 use ratatui::Frame;
 
 use crate::app::{App, ChatEntry};
+use crate::llm::LlmProvider;
 
 impl App {
     pub(crate) fn render_chat(&self, frame: &mut Frame, area: Rect) {

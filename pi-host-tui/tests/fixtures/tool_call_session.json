@@ -1,0 +1,3100 @@
+{
+  "version": 1,
+  "model": "accounts/fireworks/routers/kimi-k2p6-turbo",
+  "entries": [
+    {
+      "request": {
+        "system_prompt": "You are a helpful coding assistant.",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "read the file pi-core/src/lib.rs and tell me what modules it exports"
+              }
+            ],
+            "timestamp": 1780200260636
+          }
+        ],
+        "tools": [
+          {
+            "name": "read",
+            "label": "Read File",
+            "description": "Read a file's contents. Use offset/limit for large files.",
+            "parameters": {
+              "properties": {
+                "limit": {
+                  "description": "Max lines to read",
+                  "type": "integer"
+                },
+                "offset": {
+                  "description": "Line number to start from (0-indexed)",
+                  "type": "integer"
+                },
+                "path": {
+                  "description": "File path to read",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "parallel",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "write",
+            "label": "Write File",
+            "description": "Write content to a file. Creates parent directories.",
+            "parameters": {
+              "properties": {
+                "content": {
+                  "description": "Content to write",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "File path to write",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "content"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "edit",
+            "label": "Edit File",
+            "description": "Replace exact text in a file. Finds old_string and replaces with new_string.",
+            "parameters": {
+              "properties": {
+                "new_string": {
+                  "description": "Text to replace with",
+                  "type": "string"
+                },
+                "old_string": {
+                  "description": "Exact text to find",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "File path to edit",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "old_string",
+                "new_string"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "bash",
+            "label": "Bash",
+            "description": "Run a bash command. Returns stdout and stderr.",
+            "parameters": {
+              "properties": {
+                "command": {
+                  "description": "The bash command to run",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "deferred"
+          }
+        ]
+      },
+      "response": {
+        "chunks": [
+          {
+            "kind": "done"
+          }
+        ],
+        "usage": [
+          0,
+          57,
+          57
+        ],
+        "stop_reason": "tool_use",
+        "tool_calls": [
+          {
+            "id": "functions.read:0",
+            "name": "read",
+            "input": {
+              "path": "pi-core/src/lib.rs"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "system_prompt": "You are a helpful coding assistant.",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "read the file pi-core/src/lib.rs and tell me what modules it exports"
+              }
+            ],
+            "timestamp": 1780200260636
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_call",
+                "id": "functions.read:0",
+                "name": "read",
+                "arguments": {
+                  "path": "pi-core/src/lib.rs"
+                }
+              }
+            ],
+            "api": "anthropic",
+            "provider": "anthropic",
+            "model": "accounts/fireworks/routers/kimi-k2p6-turbo",
+            "stop_reason": "tool_use",
+            "timestamp": 1780200261524,
+            "usage": {
+              "input": 0,
+              "output": 57,
+              "cache_read": 0,
+              "cache_write": 0,
+              "total_tokens": 57
+            }
+          },
+          {
+            "role": "tool_result",
+            "role": "tool_result",
+            "tool_call_id": "functions.read:0",
+            "tool_name": "read",
+            "content": [
+              {
+                "type": "text",
+                "text": "//! pi-core: Pure synchronous agent-core state machine.\n//!\n//! No async runtime, no I/O, no network. All platform capabilities are injected\n//! by the host at construction time. The host drives the event loop and calls\n//! into core via synchronous callbacks after completing async operations.\n\npub mod agent;\n#[allow(non_snake_case)]\npub mod agent_runtime;\npub mod context;\npub mod context_projection;\npub mod events;\npub mod llm;\npub mod message;\npub mod session;\npub mod timestamp;\npub mod tool;\npub mod types;\n\npub use agent::{Agent, AgentOptions, AgentState, Phase};\npub use agent_runtime::{\n    AbortedAgent, AgentRuntime, CompactingAgent, ContinueTurnTransition, FinishLlmTransition,\n    FinishedAgent, IdleAgent, ReadyAgent, StartTurnTransition, StreamingAgent, ToolTransition,\n    Transition, UserInputDuringTools, WaitingToolsAgent,\n};\npub use context::{AgentContext, LlmContext};\npub use context_projection::{\n    build_llm_context_from_trimmed, count_message_chars, default_compaction_threshold,\n    default_microcompact_after_turns, estimate_tokens, estimate_tokens_for_text,\n    estimate_tokens_for_trimmed, projection_scan, projection_strategy, ChangeMarker,\n    ContextProjectionBudget, NewProjectionStrategy,\n};\npub use events::{\n    AgentAction, AgentEvent, CancelReason, ContentDelta, QueueMode, ThinkingLevel,\n    ToolExecutionUpdate, ToolOutputStream, WaitMode,\n};\npub use llm::{LlmChunk, LlmError, LlmResult, Model, ModelCapabilities, ModelCost, ModelProvider};\npub use message::StopReason;\npub use message::{\n    AgentMessage, Artifacts, AssistantMessage, CompactionSummary, Content, ImageContent,\n    OriginalToolResult, ProjectedToolResult, TextContent, ToolCall, ToolResultMessage,\n    TrimmedMessage, UserMessage,\n};\npub use session::{apply_compaction, build_summary_messages, plan_compaction, CompactionPlan};\npub use tool::{ExecutionMode, ToolDefinition, ToolError, ToolResult, ToolRunMode};\npub use types::{\n    ApiName, JsonSchema, ModelId, ModelName, ProviderName, SessionId, ToolArguments, ToolCallId,\n    ToolDetails, ToolName,\n};"
+              }
+            ],
+            "is_error": false,
+            "timestamp": 1780200261528
+          }
+        ],
+        "tools": [
+          {
+            "name": "read",
+            "label": "Read File",
+            "description": "Read a file's contents. Use offset/limit for large files.",
+            "parameters": {
+              "properties": {
+                "limit": {
+                  "description": "Max lines to read",
+                  "type": "integer"
+                },
+                "offset": {
+                  "description": "Line number to start from (0-indexed)",
+                  "type": "integer"
+                },
+                "path": {
+                  "description": "File path to read",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "parallel",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "write",
+            "label": "Write File",
+            "description": "Write content to a file. Creates parent directories.",
+            "parameters": {
+              "properties": {
+                "content": {
+                  "description": "Content to write",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "File path to write",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "content"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "edit",
+            "label": "Edit File",
+            "description": "Replace exact text in a file. Finds old_string and replaces with new_string.",
+            "parameters": {
+              "properties": {
+                "new_string": {
+                  "description": "Text to replace with",
+                  "type": "string"
+                },
+                "old_string": {
+                  "description": "Exact text to find",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "File path to edit",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "old_string",
+                "new_string"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "bash",
+            "label": "Bash",
+            "description": "Run a bash command. Returns stdout and stderr.",
+            "parameters": {
+              "properties": {
+                "command": {
+                  "description": "The bash command to run",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "deferred"
+          }
+        ]
+      },
+      "response": {
+        "chunks": [
+          {
+            "kind": "text_delta",
+            "text": "The"
+          },
+          {
+            "kind": "text_delta",
+            "text": " file"
+          },
+          {
+            "kind": "text_delta",
+            "text": " exports"
+          },
+          {
+            "kind": "text_delta",
+            "text": " **"
+          },
+          {
+            "kind": "text_delta",
+            "text": "11"
+          },
+          {
+            "kind": "text_delta",
+            "text": " public"
+          },
+          {
+            "kind": "text_delta",
+            "text": " modules"
+          },
+          {
+            "kind": "text_delta",
+            "text": "**"
+          },
+          {
+            "kind": "text_delta",
+            "text": " and"
+          },
+          {
+            "kind": "text_delta",
+            "text": " a"
+          },
+          {
+            "kind": "text_delta",
+            "text": " large"
+          },
+          {
+            "kind": "text_delta",
+            "text": " number"
+          },
+          {
+            "kind": "text_delta",
+            "text": " of"
+          },
+          {
+            "kind": "text_delta",
+            "text": " re"
+          },
+          {
+            "kind": "text_delta",
+            "text": "-export"
+          },
+          {
+            "kind": "text_delta",
+            "text": "ed"
+          },
+          {
+            "kind": "text_delta",
+            "text": " types"
+          },
+          {
+            "kind": "text_delta",
+            "text": "/functions"
+          },
+          {
+            "kind": "text_delta",
+            "text": " from"
+          },
+          {
+            "kind": "text_delta",
+            "text": " them"
+          },
+          {
+            "kind": "text_delta",
+            "text": ".\n\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "###"
+          },
+          {
+            "kind": "text_delta",
+            "text": " Public"
+          },
+          {
+            "kind": "text_delta",
+            "text": " modules"
+          },
+          {
+            "kind": "text_delta",
+            "text": " (`"
+          },
+          {
+            "kind": "text_delta",
+            "text": "pub"
+          },
+          {
+            "kind": "text_delta",
+            "text": " mod"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`)\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "1"
+          },
+          {
+            "kind": "text_delta",
+            "text": "."
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "2"
+          },
+          {
+            "kind": "text_delta",
+            "text": "."
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_runtime"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "3"
+          },
+          {
+            "kind": "text_delta",
+            "text": "."
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "context"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "4"
+          },
+          {
+            "kind": "text_delta",
+            "text": "."
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "context"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_projection"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "5"
+          },
+          {
+            "kind": "text_delta",
+            "text": "."
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "events"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "6"
+          },
+          {
+            "kind": "text_delta",
+            "text": "."
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "ll"
+          },
+          {
+            "kind": "text_delta",
+            "text": "m"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "7"
+          },
+          {
+            "kind": "text_delta",
+            "text": "."
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "message"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "8"
+          },
+          {
+            "kind": "text_delta",
+            "text": "."
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "session"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "9"
+          },
+          {
+            "kind": "text_delta",
+            "text": "."
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "timestamp"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "10"
+          },
+          {
+            "kind": "text_delta",
+            "text": "."
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "11"
+          },
+          {
+            "kind": "text_delta",
+            "text": "."
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "types"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`\n\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "###"
+          },
+          {
+            "kind": "text_delta",
+            "text": " Re"
+          },
+          {
+            "kind": "text_delta",
+            "text": "-"
+          },
+          {
+            "kind": "text_delta",
+            "text": "exports"
+          },
+          {
+            "kind": "text_delta",
+            "text": " (`"
+          },
+          {
+            "kind": "text_delta",
+            "text": "pub"
+          },
+          {
+            "kind": "text_delta",
+            "text": " use"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`)\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "It"
+          },
+          {
+            "kind": "text_delta",
+            "text": " also"
+          },
+          {
+            "kind": "text_delta",
+            "text": " re"
+          },
+          {
+            "kind": "text_delta",
+            "text": "-"
+          },
+          {
+            "kind": "text_delta",
+            "text": "exports"
+          },
+          {
+            "kind": "text_delta",
+            "text": " the"
+          },
+          {
+            "kind": "text_delta",
+            "text": " following"
+          },
+          {
+            "kind": "text_delta",
+            "text": " items"
+          },
+          {
+            "kind": "text_delta",
+            "text": " so"
+          },
+          {
+            "kind": "text_delta",
+            "text": " they"
+          },
+          {
+            "kind": "text_delta",
+            "text": " can"
+          },
+          {
+            "kind": "text_delta",
+            "text": " be"
+          },
+          {
+            "kind": "text_delta",
+            "text": " imported"
+          },
+          {
+            "kind": "text_delta",
+            "text": " directly"
+          },
+          {
+            "kind": "text_delta",
+            "text": " from"
+          },
+          {
+            "kind": "text_delta",
+            "text": " the"
+          },
+          {
+            "kind": "text_delta",
+            "text": " crate"
+          },
+          {
+            "kind": "text_delta",
+            "text": " root"
+          },
+          {
+            "kind": "text_delta",
+            "text": ":\n\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "|"
+          },
+          {
+            "kind": "text_delta",
+            "text": " Source"
+          },
+          {
+            "kind": "text_delta",
+            "text": " Module"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |"
+          },
+          {
+            "kind": "text_delta",
+            "text": " Re"
+          },
+          {
+            "kind": "text_delta",
+            "text": "-export"
+          },
+          {
+            "kind": "text_delta",
+            "text": "ed"
+          },
+          {
+            "kind": "text_delta",
+            "text": " Items"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "|"
+          },
+          {
+            "kind": "text_delta",
+            "text": "---------------"
+          },
+          {
+            "kind": "text_delta",
+            "text": "|----------------"
+          },
+          {
+            "kind": "text_delta",
+            "text": "---"
+          },
+          {
+            "kind": "text_delta",
+            "text": "|\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "|"
+          },
+          {
+            "kind": "text_delta",
+            "text": " **`"
+          },
+          {
+            "kind": "text_delta",
+            "text": "agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`**"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Options"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "State"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Phase"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "|"
+          },
+          {
+            "kind": "text_delta",
+            "text": " **`"
+          },
+          {
+            "kind": "text_delta",
+            "text": "agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_runtime"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`**"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Ab"
+          },
+          {
+            "kind": "text_delta",
+            "text": "orted"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Runtime"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Compact"
+          },
+          {
+            "kind": "text_delta",
+            "text": "ing"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Continue"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Turn"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Transition"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Finish"
+          },
+          {
+            "kind": "text_delta",
+            "text": "L"
+          },
+          {
+            "kind": "text_delta",
+            "text": "lm"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Transition"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Finished"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Idle"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Ready"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Start"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Turn"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Transition"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Streaming"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Transition"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Transition"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "User"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Input"
+          },
+          {
+            "kind": "text_delta",
+            "text": "During"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tools"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Waiting"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tools"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "|"
+          },
+          {
+            "kind": "text_delta",
+            "text": " **`"
+          },
+          {
+            "kind": "text_delta",
+            "text": "context"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`**"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Context"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "L"
+          },
+          {
+            "kind": "text_delta",
+            "text": "lm"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Context"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "|"
+          },
+          {
+            "kind": "text_delta",
+            "text": " **`"
+          },
+          {
+            "kind": "text_delta",
+            "text": "context"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_projection"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`**"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "build"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_ll"
+          },
+          {
+            "kind": "text_delta",
+            "text": "m"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_context"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_from"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_trim"
+          },
+          {
+            "kind": "text_delta",
+            "text": "med"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "count"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_message"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_chars"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "default"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_comp"
+          },
+          {
+            "kind": "text_delta",
+            "text": "action"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_threshold"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "default"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_micro"
+          },
+          {
+            "kind": "text_delta",
+            "text": "compact"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_after"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_turn"
+          },
+          {
+            "kind": "text_delta",
+            "text": "s"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "estimate"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_tokens"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "estimate"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_tokens"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_for"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_text"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "estimate"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_tokens"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_for"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_trim"
+          },
+          {
+            "kind": "text_delta",
+            "text": "med"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "projection"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_scan"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "projection"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_strategy"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Change"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Marker"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Context"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Projection"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Budget"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "New"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Projection"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Strategy"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "|"
+          },
+          {
+            "kind": "text_delta",
+            "text": " **`"
+          },
+          {
+            "kind": "text_delta",
+            "text": "events"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`**"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Action"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Event"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Cancel"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Reason"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Content"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Delta"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Queue"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Mode"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Thinking"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Level"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Execution"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Update"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Output"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Stream"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Wait"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Mode"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "|"
+          },
+          {
+            "kind": "text_delta",
+            "text": " **`"
+          },
+          {
+            "kind": "text_delta",
+            "text": "ll"
+          },
+          {
+            "kind": "text_delta",
+            "text": "m"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`**"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "L"
+          },
+          {
+            "kind": "text_delta",
+            "text": "lm"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Chunk"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "L"
+          },
+          {
+            "kind": "text_delta",
+            "text": "lm"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Error"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "L"
+          },
+          {
+            "kind": "text_delta",
+            "text": "lm"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Result"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Model"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Model"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Capabilities"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Model"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Cost"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Model"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Provider"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "|"
+          },
+          {
+            "kind": "text_delta",
+            "text": " **`"
+          },
+          {
+            "kind": "text_delta",
+            "text": "message"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`**"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Stop"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Reason"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Agent"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Message"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Artifacts"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Assistant"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Message"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Compaction"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Summary"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Content"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Image"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Content"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Original"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Result"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Project"
+          },
+          {
+            "kind": "text_delta",
+            "text": "ed"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Result"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Text"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Content"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Call"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Result"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Message"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Trim"
+          },
+          {
+            "kind": "text_delta",
+            "text": "med"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Message"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "User"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Message"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "|"
+          },
+          {
+            "kind": "text_delta",
+            "text": " **`"
+          },
+          {
+            "kind": "text_delta",
+            "text": "session"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`**"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "apply"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_comp"
+          },
+          {
+            "kind": "text_delta",
+            "text": "action"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "build"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_summary"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_messages"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "plan"
+          },
+          {
+            "kind": "text_delta",
+            "text": "_comp"
+          },
+          {
+            "kind": "text_delta",
+            "text": "action"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Compaction"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Plan"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "|"
+          },
+          {
+            "kind": "text_delta",
+            "text": " **`"
+          },
+          {
+            "kind": "text_delta",
+            "text": "tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`**"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Execution"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Mode"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Definition"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Error"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Result"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Run"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Mode"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "|"
+          },
+          {
+            "kind": "text_delta",
+            "text": " **`"
+          },
+          {
+            "kind": "text_delta",
+            "text": "types"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`**"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Api"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Name"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Json"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Schema"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Model"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Id"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Model"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Name"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Provider"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Name"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Session"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Id"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Arguments"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Call"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Id"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Details"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`,"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Tool"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Name"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`"
+          },
+          {
+            "kind": "text_delta",
+            "text": " |\n\n"
+          },
+          {
+            "kind": "text_delta",
+            "text": "Note"
+          },
+          {
+            "kind": "text_delta",
+            "text": " that"
+          },
+          {
+            "kind": "text_delta",
+            "text": " **`"
+          },
+          {
+            "kind": "text_delta",
+            "text": "timestamp"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`**"
+          },
+          {
+            "kind": "text_delta",
+            "text": " is"
+          },
+          {
+            "kind": "text_delta",
+            "text": " the"
+          },
+          {
+            "kind": "text_delta",
+            "text": " only"
+          },
+          {
+            "kind": "text_delta",
+            "text": " module"
+          },
+          {
+            "kind": "text_delta",
+            "text": " listed"
+          },
+          {
+            "kind": "text_delta",
+            "text": " as"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "pub"
+          },
+          {
+            "kind": "text_delta",
+            "text": " mod"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`"
+          },
+          {
+            "kind": "text_delta",
+            "text": " without"
+          },
+          {
+            "kind": "text_delta",
+            "text": " any"
+          },
+          {
+            "kind": "text_delta",
+            "text": " additional"
+          },
+          {
+            "kind": "text_delta",
+            "text": " `"
+          },
+          {
+            "kind": "text_delta",
+            "text": "pub"
+          },
+          {
+            "kind": "text_delta",
+            "text": " use"
+          },
+          {
+            "kind": "text_delta",
+            "text": "`"
+          },
+          {
+            "kind": "text_delta",
+            "text": " re"
+          },
+          {
+            "kind": "text_delta",
+            "text": "-"
+          },
+          {
+            "kind": "text_delta",
+            "text": "exports"
+          },
+          {
+            "kind": "text_delta",
+            "text": " in"
+          },
+          {
+            "kind": "text_delta",
+            "text": " this"
+          },
+          {
+            "kind": "text_delta",
+            "text": " file"
+          },
+          {
+            "kind": "text_delta",
+            "text": "."
+          },
+          {
+            "kind": "done"
+          }
+        ],
+        "usage": [
+          0,
+          1039,
+          1039
+        ],
+        "stop_reason": "end_turn",
+        "tool_calls": []
+      }
+    },
+    {
+      "request": {
+        "system_prompt": "You are a helpful coding assistant.",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "read the file pi-core/src/lib.rs and tell me what modules it exports"
+              }
+            ],
+            "timestamp": 1780200260636
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_call",
+                "id": "functions.read:0",
+                "name": "read",
+                "arguments": {
+                  "path": "pi-core/src/lib.rs"
+                }
+              }
+            ],
+            "api": "anthropic",
+            "provider": "anthropic",
+            "model": "accounts/fireworks/routers/kimi-k2p6-turbo",
+            "stop_reason": "tool_use",
+            "timestamp": 1780200261524,
+            "usage": {
+              "input": 0,
+              "output": 57,
+              "cache_read": 0,
+              "cache_write": 0,
+              "total_tokens": 57
+            }
+          },
+          {
+            "role": "tool_result",
+            "role": "tool_result",
+            "tool_call_id": "functions.read:0",
+            "tool_name": "read",
+            "content": [
+              {
+                "type": "text",
+                "text": "//! pi-core: Pure synchronous agent-core state machine.\n//!\n//! No async runtime, no I/O, no network. All platform capabilities are injected\n//! by the host at construction time. The host drives the event loop and calls\n//! into core via synchronous callbacks after completing async operations.\n\npub mod agent;\n#[allow(non_snake_case)]\npub mod agent_runtime;\npub mod context;\npub mod context_projection;\npub mod events;\npub mod llm;\npub mod message;\npub mod session;\npub mod timestamp;\npub mod tool;\npub mod types;\n\npub use agent::{Agent, AgentOptions, AgentState, Phase};\npub use agent_runtime::{\n    AbortedAgent, AgentRuntime, CompactingAgent, ContinueTurnTransition, FinishLlmTransition,\n    FinishedAgent, IdleAgent, ReadyAgent, StartTurnTransition, StreamingAgent, ToolTransition,\n    Transition, UserInputDuringTools, WaitingToolsAgent,\n};\npub use context::{AgentContext, LlmContext};\npub use context_projection::{\n    build_llm_context_from_trimmed, count_message_chars, default_compaction_threshold,\n    default_microcompact_after_turns, estimate_tokens, estimate_tokens_for_text,\n    estimate_tokens_for_trimmed, projection_scan, projection_strategy, ChangeMarker,\n    ContextProjectionBudget, NewProjectionStrategy,\n};\npub use events::{\n    AgentAction, AgentEvent, CancelReason, ContentDelta, QueueMode, ThinkingLevel,\n    ToolExecutionUpdate, ToolOutputStream, WaitMode,\n};\npub use llm::{LlmChunk, LlmError, LlmResult, Model, ModelCapabilities, ModelCost, ModelProvider};\npub use message::StopReason;\npub use message::{\n    AgentMessage, Artifacts, AssistantMessage, CompactionSummary, Content, ImageContent,\n    OriginalToolResult, ProjectedToolResult, TextContent, ToolCall, ToolResultMessage,\n    TrimmedMessage, UserMessage,\n};\npub use session::{apply_compaction, build_summary_messages, plan_compaction, CompactionPlan};\npub use tool::{ExecutionMode, ToolDefinition, ToolError, ToolResult, ToolRunMode};\npub use types::{\n    ApiName, JsonSchema, ModelId, ModelName, ProviderName, SessionId, ToolArguments, ToolCallId,\n    ToolDetails, ToolName,\n};"
+              }
+            ],
+            "is_error": false,
+            "timestamp": 1780200316954
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "The file exports **11 public modules** and a large number of re-exported types/functions from them.\n\n### Public modules (`pub mod`)\n1. `agent`\n2. `agent_runtime`\n3. `context`\n4. `context_projection`\n5. `events`\n6. `llm`\n7. `message`\n8. `session`\n9. `timestamp`\n10. `tool`\n11. `types`\n\n### Re-exports (`pub use`)\nIt also re-exports the following items so they can be imported directly from the crate root:\n\n| Source Module | Re-exported Items |\n|---------------|-------------------|\n| **`agent`** | `Agent`, `AgentOptions`, `AgentState`, `Phase` |\n| **`agent_runtime`** | `AbortedAgent`, `AgentRuntime`, `CompactingAgent`, `ContinueTurnTransition`, `FinishLlmTransition`, `FinishedAgent`, `IdleAgent`, `ReadyAgent`, `StartTurnTransition`, `StreamingAgent`, `ToolTransition`, `Transition`, `UserInputDuringTools`, `WaitingToolsAgent` |\n| **`context`** | `AgentContext`, `LlmContext` |\n| **`context_projection`** | `build_llm_context_from_trimmed`, `count_message_chars`, `default_compaction_threshold`, `default_microcompact_after_turns`, `estimate_tokens`, `estimate_tokens_for_text`, `estimate_tokens_for_trimmed`, `projection_scan`, `projection_strategy`, `ChangeMarker`, `ContextProjectionBudget`, `NewProjectionStrategy` |\n| **`events`** | `AgentAction`, `AgentEvent`, `CancelReason`, `ContentDelta`, `QueueMode`, `ThinkingLevel`, `ToolExecutionUpdate`, `ToolOutputStream`, `WaitMode` |\n| **`llm`** | `LlmChunk`, `LlmError`, `LlmResult`, `Model`, `ModelCapabilities`, `ModelCost`, `ModelProvider` |\n| **`message`** | `StopReason`, `AgentMessage`, `Artifacts`, `AssistantMessage`, `CompactionSummary`, `Content`, `ImageContent`, `OriginalToolResult`, `ProjectedToolResult`, `TextContent`, `ToolCall`, `ToolResultMessage`, `TrimmedMessage`, `UserMessage` |\n| **`session`** | `apply_compaction`, `build_summary_messages`, `plan_compaction`, `CompactionPlan` |\n| **`tool`** | `ExecutionMode`, `ToolDefinition`, `ToolError`, `ToolResult`, `ToolRunMode` |\n| **`types`** | `ApiName`, `JsonSchema`, `ModelId`, `ModelName`, `ProviderName`, `SessionId`, `ToolArguments`, `ToolCallId`, `ToolDetails`, `ToolName` |\n\nNote that **`timestamp`** is the only module listed as `pub mod` without any additional `pub use` re-exports in this file."
+              }
+            ],
+            "api": "anthropic",
+            "provider": "anthropic",
+            "model": "accounts/fireworks/routers/kimi-k2p6-turbo",
+            "stop_reason": "end_turn",
+            "timestamp": 1780200265427,
+            "usage": {
+              "input": 0,
+              "output": 1039,
+              "cache_read": 0,
+              "cache_write": 0,
+              "total_tokens": 1039
+            }
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "q/quit"
+              }
+            ],
+            "timestamp": 1780200316954
+          }
+        ],
+        "tools": [
+          {
+            "name": "read",
+            "label": "Read File",
+            "description": "Read a file's contents. Use offset/limit for large files.",
+            "parameters": {
+              "properties": {
+                "limit": {
+                  "description": "Max lines to read",
+                  "type": "integer"
+                },
+                "offset": {
+                  "description": "Line number to start from (0-indexed)",
+                  "type": "integer"
+                },
+                "path": {
+                  "description": "File path to read",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "parallel",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "write",
+            "label": "Write File",
+            "description": "Write content to a file. Creates parent directories.",
+            "parameters": {
+              "properties": {
+                "content": {
+                  "description": "Content to write",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "File path to write",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "content"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "edit",
+            "label": "Edit File",
+            "description": "Replace exact text in a file. Finds old_string and replaces with new_string.",
+            "parameters": {
+              "properties": {
+                "new_string": {
+                  "description": "Text to replace with",
+                  "type": "string"
+                },
+                "old_string": {
+                  "description": "Exact text to find",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "File path to edit",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "old_string",
+                "new_string"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "bash",
+            "label": "Bash",
+            "description": "Run a bash command. Returns stdout and stderr.",
+            "parameters": {
+              "properties": {
+                "command": {
+                  "description": "The bash command to run",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "deferred"
+          }
+        ]
+      },
+      "response": {
+        "chunks": [
+          {
+            "kind": "text_delta",
+            "text": "Good"
+          },
+          {
+            "kind": "text_delta",
+            "text": "bye"
+          },
+          {
+            "kind": "text_delta",
+            "text": "!"
+          },
+          {
+            "kind": "done"
+          }
+        ],
+        "usage": [
+          0,
+          33,
+          33
+        ],
+        "stop_reason": "end_turn",
+        "tool_calls": []
+      }
+    },
+    {
+      "request": {
+        "system_prompt": "You are a helpful coding assistant.",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "read the file pi-core/src/lib.rs and tell me what modules it exports"
+              }
+            ],
+            "timestamp": 1780200260636
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_call",
+                "id": "functions.read:0",
+                "name": "read",
+                "arguments": {
+                  "path": "pi-core/src/lib.rs"
+                }
+              }
+            ],
+            "api": "anthropic",
+            "provider": "anthropic",
+            "model": "accounts/fireworks/routers/kimi-k2p6-turbo",
+            "stop_reason": "tool_use",
+            "timestamp": 1780200261524,
+            "usage": {
+              "input": 0,
+              "output": 57,
+              "cache_read": 0,
+              "cache_write": 0,
+              "total_tokens": 57
+            }
+          },
+          {
+            "role": "tool_result",
+            "role": "tool_result",
+            "tool_call_id": "functions.read:0",
+            "tool_name": "read",
+            "content": [
+              {
+                "type": "text",
+                "text": "<context-artifact id=\"entry-0\">\n//! pi-core: Pure synchronous agent-core state machine.\n//!\n//! No async runtime, no I/O, no network. All platform capabilities are injected\n//! by the host at construction time. The host drives the event loop and calls\n//! into core via synchronous callbacks after completing async operations.\n\npub mod agent;\n#[allow(non_snake_case)]\npub mod agent_runtime;\npub mod context;\npub mod context_projection;\npub mod events;\npub mod llm;\npub mod message;\npub mod session;\npub mod timestamp;\npub mod tool;\npub mod types;\n\npub use agent::{Agent, AgentOptions, AgentState, Phase};\npub use agent_runtime::{\n    AbortedAgent, AgentRuntime, CompactingAgent, ContinueTurnTransition, FinishLlmTransition,\n    FinishedAgent, IdleAgent, ReadyAgent, StartTurnTransition, StreamingAgent, ToolTransition,\n    Transition, UserInputDuringTools, WaitingToolsAgent,\n};\npub use context::{AgentContext, LlmContext};\npub use context_projection::{\n    build_llm_context_from_trimmed, count_message_chars, default_compaction_threshold,\n    default_microcompact_after_turns, estimate_tokens, estimate_tokens_for_text,\n    estimate_tokens_for_trimmed, projection_scan, projection_strategy, ChangeMarker,\n    ContextProjectionBudget, NewProjectionStrategy,\n};\npub use events::{\n    AgentAction, AgentEvent, CancelReason, ContentDelta, QueueMode, ThinkingLevel,\n    ToolExecutionUpdate, ToolOutputStream, WaitMode,\n};\npub use llm::{LlmChunk, LlmError, LlmResult, Model, ModelCapabilities, ModelCost, ModelProvider};\npub use message::StopReason;\npub use message::{\n    AgentMessage, Artifacts, AssistantMessage, CompactionSummary, Content, ImageContent,\n    OriginalToolResult, ProjectedToolResult, TextContent, ToolCall, ToolResultMessage,\n    TrimmedMessage, UserMessage,\n};\npub use session::{apply_compaction, build_summary_messages, plan_compaction, CompactionPlan};\npub use tool::{ExecutionMode, ToolDefinition, ToolError, ToolResult, ToolRunMode};\npub use types::{\n    ApiName, JsonSchema, ModelId, ModelName, ProviderName, Se\n</context-artifact>"
+              }
+            ],
+            "is_error": false,
+            "timestamp": 1780200349845
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "The file exports **11 public modules** and a large number of re-exported types/functions from them.\n\n### Public modules (`pub mod`)\n1. `agent`\n2. `agent_runtime`\n3. `context`\n4. `context_projection`\n5. `events`\n6. `llm`\n7. `message`\n8. `session`\n9. `timestamp`\n10. `tool`\n11. `types`\n\n### Re-exports (`pub use`)\nIt also re-exports the following items so they can be imported directly from the crate root:\n\n| Source Module | Re-exported Items |\n|---------------|-------------------|\n| **`agent`** | `Agent`, `AgentOptions`, `AgentState`, `Phase` |\n| **`agent_runtime`** | `AbortedAgent`, `AgentRuntime`, `CompactingAgent`, `ContinueTurnTransition`, `FinishLlmTransition`, `FinishedAgent`, `IdleAgent`, `ReadyAgent`, `StartTurnTransition`, `StreamingAgent`, `ToolTransition`, `Transition`, `UserInputDuringTools`, `WaitingToolsAgent` |\n| **`context`** | `AgentContext`, `LlmContext` |\n| **`context_projection`** | `build_llm_context_from_trimmed`, `count_message_chars`, `default_compaction_threshold`, `default_microcompact_after_turns`, `estimate_tokens`, `estimate_tokens_for_text`, `estimate_tokens_for_trimmed`, `projection_scan`, `projection_strategy`, `ChangeMarker`, `ContextProjectionBudget`, `NewProjectionStrategy` |\n| **`events`** | `AgentAction`, `AgentEvent`, `CancelReason`, `ContentDelta`, `QueueMode`, `ThinkingLevel`, `ToolExecutionUpdate`, `ToolOutputStream`, `WaitMode` |\n| **`llm`** | `LlmChunk`, `LlmError`, `LlmResult`, `Model`, `ModelCapabilities`, `ModelCost`, `ModelProvider` |\n| **`message`** | `StopReason`, `AgentMessage`, `Artifacts`, `AssistantMessage`, `CompactionSummary`, `Content`, `ImageContent`, `OriginalToolResult`, `ProjectedToolResult`, `TextContent`, `ToolCall`, `ToolResultMessage`, `TrimmedMessage`, `UserMessage` |\n| **`session`** | `apply_compaction`, `build_summary_messages`, `plan_compaction`, `CompactionPlan` |\n| **`tool`** | `ExecutionMode`, `ToolDefinition`, `ToolError`, `ToolResult`, `ToolRunMode` |\n| **`types`** | `ApiName`, `JsonSchema`, `ModelId`, `ModelName`, `ProviderName`, `SessionId`, `ToolArguments`, `ToolCallId`, `ToolDetails`, `ToolName` |\n\nNote that **`timestamp`** is the only module listed as `pub mod` without any additional `pub use` re-exports in this file."
+              }
+            ],
+            "api": "anthropic",
+            "provider": "anthropic",
+            "model": "accounts/fireworks/routers/kimi-k2p6-turbo",
+            "stop_reason": "end_turn",
+            "timestamp": 1780200265427,
+            "usage": {
+              "input": 0,
+              "output": 1039,
+              "cache_read": 0,
+              "cache_write": 0,
+              "total_tokens": 1039
+            }
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "q/quit"
+              }
+            ],
+            "timestamp": 1780200316954
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "Goodbye!"
+              }
+            ],
+            "api": "anthropic",
+            "provider": "anthropic",
+            "model": "accounts/fireworks/routers/kimi-k2p6-turbo",
+            "stop_reason": "end_turn",
+            "timestamp": 1780200317992,
+            "usage": {
+              "input": 0,
+              "output": 33,
+              "cache_read": 0,
+              "cache_write": 0,
+              "total_tokens": 33
+            }
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "u/quit"
+              }
+            ],
+            "timestamp": 1780200349845
+          }
+        ],
+        "tools": [
+          {
+            "name": "read",
+            "label": "Read File",
+            "description": "Read a file's contents. Use offset/limit for large files.",
+            "parameters": {
+              "properties": {
+                "limit": {
+                  "description": "Max lines to read",
+                  "type": "integer"
+                },
+                "offset": {
+                  "description": "Line number to start from (0-indexed)",
+                  "type": "integer"
+                },
+                "path": {
+                  "description": "File path to read",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "parallel",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "write",
+            "label": "Write File",
+            "description": "Write content to a file. Creates parent directories.",
+            "parameters": {
+              "properties": {
+                "content": {
+                  "description": "Content to write",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "File path to write",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "content"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "edit",
+            "label": "Edit File",
+            "description": "Replace exact text in a file. Finds old_string and replaces with new_string.",
+            "parameters": {
+              "properties": {
+                "new_string": {
+                  "description": "Text to replace with",
+                  "type": "string"
+                },
+                "old_string": {
+                  "description": "Exact text to find",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "File path to edit",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "old_string",
+                "new_string"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "bash",
+            "label": "Bash",
+            "description": "Run a bash command. Returns stdout and stderr.",
+            "parameters": {
+              "properties": {
+                "command": {
+                  "description": "The bash command to run",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "deferred"
+          }
+        ]
+      },
+      "response": {
+        "chunks": [
+          {
+            "kind": "text_delta",
+            "text": "Good"
+          },
+          {
+            "kind": "text_delta",
+            "text": "bye"
+          },
+          {
+            "kind": "text_delta",
+            "text": "!"
+          },
+          {
+            "kind": "done"
+          }
+        ],
+        "usage": [
+          0,
+          60,
+          60
+        ],
+        "stop_reason": "end_turn",
+        "tool_calls": []
+      }
+    }
+  ]
+}

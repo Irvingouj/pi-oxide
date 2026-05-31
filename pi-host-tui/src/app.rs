@@ -16,6 +16,7 @@ use pi_core::{
 use crate::extension::{BashExtension, BuiltinExtension, Extension};
 use crate::host_state::{HostDirective, HostState};
 use crate::llm::LlmClient;
+use crate::llm::LlmProvider;
 use crate::session::FileSystemSessionBackend;
 
 // ---------------------------------------------------------------------------
@@ -72,7 +73,7 @@ pub struct App {
     #[allow(dead_code)]
     pub(crate) current_tools: Vec<(String, String)>,
     pub(crate) tool_definitions: Vec<ToolDefinition>,
-    pub(crate) llm_client: LlmClient,
+    pub(crate) llm_client: crate::llm::LlmBackend,
     pub(crate) host_state: Option<HostState>,
     pub(crate) last_usage: Option<(u32, u32, u32)>,
     pub(crate) session_id: Option<String>,
@@ -125,7 +126,9 @@ impl App {
         session_id: Option<String>,
         host_state: Option<HostState>,
         cwd: &Path,
-    ) -> Self {
+        #[cfg(feature = "record")] record_to: Option<std::path::PathBuf>,
+        #[cfg(feature = "replay")] replay_from: Option<std::path::PathBuf>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let model = Model {
             id: ModelId::new(model_id),
             name: ModelName::new(model_id),
@@ -157,7 +160,15 @@ impl App {
             session_id: session_id.as_ref().map(SessionId::new),
         });
 
-        let llm_client = LlmClient::new(api_key, base_url, model_id);
+        let llm_client = Self::build_llm_client(
+            api_key,
+            base_url,
+            model_id,
+            #[cfg(feature = "record")]
+            record_to,
+            #[cfg(feature = "replay")]
+            replay_from,
+        )?;
 
         let mut init_entries = vec![ChatEntry::System(
             "Ready. Type a message and press Enter.  /help for commands.".into(),
@@ -173,7 +184,7 @@ impl App {
             ));
         }
 
-        Self {
+        Ok(Self {
             agent: Some(agent),
             entries: init_entries,
             input: String::new(),
@@ -204,6 +215,37 @@ impl App {
             artifacts: Artifacts::new(),
             turn_number: 0,
             budget: ContextProjectionBudget::default(),
+        })
+    }
+
+    #[allow(unused_variables)]
+    fn build_llm_client(
+        api_key: &str,
+        base_url: &str,
+        model_id: &str,
+        #[cfg(feature = "record")] record_to: Option<std::path::PathBuf>,
+        #[cfg(feature = "replay")] replay_from: Option<std::path::PathBuf>,
+    ) -> Result<crate::llm::LlmBackend, Box<dyn std::error::Error>> {
+        #[cfg(not(any(feature = "record", feature = "replay")))]
+        {
+            Ok(LlmClient::new(api_key, base_url, model_id))
+        }
+        #[cfg(feature = "record")]
+        {
+            Ok(crate::llm_record::RecordingLlmClient::new(
+                api_key,
+                base_url,
+                model_id,
+                record_to.unwrap_or_else(|| std::path::PathBuf::from("cassette.json")),
+            ))
+        }
+        #[cfg(feature = "replay")]
+        {
+            Ok(crate::llm_replay::ReplayLlmClient::load(
+                replay_from
+                    .as_deref()
+                    .expect("replay mode requires --replay-from <path>"),
+            )?)
         }
     }
 
@@ -779,6 +821,19 @@ impl App {
         actions: Vec<AgentAction>,
     ) {
         let directives = self.actions_to_directives(actions);
+        let directive_names: Vec<String> = directives
+            .iter()
+            .map(|d| match d {
+                HostDirective::StreamLlm { .. } => "StreamLlm".to_string(),
+                HostDirective::Summarize { .. } => "Summarize".to_string(),
+                HostDirective::ExecuteTools { calls } => format!("ExecuteTools({})", calls.len()),
+                HostDirective::CancelTools { .. } => "CancelTools".to_string(),
+                HostDirective::Persist => "Persist".to_string(),
+                HostDirective::Finished => "Finished".to_string(),
+                HostDirective::WaitForInput { .. } => "WaitForInput".to_string(),
+            })
+            .collect();
+        tracing::debug!(?directive_names, "handle_actions");
         for directive in directives {
             if self.cancelled {
                 let runtime = self.agent.take().unwrap();

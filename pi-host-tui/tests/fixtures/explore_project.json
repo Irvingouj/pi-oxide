@@ -1,0 +1,174 @@
+{
+  "version": 1,
+  "model": "accounts/fireworks/routers/kimi-k2p6-turbo",
+  "entries": [
+    {
+      "request": {
+        "system_prompt": "You are a helpful coding assistant.",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "say hi"
+              }
+            ],
+            "timestamp": 1780200122433
+          }
+        ],
+        "tools": [
+          {
+            "name": "read",
+            "label": "Read File",
+            "description": "Read a file's contents. Use offset/limit for large files.",
+            "parameters": {
+              "properties": {
+                "limit": {
+                  "description": "Max lines to read",
+                  "type": "integer"
+                },
+                "offset": {
+                  "description": "Line number to start from (0-indexed)",
+                  "type": "integer"
+                },
+                "path": {
+                  "description": "File path to read",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "parallel",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "write",
+            "label": "Write File",
+            "description": "Write content to a file. Creates parent directories.",
+            "parameters": {
+              "properties": {
+                "content": {
+                  "description": "Content to write",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "File path to write",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "content"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "edit",
+            "label": "Edit File",
+            "description": "Replace exact text in a file. Finds old_string and replaces with new_string.",
+            "parameters": {
+              "properties": {
+                "new_string": {
+                  "description": "Text to replace with",
+                  "type": "string"
+                },
+                "old_string": {
+                  "description": "Exact text to find",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "File path to edit",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "old_string",
+                "new_string"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "immediate"
+          },
+          {
+            "name": "bash",
+            "label": "Bash",
+            "description": "Run a bash command. Returns stdout and stderr.",
+            "parameters": {
+              "properties": {
+                "command": {
+                  "description": "The bash command to run",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "type": "object"
+            },
+            "execution_mode": "sequential",
+            "tool_run_mode": "deferred"
+          }
+        ]
+      },
+      "response": {
+        "chunks": [
+          {
+            "kind": "text_delta",
+            "text": "Hi"
+          },
+          {
+            "kind": "text_delta",
+            "text": "!"
+          },
+          {
+            "kind": "text_delta",
+            "text": " How"
+          },
+          {
+            "kind": "text_delta",
+            "text": " can"
+          },
+          {
+            "kind": "text_delta",
+            "text": " I"
+          },
+          {
+            "kind": "text_delta",
+            "text": " help"
+          },
+          {
+            "kind": "text_delta",
+            "text": " you"
+          },
+          {
+            "kind": "text_delta",
+            "text": " today"
+          },
+          {
+            "kind": "text_delta",
+            "text": "?"
+          },
+          {
+            "kind": "done"
+          }
+        ],
+        "usage": [
+          0,
+          44,
+          44
+        ],
+        "stop_reason": "end_turn",
+        "tool_calls": []
+      }
+    }
+  ]
+}

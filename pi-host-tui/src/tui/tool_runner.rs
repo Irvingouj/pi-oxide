@@ -1,4 +1,5 @@
 use pi_core::{AgentRuntime, ToolCall, ToolCallId, ToolError, ToolResult};
+use tracing::{debug, trace, warn};
 
 use crate::app::{App, ChatEntry};
 use crate::extension::{ExtensionContext, ExtensionOutcome, ToolEvent};
@@ -104,6 +105,11 @@ impl App {
         tool_call_id: ToolCallId,
         result: Result<ToolResult, ToolError>,
     ) {
+        debug!(
+            tool_call_id = tool_call_id.as_str(),
+            ok = result.is_ok(),
+            "sync tool result"
+        );
         let output_text = match &result {
             Ok(tool_result) => tool_result
                 .content
@@ -142,15 +148,18 @@ impl App {
         let artifacts = std::mem::take(&mut self.artifacts);
         let (_events, actions, new_runtime, transcript, artifacts, turn_number, _markers) =
             match runtime {
-                AgentRuntime::WaitingTools(waiting) => waiting
-                    .on_tool_done(
-                        tool_call_id,
-                        result,
-                        transcript,
-                        artifacts,
-                        self.turn_number,
-                    )
-                    .into_parts(),
+                AgentRuntime::WaitingTools(waiting) => {
+                    debug!(tool_call_id = tool_call_id.as_str(), "on_tool_done (sync)");
+                    waiting
+                        .on_tool_done(
+                            tool_call_id,
+                            result,
+                            transcript,
+                            artifacts,
+                            self.turn_number,
+                        )
+                        .into_parts()
+                }
                 AgentRuntime::Compacting(compacting) => {
                     let (ev, act, state, transcript, artifacts, tn, m) = compacting
                         .abort(transcript, artifacts, self.turn_number)
@@ -175,6 +184,10 @@ impl App {
     }
 
     pub(crate) fn poll_running_tasks(&mut self, terminal: &mut ratatui::DefaultTerminal) {
+        if self.running_tasks.is_empty() {
+            return;
+        }
+        trace!(running = self.running_tasks.len(), "polling async tasks");
         let mut remaining = Vec::new();
         let mut just_completed: Vec<(ToolCallId, Result<ToolResult, ToolError>)> = Vec::new();
 
@@ -186,6 +199,11 @@ impl App {
                         let _events = self.agent_mut().on_tool_update(update);
                     }
                     ToolEvent::Done(result) => {
+                        debug!(
+                            tool_call_id = task.tool_call_id.as_str(),
+                            ok = result.is_ok(),
+                            "async tool completed"
+                        );
                         just_completed.push((task.tool_call_id.clone(), result));
                         done = true;
                         break;
@@ -193,10 +211,18 @@ impl App {
                 }
             }
             if !done {
+                trace!(
+                    tool_call_id = task.tool_call_id.as_str(),
+                    "async tool still running"
+                );
                 remaining.push(task);
             }
         }
         self.running_tasks = remaining;
+
+        if just_completed.is_empty() {
+            return;
+        }
 
         // Apply UI updates and typestate transitions atomically per completed task
         let mut transcript = std::mem::take(&mut self.transcript);
@@ -236,24 +262,30 @@ impl App {
                 new_turn_number,
                 _markers,
             ) = match runtime {
-                AgentRuntime::WaitingTools(waiting) => waiting
-                    .on_tool_done(tool_call_id, result, transcript, artifacts, turn_number)
-                    .into_parts(),
+                AgentRuntime::WaitingTools(waiting) => {
+                    debug!(tool_call_id = tool_call_id.as_str(), "on_tool_done (async)");
+                    waiting
+                        .on_tool_done(tool_call_id, result, transcript, artifacts, turn_number)
+                        .into_parts()
+                }
                 AgentRuntime::Compacting(compacting) => {
                     let (ev, act, state, transcript, artifacts, tn, m) = compacting
                         .abort(transcript, artifacts, turn_number)
                         .into_parts();
                     (ev, act, state.into_runtime(), transcript, artifacts, tn, m)
                 }
-                other => (
-                    vec![],
-                    vec![],
-                    other,
-                    transcript,
-                    artifacts,
-                    turn_number,
-                    vec![],
-                ),
+                other => {
+                    warn!("runtime not WaitingTools when async tool completed");
+                    (
+                        vec![],
+                        vec![],
+                        other,
+                        transcript,
+                        artifacts,
+                        turn_number,
+                        vec![],
+                    )
+                }
             };
             runtime = new_runtime;
             transcript = new_transcript;
@@ -267,6 +299,68 @@ impl App {
         self.artifacts = artifacts;
         self.turn_number = turn_number;
         self.agent = Some(runtime);
+
+        // If all async tools completed, the runtime is ReadyToContinue.
+        // Auto-continue to get the next StreamLlm action (send tool results back to LLM).
+        if self.running_tasks.is_empty() && self.agent().state().pending_tool_calls.is_empty() {
+            let runtime = self.agent.take().unwrap();
+            let compaction_prompt = self
+                .host_state
+                .as_ref()
+                .map(|h| h.compaction_prompt.clone())
+                .unwrap_or_default();
+            let budget = self.budget.clone();
+            let transcript = std::mem::take(&mut self.transcript);
+            let artifacts = std::mem::take(&mut self.artifacts);
+            let (
+                _events,
+                continue_actions,
+                new_runtime,
+                transcript,
+                artifacts,
+                turn_number,
+                _markers,
+            ) = match runtime {
+                AgentRuntime::ReadyToContinue(ready) => ready
+                    .continue_turn(
+                        transcript,
+                        artifacts,
+                        self.turn_number,
+                        &budget,
+                        &compaction_prompt,
+                    )
+                    .into_parts(),
+                other => (
+                    vec![],
+                    vec![],
+                    other,
+                    transcript,
+                    artifacts,
+                    self.turn_number,
+                    vec![],
+                ),
+            };
+            self.transcript = transcript;
+            self.artifacts = artifacts;
+            self.turn_number = turn_number;
+            self.agent = Some(new_runtime);
+            all_actions.extend(continue_actions);
+        }
+
+        let action_names: Vec<String> = all_actions
+            .iter()
+            .map(|a| match a {
+                pi_core::AgentAction::StreamLlm { .. } => "StreamLlm".to_string(),
+                pi_core::AgentAction::ExecuteTools { calls } => {
+                    format!("ExecuteTools({})", calls.len())
+                }
+                pi_core::AgentAction::Finished => "Finished".to_string(),
+                pi_core::AgentAction::WaitForInput { .. } => "WaitForInput".to_string(),
+                pi_core::AgentAction::Summarize { .. } => "Summarize".to_string(),
+                _ => "Other".to_string(),
+            })
+            .collect();
+        debug!(?action_names, "async tool batch processed");
         self.handle_actions(terminal, all_actions);
     }
 }

@@ -11,6 +11,7 @@ use pi_core::{
 use pi_core::{ApiName, AssistantMessage, ModelId, ProviderName};
 
 use crate::app::{App, ChatEntry};
+use crate::llm::{LlmProvider, LlmStreamState};
 use crate::markdown;
 
 impl App {
@@ -130,6 +131,13 @@ impl App {
                     })
                     .collect();
 
+                tracing::debug!(
+                    text_len = full_text.len(),
+                    tool_calls = tool_use_blocks.len(),
+                    stop_reason,
+                    "LLM stream completed"
+                );
+
                 let text_block = if full_text.is_empty() && tool_use_blocks.is_empty() {
                     vec![Content::Text(TextContent {
                         text: String::new(),
@@ -146,6 +154,8 @@ impl App {
                 } else {
                     StopReason::EndTurn
                 };
+
+                tracing::debug!(content_blocks = content.len(), stop_reason = ?sr, "LLM stream assembled");
 
                 let assistant_msg = AssistantMessage {
                     content,
@@ -172,6 +182,7 @@ impl App {
                     streaming.finish_llm(result, transcript, artifacts, self.turn_number, &budget);
                 let (_events, actions, runtime, transcript, artifacts, turn_number, _markers) =
                     transition.into_parts();
+                tracing::debug!(?actions, "finish_llm");
                 self.transcript = transcript;
                 self.artifacts = artifacts;
                 self.turn_number = turn_number;

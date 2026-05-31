@@ -231,12 +231,7 @@ impl Agent {
             .keys()
             .filter_map(|k| k.strip_prefix("entry-").and_then(|s| s.parse::<u32>().ok()))
             .max();
-        self.entry_counter = max_t
-            .into_iter()
-            .chain(max_a.into_iter())
-            .max()
-            .unwrap_or(0)
-            + 1;
+        self.entry_counter = max_t.into_iter().chain(max_a).max().unwrap_or(0) + 1;
     }
 }
 

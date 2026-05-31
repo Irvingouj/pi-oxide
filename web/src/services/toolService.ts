@@ -12,7 +12,11 @@ import {
 	type ToolMap,
 } from "@pi-oxide/pi-host-web";
 import type { BrowserRuntime } from "../browser/browserRuntime.ts";
-import { BROWSER_TOOLS, executeBrowserTool } from "../browser/browserTools.ts";
+import {
+	BROWSER_TOOLS,
+	executeBrowserTool,
+	wrapToolHandler,
+} from "../browser/browserTools.ts";
 
 // ========================================================================
 // Artifact tool schemas
@@ -81,7 +85,7 @@ export function createToolRegistry(runtime: BrowserRuntime): ToolMap {
 	return Object.fromEntries(
 		BROWSER_TOOLS.map((t) => [
 			t.name,
-			async (call: ToolCall) => executeBrowserTool(call, runtime),
+			wrapToolHandler((call: ToolCall) => executeBrowserTool(call, runtime)),
 		]),
 	);
 }
@@ -91,38 +95,23 @@ export function createToolRegistry(runtime: BrowserRuntime): ToolMap {
  */
 export function createArtifactToolRegistry(getHandle: () => number): ToolMap {
 	return {
-		artifact_read: async (call: ToolCall) => {
+		artifact_read: wrapToolHandler((call: ToolCall) => {
 			const artifactId = call.arguments.artifact_id as string;
 			if (typeof artifactId !== "string" || artifactId.length === 0) {
-				return {
-					error: {
-						code: "invalid_argument",
-						message: "artifact_id must be a non-empty string",
-					},
-				};
+				throw new Error("artifact_id must be a non-empty string");
 			}
 			const text = hostReadArtifact(getHandle(), artifactId);
 			if (text === "") {
-				return {
-					error: {
-						code: "not_found",
-						message: `artifact not found: ${artifactId}`,
-					},
-				};
+				throw new Error(`artifact not found: ${artifactId}`);
 			}
 			return {
 				content: [{ type: "text", text }],
 			};
-		},
-		artifact_search: async (call: ToolCall) => {
+		}),
+		artifact_search: wrapToolHandler((call: ToolCall) => {
 			const pattern = call.arguments.pattern as string;
 			if (typeof pattern !== "string" || pattern.length === 0) {
-				return {
-					error: {
-						code: "invalid_argument",
-						message: "pattern must be a non-empty string",
-					},
-				};
+				throw new Error("pattern must be a non-empty string");
 			}
 			const result = hostSearchArtifacts(getHandle(), pattern);
 			const capped: Array<{
@@ -142,7 +131,7 @@ export function createArtifactToolRegistry(getHandle: () => number): ToolMap {
 			return {
 				content: [{ type: "text", text }],
 			};
-		},
+		}),
 	};
 }
 

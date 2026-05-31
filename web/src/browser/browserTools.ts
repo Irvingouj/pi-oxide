@@ -8,7 +8,11 @@
  * Host-owned — no browser APIs in pi-core.
  */
 
-import type { ToolCall, ToolDefinition } from "@pi-oxide/pi-host-web";
+import type {
+	ToolCall,
+	ToolDefinition,
+	ToolResult,
+} from "@pi-oxide/pi-host-web";
 import type {
 	BrowserConsoleEntry,
 	BrowserElementSnapshot,
@@ -191,13 +195,21 @@ const DEFAULT_SCRIPTS: Record<string, string> = {
 /** Max text preview length in element snapshots. */
 const MAX_ELEMENT_TEXT = 500;
 
-/** Discriminated result returned by browser tool handlers. */
-export type BrowserToolResult =
-	| {
-			content: Array<{ type: "text"; text: string }>;
-			details?: Record<string, unknown>;
-	  }
-	| { error: { code: string; message: string } };
+/** Wrap a handler so that thrown errors are normalized to ToolResult. */
+export function wrapToolHandler(
+	handler: (call: ToolCall) => ToolResult | Promise<ToolResult>,
+): (call: ToolCall) => Promise<ToolResult> {
+	return async (call: ToolCall) => {
+		try {
+			return await handler(call);
+		} catch (err: unknown) {
+			const message = err instanceof Error ? err.message : String(err);
+			return {
+				content: [{ type: "text", text: message }],
+			};
+		}
+	};
+}
 
 function truncateText(
 	text: string,
@@ -261,33 +273,27 @@ function formatConsoleEntries(
 	};
 }
 
-/** Wrap a tool function in a try-catch that produces a typed error result. */
+/** Wrap a tool function in a try-catch that throws on error. */
 function tryTool<T>(
 	fn: () => T,
-	errorCode: string,
 	toolName: string,
-): BrowserToolResult {
-	try {
-		const text = JSON.stringify(fn(), null, 2);
-		return {
-			content: [{ type: "text", text }],
-			details: makeDetails(toolName, text, false),
-		};
-	} catch (err: unknown) {
-		const message = err instanceof Error ? err.message : String(err);
-		return { error: { code: errorCode, message } };
-	}
+): ToolResult {
+	const text = JSON.stringify(fn(), null, 2);
+	return {
+		content: [{ type: "text", text }],
+		details: makeDetails(toolName, text, false),
+	};
 }
 
 /**
  * Execute a browser tool call against a BrowserRuntime.
  *
- * Returns a JSON payload suitable for `onToolDone`.
+ * Returns a ToolResult suitable for hostToolDone.
  */
 export function executeBrowserTool(
 	call: ToolCall,
 	runtime: BrowserRuntime,
-): BrowserToolResult {
+): ToolResult {
 	switch (call.name) {
 		case "browser_get_page": {
 			const page = runtime.getPage();
@@ -312,16 +318,10 @@ export function executeBrowserTool(
 		case "browser_eval_js": {
 			const source = call.arguments.source as string;
 			if (typeof source !== "string" || source.length === 0) {
-				return {
-					error: {
-						code: "invalid_argument",
-						message: "source must be a non-empty string",
-					},
-				};
+				throw new Error("source must be a non-empty string");
 			}
 			return tryTool(
 				() => ({ ok: true, result: runtime.evalJs(source) }),
-				"eval_error",
 				"browser_eval_js",
 			);
 		}
@@ -330,9 +330,7 @@ export function executeBrowserTool(
 			const selector = call.arguments.selector as string;
 			const all = call.arguments.all as boolean | undefined;
 			if (!selector) {
-				return {
-					error: { code: "invalid_argument", message: "selector is required" },
-				};
+				throw new Error("selector is required");
 			}
 			return tryTool(
 				() => {
@@ -347,7 +345,6 @@ export function executeBrowserTool(
 					const el = runtime.querySelector(selector);
 					return { selector, found: el ? formatElement(el) : null };
 				},
-				"selector_error",
 				"browser_query_selector",
 			);
 		}
@@ -355,9 +352,7 @@ export function executeBrowserTool(
 		case "browser_click": {
 			const selector = call.arguments.selector as string;
 			if (!selector) {
-				return {
-					error: { code: "invalid_argument", message: "selector is required" },
-				};
+				throw new Error("selector is required");
 			}
 			return tryTool(
 				() => {
@@ -367,7 +362,6 @@ export function executeBrowserTool(
 					}
 					return { ok: true, action: "click", selector };
 				},
-				"click_error",
 				"browser_click",
 			);
 		}
@@ -376,14 +370,10 @@ export function executeBrowserTool(
 			const selector = call.arguments.selector as string;
 			const text = call.arguments.text as string;
 			if (!selector) {
-				return {
-					error: { code: "invalid_argument", message: "selector is required" },
-				};
+				throw new Error("selector is required");
 			}
 			if (typeof text !== "string") {
-				return {
-					error: { code: "invalid_argument", message: "text must be a string" },
-				};
+				throw new Error("text must be a string");
 			}
 			return tryTool(
 				() => {
@@ -398,7 +388,6 @@ export function executeBrowserTool(
 						textLength: text.length,
 					};
 				},
-				"type_error",
 				"browser_type",
 			);
 		}
@@ -416,11 +405,6 @@ export function executeBrowserTool(
 		}
 
 		default:
-			return {
-				error: {
-					code: "unknown_tool",
-					message: `no browser tool handler for: ${call.name}`,
-				},
-			};
+			throw new Error(`no browser tool handler for: ${call.name}`);
 	}
 }

@@ -147,8 +147,8 @@ describe("createArtifactToolRegistry", () => {
 			arguments: { artifact_id: "missing" },
 			id: "1",
 		});
-		assert.ok("error" in result);
-		assert.equal(result.error?.code, "not_found");
+		assert.ok("content" in result);
+		assert.ok(result.content[0].text.includes("not found"));
 		cleanup();
 	});
 
@@ -161,8 +161,8 @@ describe("createArtifactToolRegistry", () => {
 			arguments: { artifact_id: "" },
 			id: "1",
 		});
-		assert.ok("error" in result);
-		assert.equal(result.error?.code, "invalid_argument");
+		assert.ok("content" in result);
+		assert.ok(result.content[0].text.includes("artifact_id"));
 		cleanup();
 	});
 
@@ -175,8 +175,8 @@ describe("createArtifactToolRegistry", () => {
 			arguments: { artifact_id: null },
 			id: "1",
 		});
-		assert.ok("error" in result);
-		assert.equal(result.error?.code, "invalid_argument");
+		assert.ok("content" in result);
+		assert.ok(result.content[0].text.includes("artifact_id"));
 		cleanup();
 	});
 
@@ -189,8 +189,8 @@ describe("createArtifactToolRegistry", () => {
 			arguments: { pattern: "" },
 			id: "1",
 		});
-		assert.ok("error" in result);
-		assert.equal(result.error?.code, "invalid_argument");
+		assert.ok("content" in result);
+		assert.ok(result.content[0].text.includes("pattern"));
 		cleanup();
 	});
 
@@ -203,8 +203,8 @@ describe("createArtifactToolRegistry", () => {
 			arguments: { pattern: null },
 			id: "1",
 		});
-		assert.ok("error" in result);
-		assert.equal(result.error?.code, "invalid_argument");
+		assert.ok("content" in result);
+		assert.ok(result.content[0].text.includes("pattern"));
 		cleanup();
 	});
 });

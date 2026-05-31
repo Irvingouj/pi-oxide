@@ -1,10 +1,7 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import type { BrowserRuntime } from "../src/browser/browserRuntime.ts";
-import {
-	type BrowserToolResult,
-	executeBrowserTool,
-} from "../src/browser/browserTools.ts";
+import { executeBrowserTool } from "../src/browser/browserTools.ts";
 
 function mockRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
 	return {
@@ -24,18 +21,6 @@ function mockRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
 	} as BrowserRuntime;
 }
 
-function isError(
-	result: BrowserToolResult,
-): result is { error: { code: string; message: string } } {
-	return "error" in result;
-}
-
-function isContent(
-	result: BrowserToolResult,
-): result is { content: Array<{ type: "text"; text: string }> } {
-	return "content" in result;
-}
-
 describe("executeBrowserTool", () => {
 	it("get_page returns page state", () => {
 		const runtime = mockRuntime();
@@ -43,8 +28,9 @@ describe("executeBrowserTool", () => {
 			{ name: "browser_get_page", arguments: {}, id: "1" },
 			runtime,
 		);
-		assert.ok(isContent(result));
-		assert.ok(result.content[0].text.includes("http://localhost/"));
+		assert.ok("content" in result);
+		const first = result.content[0] as { type: "text"; text: string };
+		assert.ok(first.text.includes("http://localhost/"));
 	});
 
 	it("eval_js returns dynamic strategy in details", () => {
@@ -53,77 +39,77 @@ describe("executeBrowserTool", () => {
 			{ name: "browser_eval_js", arguments: { source: "1+1" }, id: "1" },
 			runtime,
 		);
-		assert.ok(isContent(result));
+		assert.ok("content" in result);
 		assert.equal(
 			(result.details?.strategy as { type?: string })?.type,
 			"dynamic",
 		);
 	});
 
-	it("eval_js with invalid source returns error", () => {
+	it("eval_js with invalid source throws", () => {
 		const runtime = mockRuntime({
 			evalJs: () => {
 				throw new Error("Syntax error");
 			},
 		});
-		const result = executeBrowserTool(
-			{ name: "browser_eval_js", arguments: { source: "bad" }, id: "1" },
-			runtime,
-		);
-		assert.ok(isError(result));
-		assert.equal(result.error.code, "eval_error");
+		assert.throws(() => {
+			executeBrowserTool(
+				{ name: "browser_eval_js", arguments: { source: "bad" }, id: "1" },
+				runtime,
+			);
+		}, /Syntax error/);
 	});
 
-	it("query_selector with invalid selector returns error", () => {
+	it("query_selector with invalid selector throws", () => {
 		const runtime = mockRuntime({
 			querySelector: () => {
 				throw new Error("invalid selector");
 			},
 		});
-		const result = executeBrowserTool(
-			{
-				name: "browser_query_selector",
-				arguments: { selector: "bad[" },
-				id: "1",
-			},
-			runtime,
-		);
-		assert.ok(isError(result));
-		assert.equal(result.error.code, "selector_error");
+		assert.throws(() => {
+			executeBrowserTool(
+				{
+					name: "browser_query_selector",
+					arguments: { selector: "bad[" },
+					id: "1",
+				},
+				runtime,
+			);
+		}, /invalid selector/);
 	});
 
-	it("click missing element returns error", () => {
+	it("click missing element throws", () => {
 		const runtime = mockRuntime({
 			click: () => ({
 				ok: false,
 				error: { code: "element_not_found", message: "not found" },
 			}),
 		});
-		const result = executeBrowserTool(
-			{ name: "browser_click", arguments: { selector: "#missing" }, id: "1" },
-			runtime,
-		);
-		assert.ok(isError(result));
-		assert.equal(result.error.code, "click_error");
+		assert.throws(() => {
+			executeBrowserTool(
+				{ name: "browser_click", arguments: { selector: "#missing" }, id: "1" },
+				runtime,
+			);
+		}, /not found/);
 	});
 
-	it("type missing element returns error", () => {
+	it("type missing element throws", () => {
 		const runtime = mockRuntime({
 			type: () => ({
 				ok: false,
 				error: { code: "element_not_found", message: "not found" },
 			}),
 		});
-		const result = executeBrowserTool(
-			{
-				name: "browser_type",
-				arguments: { selector: "#missing", text: "hi" },
-				id: "1",
-			},
-			runtime,
-		);
-		assert.ok(isError(result));
-		assert.equal(result.error.code, "type_error");
+		assert.throws(() => {
+			executeBrowserTool(
+				{
+					name: "browser_type",
+					arguments: { selector: "#missing", text: "hi" },
+					id: "1",
+				},
+				runtime,
+			);
+		}, /not found/);
 	});
 
 	it("console returns empty array when no logs", () => {
@@ -132,17 +118,18 @@ describe("executeBrowserTool", () => {
 			{ name: "browser_console", arguments: {}, id: "1" },
 			runtime,
 		);
-		assert.ok(isContent(result));
-		assert.ok(result.content[0].text.includes('"count": 0'));
+		assert.ok("content" in result);
+		const first = result.content[0] as { type: "text"; text: string };
+		assert.ok(first.text.includes('"count": 0'));
 	});
 
-	it("unknown tool returns error", () => {
+	it("unknown tool throws", () => {
 		const runtime = mockRuntime();
-		const result = executeBrowserTool(
-			{ name: "browser_unknown", arguments: {}, id: "1" },
-			runtime,
-		);
-		assert.ok(isError(result));
-		assert.equal(result.error.code, "unknown_tool");
+		assert.throws(() => {
+			executeBrowserTool(
+				{ name: "browser_unknown", arguments: {}, id: "1" },
+				runtime,
+			);
+		}, /no browser tool handler/);
 	});
 });

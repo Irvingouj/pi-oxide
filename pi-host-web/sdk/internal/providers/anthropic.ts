@@ -316,6 +316,7 @@ export async function callAnthropic(
 
 import type { AgentModel, ModelRequest, ModelResponse } from "../../types.ts";
 import { createAgentError } from "../../errors.ts";
+import { getLogger } from "../../internal/logger.ts";
 
 export function anthropic(config: {
   apiKey: string;
@@ -323,6 +324,7 @@ export function anthropic(config: {
   baseUrl?: string;
   maxTokens?: number;
 }): AgentModel {
+  const logger = getLogger("anthropic");
   const anthropicConfig: AnthropicConfig = {
     apiKey: config.apiKey,
     baseUrl: config.baseUrl ?? "https://api.anthropic.com",
@@ -341,6 +343,7 @@ export function anthropic(config: {
       streaming: true,
     },
     async generate(request: ModelRequest): Promise<ModelResponse> {
+      logger.info("Anthropic generate", { model: config.model, messageCount: request.messages.length });
       const llmRequest = {
         system_prompt: request.instructions,
         messages: request.messages.map((msg): AgentMessageShape => {
@@ -392,6 +395,7 @@ export function anthropic(config: {
 
         if ("Err" in result.llmResult) {
           const err = (result.llmResult as { Err: { error: { code: string; message: string } } }).Err.error;
+          logger.warn("Anthropic API error", { code: err.code, message: err.message });
           throw createAgentError(
             err.code === "network_error" ? "model_unavailable" :
             err.code.startsWith("http_401") ? "model_auth_failed" :
@@ -408,6 +412,8 @@ export function anthropic(config: {
           usage?: { input: number; output: number; cache_read: number; cache_write: number; total_tokens: number };
         };
 
+        logger.info("Anthropic response", { stopReason: ok.stop_reason, contentBlocks: ok.content.length });
+
         return {
           content: ok.content.map((b) => {
             if (b.type === "text") return { type: "text", text: b.text ?? "" };
@@ -421,6 +427,7 @@ export function anthropic(config: {
         };
       } catch (e) {
         if (e && typeof e === "object" && "code" in e) throw e;
+        logger.error("Anthropic request failed", { error: e instanceof Error ? e.message : String(e) });
         throw createAgentError("model_unavailable", e instanceof Error ? e.message : String(e), { cause: e, recoverable: false });
       }
     },

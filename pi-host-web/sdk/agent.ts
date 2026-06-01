@@ -12,8 +12,10 @@ import type {
   AgentStatus,
   Unsubscribe,
   AgentError,
+  Logger,
 } from "./types.ts";
 import { createAgentError } from "./errors.ts";
+import { getLogger } from "./internal/logger.ts";
 import type { HostAgent } from "./internal/engine.ts";
 import {
   runAgentTurn,
@@ -31,10 +33,12 @@ export class Agent {
   private currentAbortController: AbortController | null = null;
   private disposed = false;
   private engineAgent: HostAgent | null = null;
+  private logger: Logger;
 
   constructor(config: AgentConfig) {
     this.config = config;
     this.emitter = new EventEmitter();
+    this.logger = config.logger ?? getLogger("agent");
   }
 
   on<E extends AgentEventName>(
@@ -52,6 +56,7 @@ export class Agent {
     options?: AgentRunOptions,
   ): Promise<AgentRunResult> {
     if (this.disposed) {
+      this.logger.warn("Run called on disposed agent");
       const error = createAgentError(
         "agent_disposed",
         "Agent has been disposed",
@@ -71,6 +76,7 @@ export class Agent {
     }
 
     if (this.currentRun) {
+      this.logger.warn("Run called while agent is busy");
       const error = createAgentError(
         "agent_busy",
         "Agent is already running a turn",
@@ -91,6 +97,7 @@ export class Agent {
 
     const abortController = new AbortController();
     this.currentAbortController = abortController;
+    this.logger.info("Starting run", { sessionId: this.config.sessionId });
 
     // Merge external signal if provided
     if (options?.signal) {
@@ -112,10 +119,12 @@ export class Agent {
 
     try {
       const result = await runPromise;
+      this.logger.info("Run completed", { status: result.status });
       this.emitter.emit("done", result);
       return result;
     } catch (e) {
       // Safety net: convert any unexpected throw to a failed result
+      this.logger.error("Run failed", { error: e instanceof Error ? e.message : String(e) });
       const error = createAgentError(
         "internal_error",
         e instanceof Error ? e.message : String(e),
@@ -214,11 +223,13 @@ export class Agent {
 
   stop(reason?: string): void {
     if (this.disposed || !this.currentAbortController) return;
+    this.logger.info("Stopping agent", { reason: reason ?? "user-requested" });
     this.currentAbortController.abort(reason ?? "user-requested");
   }
 
   async steer(input: string | AgentInput): Promise<void> {
     if (this.disposed) {
+      this.logger.warn("Steer called on disposed agent");
       throw createAgentError(
         "agent_disposed",
         "Agent has been disposed",
@@ -226,23 +237,27 @@ export class Agent {
       );
     }
     if (!this.engineAgent) {
+      this.logger.warn("Steer called on uninitialized agent");
       throw createAgentError(
         "agent_not_initialized",
         "Agent has not been run yet",
         { recoverable: true },
       );
     }
+    this.logger.info("Steering agent", { sessionId: this.config.sessionId });
     return steerAgent(this.engineAgent, input);
   }
 
   async reset(): Promise<void> {
     if (this.disposed) {
+      this.logger.warn("Reset called on disposed agent");
       throw createAgentError(
         "agent_disposed",
         "Agent has been disposed",
         { recoverable: false },
       );
     }
+    this.logger.info("Resetting agent", { sessionId: this.config.sessionId });
     if (this.engineAgent) {
       await resetAgentState(this.engineAgent);
       this.engineAgent = null;
@@ -255,6 +270,7 @@ export class Agent {
 
   dispose(): void {
     if (this.disposed) return;
+    this.logger.info("Disposing agent", { sessionId: this.config.sessionId });
     this.disposed = true;
     if (this.currentAbortController) {
       this.currentAbortController.abort("disposed");

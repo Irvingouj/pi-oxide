@@ -16,6 +16,7 @@ export function defineModel(
     maxTokens?: number;
     capabilities?: AgentModel["capabilities"];
     generate: AgentModel["generate"];
+    generateStream?: AgentModel["generateStream"];
     summarize?: AgentModel["summarize"];
   },
 ): AgentModel {
@@ -30,6 +31,7 @@ export function defineModel(
       streaming: config.capabilities?.streaming ?? true,
     },
     generate: config.generate,
+    generateStream: config.generateStream,
     summarize: config.summarize,
   };
 }

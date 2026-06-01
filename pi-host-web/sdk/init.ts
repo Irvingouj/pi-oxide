@@ -4,7 +4,10 @@
 import {
 	default as init,
 	initSync,
+	setLogLevel as setWasmLogLevel,
 } from "../pi_host_web.js";
+import { setGlobalLogLevel } from "./internal/logger.ts";
+import type { LogLevel } from "./types.ts";
 
 let initialized = false;
 
@@ -21,6 +24,16 @@ export async function ensureInit() {
 		await init();
 	}
 	initialized = true;
+}
+
+/** Set the log level for both JS SDK and WASM core. */
+export function setLogLevel(level: LogLevel) {
+	setGlobalLogLevel(level);
+	try {
+		setWasmLogLevel(level);
+	} catch {
+		// WASM may not be initialized yet; level will be set on init
+	}
 }
 
 export class HostError extends Error {

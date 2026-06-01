@@ -12,6 +12,7 @@ import type {
 	BrowserRuntime,
 	BrowserToolResult,
 } from "./browserRuntime.ts";
+import { getLogger } from "../../internal/logger.ts";
 
 // --- Console capture ---
 
@@ -56,7 +57,7 @@ function snapshotElement(
 ): BrowserElementSnapshot {
 	const text = (el.textContent || "").trim().slice(0, 500);
 	const attributes: Record<string, string> = {};
-	for (const a of el.attributes) {
+	for (const a of Array.from(el.attributes)) {
 		attributes[a.name] = a.value;
 	}
 	const style = window.getComputedStyle(el);
@@ -76,9 +77,12 @@ function snapshotElement(
 // --- LiveBrowserRuntime ---
 
 export class LiveBrowserRuntime implements BrowserRuntime {
+	private logger = getLogger("browser-runtime");
+
 	getPage(): BrowserPageSnapshot {
 		const ae = document.activeElement;
 		const focused = ae && ae !== document.body ? snapshotElement(ae, "") : null;
+		this.logger.debug("getPage", { url: location.href, title: document.title });
 		return {
 			url: location.href,
 			title: document.title,
@@ -88,23 +92,27 @@ export class LiveBrowserRuntime implements BrowserRuntime {
 	}
 
 	evalJs(source: string): unknown {
+		this.logger.debug("evalJs", { sourceLength: source.length });
 		return new Function(source)();
 	}
 
 	querySelector(selector: string): BrowserElementSnapshot | null {
 		const el = document.querySelector(selector);
+		this.logger.debug("querySelector", { selector, found: !!el });
 		return el ? snapshotElement(el, selector) : null;
 	}
 
 	querySelectorAll(selector: string): BrowserElementSnapshot[] {
-		return Array.from(document.querySelectorAll(selector)).map((el) =>
-			snapshotElement(el, selector),
-		);
+		const elements = Array.from(document.querySelectorAll(selector));
+		this.logger.debug("querySelectorAll", { selector, count: elements.length });
+		return elements.map((el) => snapshotElement(el, selector));
 	}
 
 	click(selector: string): BrowserToolResult {
+		this.logger.debug("click", { selector });
 		const el = document.querySelector(selector);
 		if (!el) {
+			this.logger.warn("click failed: element not found", { selector });
 			return {
 				ok: false,
 				error: {
@@ -118,8 +126,10 @@ export class LiveBrowserRuntime implements BrowserRuntime {
 	}
 
 	type(selector: string, text: string): BrowserToolResult {
+		this.logger.debug("type", { selector, textLength: text.length });
 		const el = document.querySelector(selector);
 		if (!el) {
+			this.logger.warn("type failed: element not found", { selector });
 			return {
 				ok: false,
 				error: {
@@ -132,6 +142,7 @@ export class LiveBrowserRuntime implements BrowserRuntime {
 			!(el instanceof HTMLInputElement) &&
 			!(el instanceof HTMLTextAreaElement)
 		) {
+			this.logger.warn("type failed: not an input", { selector, tag: el.tagName });
 			return {
 				ok: false,
 				error: {
@@ -146,6 +157,8 @@ export class LiveBrowserRuntime implements BrowserRuntime {
 	}
 
 	getConsole(): BrowserConsoleEntry[] {
-		return [...consoleEntries];
+		const entries = [...consoleEntries];
+		this.logger.debug("getConsole", { count: entries.length });
+		return entries;
 	}
 }

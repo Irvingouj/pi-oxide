@@ -19,6 +19,7 @@ import type {
 	BrowserRuntime,
 } from "./browserRuntime.ts";
 import { LiveBrowserRuntime } from "./liveRuntime.ts";
+import { getLogger } from "../../internal/logger.ts";
 import type { AgentTools, AgentToolDefinition } from "../../types.ts";
 
 // ========================================================================
@@ -296,6 +297,8 @@ export function executeBrowserTool(
 	call: ToolCall,
 	runtime: BrowserRuntime,
 ): ToolResult {
+	const logger = getLogger("browser");
+	logger.info("Executing browser tool", { toolName: call.name });
 	switch (call.name) {
 		case "browser_get_page": {
 			const page = runtime.getPage();
@@ -416,7 +419,9 @@ export function executeBrowserTool(
  * Auto-injects LiveBrowserRuntime in browser environments.
  */
 export function browserTools(runtime?: BrowserRuntime): AgentTools {
+	const logger = getLogger("browser");
 	const rt = runtime ?? new LiveBrowserRuntime();
+	logger.info("Browser tools initialized");
 
 	// Build handlers map: each handler returns a ToolResult (preserves details)
 	const handlers: Record<string, (call: ToolCall) => ToolResult | Promise<ToolResult>> = {};

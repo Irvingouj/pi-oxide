@@ -6,6 +6,7 @@
 
 import type { AgentModel, ModelRequest, ModelResponse, AgentContentBlock } from "../../types.ts";
 import { createAgentError } from "../../errors.ts";
+import { getLogger } from "../../internal/logger.ts";
 
 export function openaiCompatible(config: {
   apiKey: string;
@@ -13,6 +14,7 @@ export function openaiCompatible(config: {
   model: string;
   maxTokens?: number;
 }): AgentModel {
+  const logger = getLogger("openai");
   return {
     id: config.model,
     contextWindow: 128000,
@@ -24,6 +26,7 @@ export function openaiCompatible(config: {
       streaming: true,
     },
     async generate(request: ModelRequest): Promise<ModelResponse> {
+      logger.info("OpenAI generate", { model: config.model, messageCount: request.messages.length });
       // Convert AgentMessage[] -> OpenAI Chat Completions message format
       const messages = request.messages.map((msg) => {
         switch (msg.role) {
@@ -100,6 +103,7 @@ export function openaiCompatible(config: {
         if (!resp.ok) {
           const status = resp.status;
           const text = await resp.text();
+          logger.warn("OpenAI API error", { status, body: text.slice(0, 500) });
           throw createAgentError(
             status === 401 ? "model_auth_failed" :
             status === 429 ? "model_rate_limited" :
@@ -112,6 +116,8 @@ export function openaiCompatible(config: {
         const data = await resp.json();
         const choice = data.choices?.[0];
         const message = choice?.message;
+
+        logger.info("OpenAI response", { finishReason: choice?.finish_reason, model: data.model });
 
         // Parse content and tool_calls from OpenAI response
         const content: AgentContentBlock[] = [];
@@ -156,6 +162,7 @@ export function openaiCompatible(config: {
         };
       } catch (e) {
         if (e && typeof e === "object" && "code" in e) throw e;
+        logger.error("OpenAI request failed", { error: e instanceof Error ? e.message : String(e) });
         throw createAgentError("model_unavailable", e instanceof Error ? e.message : String(e), { cause: e, recoverable: false });
       }
     },

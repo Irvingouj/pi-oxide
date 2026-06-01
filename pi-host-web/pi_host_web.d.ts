@@ -1,5 +1,6 @@
 /* tslint:disable */
 /* eslint-disable */
+type Value = any;
 export interface AgentContext {
     system_prompt: string;
     messages: AgentMessage[];

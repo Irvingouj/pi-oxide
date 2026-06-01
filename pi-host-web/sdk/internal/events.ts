@@ -250,7 +250,7 @@ export class EventMapper {
       if (c.type === "text") return `t:${c.text?.slice(0, 20) ?? ""}`;
       if (c.type === "tool_call") return `tc:${c.id ?? ""}:${c.name ?? ""}`;
       if (c.type === "image") return `img:${c.media_type ?? ""}`;
-      return c.type;
+      return (c as { type: string }).type;
     }).join("|");
     return `msg-${msg.role}-${msg.timestamp ?? 0}-${contentHash}`;
   }

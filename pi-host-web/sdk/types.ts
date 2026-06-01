@@ -17,6 +17,16 @@ export type {
   ArtifactSearchResult,
 } from "./artifacts.ts";
 
+export type LogLevel = "trace" | "debug" | "info" | "warn" | "error";
+
+export interface Logger {
+  trace(message: string, context?: Record<string, unknown>): void;
+  debug(message: string, context?: Record<string, unknown>): void;
+  info(message: string, context?: Record<string, unknown>): void;
+  warn(message: string, context?: Record<string, unknown>): void;
+  error(message: string, context?: Record<string, unknown>): void;
+}
+
 export interface AgentConfig {
   sessionId: string;
   model: AgentModel;
@@ -26,6 +36,8 @@ export interface AgentConfig {
   context?: AgentContextPolicy;
   artifacts?: ArtifactPolicy;
   telemetry?: AgentTelemetry;
+  logger?: Logger;
+  logLevel?: LogLevel;
 }
 
 export type AgentInput =
@@ -135,6 +147,7 @@ export interface AgentModel {
     streaming?: boolean;
   };
   generate(request: ModelRequest): Promise<ModelResponse>;
+  generateStream?(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent>;
   summarize?(messages: AgentMessage[], signal?: AbortSignal): Promise<string>;
 }
 
@@ -229,18 +242,6 @@ export interface TokenUsage {
   cache_read: number;
   cache_write: number;
   total_tokens: number;
-}
-
-export interface UseAgentResult {
-  send(input: string | AgentInput, options?: AgentRunOptions): Promise<AgentRunResult>;
-  stop(reason?: string): void;
-  steer(input: string | AgentInput): Promise<void>;
-  reset(): Promise<void>;
-  status: AgentStatus;
-  messages: AgentMessage[];
-  toolCalls: AgentToolRun[];
-  artifacts: AgentArtifactRef[];
-  error: AgentError | null;
 }
 
 export type Unsubscribe = () => void;

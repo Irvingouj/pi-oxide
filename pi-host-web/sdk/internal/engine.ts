@@ -36,6 +36,7 @@ import { ensureInit, HostError } from "../init.ts";
 import { EventMapper } from "./events.ts";
 import { SnapshotSerializer } from "../snapshot.ts";
 import { ToolRegistryBuilder } from "./tools/registry.ts";
+import { getLogger } from "./logger.ts";
 import type {
 	AgentConfig,
 	AgentInput,
@@ -44,7 +45,9 @@ import type {
 	AgentStatus,
 	AgentMessage,
 	ModelResponse,
+	ModelEvent,
 	TokenUsage,
+	Logger,
 } from "../types.ts";
 import { createAgentError } from "../errors.ts";
 
@@ -70,6 +73,7 @@ export interface AgentRunConfig {
 	signal?: AbortSignal;
 	onPersist?: (data: PersistData) => Promise<void>;
 	artifactStore?: ArtifactStore;
+	logger?: Logger;
 }
 
 export interface LlmStream {
@@ -123,6 +127,7 @@ export async function createHostAgentInstance(
 	sessionState?: PersistData,
 ): Promise<HostAgent> {
 	await ensureInit();
+	const logger = config.logger ?? getLogger("engine");
 	const options = {
 		system_prompt: config.instructions ?? "You are a helpful assistant.",
 		model: buildModelOptions(config.model),
@@ -131,9 +136,11 @@ export async function createHostAgentInstance(
 
 	let handle: number;
 	if (sessionState) {
+		logger.info("Restoring host agent from session state", { sessionId: config.sessionId });
 		const restored = unwrap(restoreHostAgent(options, sessionState));
 		handle = restored.handle;
 	} else {
+		logger.info("Creating new host agent", { sessionId: config.sessionId });
 		const result = unwrap(createHostAgent(options, buildContextBudget(config.context)));
 		handle = result.handle;
 	}
@@ -146,6 +153,7 @@ export async function runTurnWithHostAgent(
 	config: AgentRunConfig,
 ): Promise<TurnResult> {
 	const signal = config.signal;
+	const logger = config.logger ?? getLogger("engine");
 
 	const checkAbort = () => {
 		if (signal?.aborted) {
@@ -159,6 +167,7 @@ export async function runTurnWithHostAgent(
 	};
 
 	try {
+		logger.info("Starting turn", { sessionId: hostAgent.sessionId });
 		let step = unwrap(startTurn(hostAgent.handle, { prompt: message, tools: config.llmTools }));
 		for (const event of step.events) {
 			config.onEvent?.(event);
@@ -169,8 +178,11 @@ export async function runTurnWithHostAgent(
 			checkAbort();
 			const actions = step.directives ?? [];
 			if (actions.length === 0) {
+				logger.info("Turn completed with no directives");
 				return { aborted: false };
 			}
+
+			logger.debug("Processing directives", { count: actions.length, types: actions.map((a) => a.type) });
 
 			let stateAdvanced = false;
 			let turnFinished = false;
@@ -179,6 +191,7 @@ export async function runTurnWithHostAgent(
 				checkAbort();
 				switch (action.type) {
 					case "stream_llm": {
+						logger.info("Streaming LLM", { messageCount: action.context.messages.length, toolCount: action.context.tools.length });
 						const stream = await config.llm.call(action.context, signal);
 						for await (const chunk of stream.chunks) {
 							checkAbort();
@@ -195,10 +208,12 @@ export async function runTurnWithHostAgent(
 					}
 
 					case "execute_tools": {
+						logger.info("Executing tools", { count: action.calls.length, names: action.calls.map((c) => c.name) });
 						for (const call of action.calls) {
 							checkAbort();
 							const handler = config.tools[call.name];
 							if (!handler) {
+								logger.warn("Tool handler not found", { toolName: call.name });
 								step = unwrap(hostToolFailed(hostAgent.handle, call.id, {
 									code: "tool_not_found",
 									message: `No handler for ${call.name}`,
@@ -206,8 +221,10 @@ export async function runTurnWithHostAgent(
 							} else {
 								try {
 									const result = await handler(call);
+									logger.debug("Tool completed", { toolName: call.name });
 									step = unwrap(hostToolDone(hostAgent.handle, call.id, result));
 								} catch (e) {
+									logger.warn("Tool failed", { toolName: call.name, error: e instanceof Error ? e.message : String(e) });
 									step = unwrap(hostToolFailed(hostAgent.handle, call.id, toolErrorFromUnknown(e)));
 								}
 							}
@@ -224,6 +241,7 @@ export async function runTurnWithHostAgent(
 					}
 
 					case "cancel_tools": {
+						logger.info("Cancelling tools", { count: action.tool_call_ids.length, reason: action.reason });
 						for (const id of action.tool_call_ids) {
 							step = unwrap(hostToolCancelled(hostAgent.handle, id, action.reason));
 							for (const e of step.events) config.onEvent?.(e);
@@ -234,8 +252,8 @@ export async function runTurnWithHostAgent(
 					}
 
 					case "summarize": {
-						const summarizeFn = config.llm.summarize ?? defaultSummarizer;
-						const summary = await summarizeFn(action.context.messages, signal);
+						logger.info("Summarizing context");
+						const summary = await config.llm.summarize!(action.context.messages, signal);
 						step = unwrap(hostAcceptCompaction(hostAgent.handle, summary, []));
 						for (const e of step.events) config.onEvent?.(e);
 						await processStepMarkers(step, hostAgent, config);
@@ -244,6 +262,7 @@ export async function runTurnWithHostAgent(
 					}
 
 					case "persist": {
+						logger.info("Persisting state");
 						const persistData = hostAgent.getPersistData();
 						await config.onPersist?.(persistData);
 						break;
@@ -261,18 +280,20 @@ export async function runTurnWithHostAgent(
 						break;
 
 					default:
-						console.warn(`Unknown directive type: ${(action as { type: string }).type}`);
+						logger.warn("Unknown directive type", { type: (action as { type: string }).type });
 						break;
 				}
 			}
 
 			// If the turn is finished, return after processing all directives in this batch
 			if (turnFinished) {
+				logger.info("Turn finished");
 				return { aborted: false };
 			}
 
 			// If no state was advanced and there are no new directives, continue the turn
 			if (!stateAdvanced && (step.directives ?? []).length === 0) {
+				logger.debug("No state advanced, continuing turn");
 				step = unwrap(hostContinueTurn(hostAgent.handle));
 				for (const e of step.events) config.onEvent?.(e);
 				await processStepMarkers(step, hostAgent, config);
@@ -283,8 +304,10 @@ export async function runTurnWithHostAgent(
 			(e instanceof HostError && e.code === "user_aborted") ||
 			(e instanceof DOMException && e.name === "AbortError");
 		if (isUserAbort) {
+			logger.info("Turn aborted by user");
 			return { aborted: true };
 		}
+		logger.error("Turn failed", { error: e instanceof Error ? e.message : String(e) });
 		throw e;
 	}
 }
@@ -300,6 +323,8 @@ export async function createEngineAgent(
 		onStatus: (status: AgentStatus) => void;
 	},
 ): Promise<HostAgent> {
+	const logger = config.logger ?? getLogger("engine");
+
 	// Load snapshot from store if available
 	let sessionState: PersistData | undefined;
 	if (config.store) {
@@ -307,6 +332,11 @@ export async function createEngineAgent(
 		if (snapshot) {
 			const serializer = new SnapshotSerializer();
 			sessionState = serializer.deserialize(snapshot) as PersistData | undefined;
+			if (sessionState) {
+				logger.info("Session snapshot loaded", { sessionId: config.sessionId });
+			} else {
+				logger.warn("Session snapshot version mismatch, starting fresh", { sessionId: config.sessionId });
+			}
 		}
 	}
 
@@ -329,6 +359,8 @@ export async function runAgentTurn(
 		onStatus: (status: AgentStatus) => void;
 	},
 ): Promise<AgentRunResult> {
+	const logger = config.logger ?? getLogger("engine");
+
 	// Build user message with attachments if present
 	const userMessage = buildUserMessage(input);
 
@@ -342,11 +374,18 @@ export async function runAgentTurn(
 	const toolMap = toolRegistry.build(allTools, artifactStore, config.sessionId);
 	const llmTools = toolRegistry.getLlmTools(allTools);
 
+	logger.info("Running agent turn", {
+		sessionId: config.sessionId,
+		toolCount: llmTools.length,
+		messageLength: typeof input === "string" ? input.length : input.text.length,
+	});
+
 	// Build LLM provider adapter that returns LlmStream with chunks
 	const llmProvider: AgentRunConfig["llm"] = {
 		call: async (context: LlmContext, s?: AbortSignal): Promise<LlmStream> => {
 			const effectiveSignal = s || signal;
 			callbacks.onStatus({ state: "calling_model", message: "Calling model..." });
+			logger.info("Calling model", { model: config.model.id ?? "custom" });
 
 			const modelRequest = {
 				instructions: context.system_prompt,
@@ -361,21 +400,34 @@ export async function runAgentTurn(
 				metadata: mergeMetadata(input, options?.metadata),
 			};
 
+			// Prefer real streaming when the model supports it
+			if (config.model.generateStream) {
+				logger.debug("Using streaming model");
+				return modelStreamToLlmStream(
+					config.model.generateStream(modelRequest, effectiveSignal),
+					effectiveSignal,
+					runState,
+				);
+			}
+
+			logger.debug("Using non-streaming model");
 			const response = await config.model.generate(modelRequest);
 
-			// Accumulate usage from model response into run state
 			if (response.usage) {
 				runState.usage = response.usage;
+				logger.info("Model usage", { usage: response.usage });
 			}
 
 			return modelResponseToLlmStream(response, effectiveSignal);
 		},
 		summarize: config.model.summarize
 			? async (wasmMessages: WasmAgentMessage[], sig?: AbortSignal) => {
+					logger.info("Calling model summarizer");
 					const sdkMessages = convertWasmMessagesToAgentMessages(wasmMessages);
 					return config.model.summarize!(sdkMessages, sig);
 				}
 			: async (wasmMessages: WasmAgentMessage[], sig?: AbortSignal) => {
+					logger.info("Using default summarizer");
 					return defaultSummarizer(config.model, wasmMessages, sig);
 				},
 	};
@@ -385,6 +437,7 @@ export async function runAgentTurn(
 			llm: llmProvider,
 			tools: toolMap,
 			llmTools,
+			logger,
 			onEvent: (rawEvent: RawAgentEvent) => {
 				const semanticEvents = eventMapper.map(rawEvent, runState);
 				for (const ev of semanticEvents) {
@@ -399,10 +452,12 @@ export async function runAgentTurn(
 			},
 			onPersist: async (data: PersistData) => {
 				callbacks.onStatus({ state: "saving", message: "Saving session..." });
+				logger.info("Persisting session", { sessionId: config.sessionId });
 				if (config.store) {
 					const serializer = new SnapshotSerializer();
 					const snapshot = serializer.serialize(data);
 					await config.store.saveSession(config.sessionId, snapshot);
+					logger.info("Session saved", { sessionId: config.sessionId });
 				}
 				callbacks.onStatus({ state: "completed" });
 			},
@@ -411,11 +466,14 @@ export async function runAgentTurn(
 		});
 
 		if (result.aborted) {
+			logger.info("Turn aborted");
 			callbacks.onStatus({ state: "aborted", message: "Stopped by user" });
+		} else {
+			logger.info("Turn completed", { status: "completed" });
 		}
 		return eventMapper.buildRunResult(runState, result);
 	} catch (e) {
-		// Let Agent.run() handle error conversion
+		logger.error("Turn failed", { error: e instanceof Error ? e.message : String(e) });
 		throw e;
 	}
 }
@@ -436,6 +494,126 @@ export async function resetAgentState(hostAgent: HostAgent): Promise<void> {
 }
 
 // --- Helpers ---
+
+function modelStreamToLlmStream(
+	stream: AsyncIterable<ModelEvent>,
+	signal: AbortSignal,
+	runState: { usage?: import("../types.ts").TokenUsage },
+): LlmStream {
+	let textAccumulator = "";
+	const toolCalls = new Map<string, { id: string; name: string; arguments: string }>();
+	let stopReason: "end" | "tool_call" | "length" | "error" = "end";
+	let modelId: string | undefined;
+	let usage: import("../types.ts").TokenUsage | undefined;
+	let streamError: unknown;
+
+	// Promise that resolves when chunks iteration finishes
+	let chunksDoneResolve: () => void;
+	const chunksDone = new Promise<void>((r) => { chunksDoneResolve = r; });
+
+	const chunks: AsyncIterable<LlmChunk> = {
+		[Symbol.asyncIterator]: async function* () {
+			try {
+				for await (const event of stream) {
+					if (signal.aborted) return;
+					switch (event.type) {
+						case "text_delta": {
+							const text = event.payload as string;
+							textAccumulator += text;
+							yield { kind: "text_delta", text };
+							break;
+						}
+						case "tool_call_delta": {
+							const delta = event.payload as { id: string; name: string; arguments?: unknown; delta?: unknown };
+							const existing = toolCalls.get(delta.id);
+							const argumentFragment = stringifyToolArguments(delta.arguments ?? delta.delta ?? "");
+							toolCalls.set(delta.id, {
+								id: delta.id,
+								name: delta.name || existing?.name || "",
+								arguments: (existing?.arguments ?? "") + argumentFragment,
+							});
+							yield { kind: "tool_call_delta", tool_call_id: delta.id, delta: { type: "string", value: argumentFragment } };
+							break;
+						}
+						case "done": {
+							const response = event.payload as ModelResponse;
+							modelId = response.model;
+							usage = response.usage;
+							if (response.usage) runState.usage = response.usage;
+							stopReason = response.stopReason;
+							for (const block of response.content) {
+								if (block.type !== "tool_call") continue;
+								toolCalls.set(block.id, {
+									id: block.id,
+									name: block.name,
+									arguments: stringifyToolArguments(block.arguments),
+								});
+							}
+							break;
+						}
+					}
+				}
+			} catch (e) {
+				streamError = e;
+			} finally {
+				chunksDoneResolve();
+			}
+		},
+	};
+
+	const result: Promise<LlmResult> = (async () => {
+		// Wait for chunks to be fully consumed by the engine
+		await chunksDone;
+
+		if (streamError) {
+			return { Err: { error: { code: "stream_error", message: streamError instanceof Error ? streamError.message : String(streamError) }, aborted: false } } as LlmResult;
+		}
+
+		const content: Content[] = [];
+		if (textAccumulator) {
+			content.push({ type: "text" as const, text: textAccumulator });
+		}
+		for (const tc of toolCalls.values()) {
+			content.push({ type: "tool_call" as const, id: tc.id, name: tc.name, arguments: parseToolArguments(tc.arguments) });
+		}
+
+		return {
+			Ok: {
+				content,
+				api: "sdk",
+				provider: "sdk",
+				model: modelId ?? "sdk-model",
+				stop_reason: toWasmStopReason(stopReason),
+				error_message: toWasmStopReason(stopReason) === "error" ? "Model returned an error stop reason" : undefined,
+				timestamp: Date.now(),
+				usage: {
+					input: usage?.input ?? 0,
+					output: usage?.output ?? 0,
+					cache_read: usage?.cache_read ?? 0,
+					cache_write: usage?.cache_write ?? 0,
+					total_tokens: usage?.total_tokens ?? 0,
+				},
+			},
+		};
+	})();
+
+	return { chunks, result };
+}
+
+function stringifyToolArguments(argumentsValue: unknown): string {
+	if (typeof argumentsValue === "string") {
+		return argumentsValue;
+	}
+	return JSON.stringify(argumentsValue) ?? "";
+}
+
+function parseToolArguments(argumentsText: string): unknown {
+	try {
+		return JSON.parse(argumentsText);
+	} catch {
+		return argumentsText;
+	}
+}
 
 async function processStepMarkers(
 	step: { markers?: Array<{ type: string; entry_ids?: string[] }> },
@@ -598,7 +776,7 @@ function stableMessageId(msg: WasmAgentMessage): string {
 		if (c.type === "text") return `t:${c.text?.slice(0, 64) ?? ""}`;
 		if (c.type === "tool_call") return `tc:${c.id ?? ""}:${c.name ?? ""}`;
 		if (c.type === "image") return `img:${c.media_type ?? ""}`;
-		return c.type;
+		return (c as { type: string }).type;
 	}).join("|");
 	return `msg-${msg.role}-${msg.timestamp ?? 0}-${contentHash}`;
 }

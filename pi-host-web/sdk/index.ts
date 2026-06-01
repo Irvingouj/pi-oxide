@@ -12,8 +12,18 @@ export { defineTools, tool } from "./tools.ts";
 export { browserTools } from "./internal/tools/browser.ts";
 export { artifactTools } from "./internal/tools/artifact.ts";
 export { indexedDbStore, memoryStore, localStorageStore, httpStore } from "./stores.ts";
-export { useAgent } from "./react/index.ts";
-
+export {
+  ConsoleLogger,
+  NoopLogger,
+  CallbackLogger,
+  getLogger,
+  setLogger,
+  getGlobalLogLevel,
+  setGlobalLogLevel,
+  clearLoggers,
+} from "./internal/logger.ts";
+export type { LogLevel, Logger } from "./types.ts";
+export type { LogEntry } from "./internal/logger.ts";
 export type {
 	AgentArtifact,
 	AgentArtifactRef,
@@ -47,7 +57,6 @@ export type {
 	AgentError,
 	Unsubscribe,
 	TokenUsage,
-	UseAgentResult,
 } from "./types.ts";
 
 export { createAgentError } from "./errors.ts";

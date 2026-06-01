@@ -25,7 +25,7 @@
 		"vite": "^8.0.14"
 	},
 	"dependencies": {
-		"@pi-oxide/pi-host-web": "^0.3.1",
+		"@pi-oxide/pi-host-web": "^0.4.0",
 		"react": "^19.2.6",
 		"react-dom": "^19.2.6",
 		"zod": "^3.24.0",

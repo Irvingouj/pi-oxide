@@ -1,7 +1,7 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import type { BrowserRuntime } from "../src/browser/browserRuntime.ts";
-import { executeBrowserTool } from "../src/browser/browserTools.ts";
+import type { BrowserRuntime } from "../../pi-host-web/sdk/internal/tools/browserRuntime.ts";
+import { executeBrowserTool } from "../../pi-host-web/sdk/internal/tools/browser.ts";
 
 function mockRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
 	return {

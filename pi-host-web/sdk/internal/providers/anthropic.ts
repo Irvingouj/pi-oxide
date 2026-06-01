@@ -8,7 +8,7 @@
  * response as chunks + final result, matching the existing AgentHost pattern.
  */
 
-import type { ToolDefinition } from "@pi-oxide/pi-host-web";
+import type { ToolDefinition } from "../../../pi_host_web.js";
 import type {
 	AgentMessageShape,
 	ContentBlock,
@@ -310,6 +310,121 @@ export async function callAnthropic(
 		config.model,
 	);
 	return { llmResult, chunks, log };
+}
+
+// --- SDK factory ---
+
+import type { AgentModel, ModelRequest, ModelResponse } from "../../types.ts";
+import { createAgentError } from "../../errors.ts";
+
+export function anthropic(config: {
+  apiKey: string;
+  model: string;
+  baseUrl?: string;
+  maxTokens?: number;
+}): AgentModel {
+  const anthropicConfig: AnthropicConfig = {
+    apiKey: config.apiKey,
+    baseUrl: config.baseUrl ?? "https://api.anthropic.com",
+    model: config.model,
+    maxTokens: config.maxTokens,
+  };
+
+  return {
+    id: config.model,
+    contextWindow: 200000,
+    maxTokens: config.maxTokens ?? 4096,
+    capabilities: {
+      vision: config.model.includes("vision") || config.model.startsWith("claude-3-5"),
+      jsonMode: true,
+      functionCalling: true,
+      streaming: true,
+    },
+    async generate(request: ModelRequest): Promise<ModelResponse> {
+      const llmRequest = {
+        system_prompt: request.instructions,
+        messages: request.messages.map((msg): AgentMessageShape => {
+          const content = msg.content.map((c): ContentBlock => {
+            if (c.type === "text") return { type: "text", text: c.text };
+            if (c.type === "tool_call") return { type: "tool_call", id: c.id, name: c.name, arguments: c.arguments as Record<string, unknown> };
+            if (c.type === "image") return { type: "image", media_type: c.mimeType, data: c.data };
+            return { type: "text", text: "" };
+          });
+          const timestamp = msg.timestamp ?? Date.now();
+          if (msg.role === "user") {
+            return { role: "user", content, timestamp };
+          }
+          if (msg.role === "assistant") {
+            return {
+              role: "assistant",
+              content,
+              api: "sdk",
+              provider: "sdk",
+              model: request.tools[0]?.name ?? "sdk-model",
+              stop_reason: "end_turn",
+              error_message: null,
+              timestamp,
+              usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },
+            };
+          }
+          // tool_result
+          return {
+            role: "tool_result",
+            tool_call_id: msg.tool_call_id ?? "",
+            tool_name: msg.content.find((c) => c.type === "text")?.text?.slice(0, 50) ?? "unknown",
+            content,
+            details: {},
+            is_error: false,
+            timestamp,
+          };
+        }),
+        tools: request.tools.map((t) => ({
+          name: t.name,
+          label: t.name,
+          description: t.description,
+          parameters: t.inputSchema as object,
+          execution_mode: "parallel" as const,
+        })),
+      };
+
+      try {
+        const result = await callAnthropic(llmRequest, anthropicConfig);
+
+        if ("Err" in result.llmResult) {
+          const err = (result.llmResult as { Err: { error: { code: string; message: string } } }).Err.error;
+          throw createAgentError(
+            err.code === "network_error" ? "model_unavailable" :
+            err.code.startsWith("http_401") ? "model_auth_failed" :
+            err.code.startsWith("http_429") ? "model_rate_limited" :
+            "model_unavailable",
+            err.message,
+            { recoverable: err.code === "http_429" },
+          );
+        }
+
+        const ok = (result.llmResult as { Ok: object }).Ok as {
+          content: Array<{ type: string; text?: string; id?: string; name?: string; arguments?: unknown }>;
+          stop_reason: string;
+          usage?: { input: number; output: number; cache_read: number; cache_write: number; total_tokens: number };
+        };
+
+        return {
+          content: ok.content.map((b) => {
+            if (b.type === "text") return { type: "text", text: b.text ?? "" };
+            if (b.type === "tool_call") return { type: "tool_call", id: b.id ?? "", name: b.name ?? "", arguments: b.arguments ?? {} };
+            return { type: "text", text: "" };
+          }),
+          stopReason: ok.stop_reason === "tool_use" ? "tool_call" : "end",
+          usage: ok.usage,
+          model: config.model,
+          raw: result,
+        };
+      } catch (e) {
+        if (e && typeof e === "object" && "code" in e) throw e;
+        throw createAgentError("model_unavailable", e instanceof Error ? e.message : String(e), { cause: e, recoverable: false });
+      }
+    },
+  };
 }
 
 // --- Helpers ---

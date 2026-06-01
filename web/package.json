@@ -28,6 +28,8 @@
 		"@pi-oxide/pi-host-web": "^0.3.1",
 		"react": "^19.2.6",
 		"react-dom": "^19.2.6",
+		"zod": "^3.24.0",
+		"zod-to-json-schema": "^3.24.0",
 		"zustand": "^5.0.13"
 	}
 }

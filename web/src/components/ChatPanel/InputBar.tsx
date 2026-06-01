@@ -4,6 +4,7 @@ interface InputBarProps {
 	onSend: (text: string) => void;
 	onStop: () => void;
 	onSteer: (text: string) => void;
+	onReset: () => void;
 	isRunning: boolean;
 }
 
@@ -11,6 +12,7 @@ export default function InputBar({
 	onSend,
 	onStop,
 	onSteer,
+	onReset,
 	isRunning,
 }: InputBarProps) {
 	const [text, setText] = useState("");
@@ -117,6 +119,21 @@ export default function InputBar({
 				}}
 			>
 				Send
+			</button>
+			<button
+				type="button"
+				onClick={onReset}
+				style={{
+					background: "#555",
+					color: "white",
+					border: "none",
+					padding: "8px 16px",
+					borderRadius: "4px",
+					cursor: "pointer",
+					fontSize: "14px",
+				}}
+			>
+				Reset
 			</button>
 		</div>
 	);

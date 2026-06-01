@@ -364,6 +364,81 @@ pub fn host_tool_done(handle: u32, id: ToolCallId, result: ToolResult) -> TurnRe
     }
 }
 
+#[wasm_bindgen(js_name = "hostToolFailed")]
+pub fn host_tool_failed(handle: u32, id: ToolCallId, error: ToolError) -> TurnResultResult {
+    console_error_panic_hook::set_once();
+    info!(handle, "hostToolFailed called");
+
+    let core_id: pi_core::ToolCallId = try_conv!(id.try_into());
+    let core_error: pi_core::ToolError = try_conv!(error.try_into());
+
+    let mut host_agent = match take_host_agent(handle) {
+        Ok(a) => a,
+        Err(e) => return err(&e),
+    };
+
+    let result = match host_agent.runtime {
+        AgentRuntime::WaitingTools(waiting) => {
+            let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) =
+                waiting
+                    .on_tool_done(
+                        core_id,
+                        Err(core_error),
+                        host_agent.transcript,
+                        host_agent.artifacts,
+                        host_agent.turn_number,
+                    )
+                    .into_parts();
+            host_agent.runtime = new_runtime;
+            host_agent.transcript = transcript;
+            host_agent.artifacts = artifacts;
+            host_agent.turn_number = turn_number;
+            for marker in &markers {
+                if let pi_core::ChangeMarker::NewArtifacts { entry_ids } = marker {
+                    host_agent
+                        .host_state
+                        .sync_artifacts_from_core(&host_agent.artifacts, entry_ids);
+                }
+            }
+            Ok((events, actions, markers))
+        }
+        other => {
+            let actual = runtime_phase_name(&other);
+            host_agent.runtime = other;
+            Err(HostError::WrongPhase {
+                expected: "WaitingTools",
+                actual,
+            })
+        }
+    };
+
+    match result {
+        Ok((events, actions, markers)) => {
+            let mut directives = try_conv!(convert_actions_to_directives(actions));
+            if matches!(host_agent.runtime, AgentRuntime::ReadyToContinue(_)) {
+                directives.push(HostDirective::WaitForInput {
+                    mode: WaitMode::Any,
+                });
+            }
+            let dto_events = try_conv!(convert_events(events));
+            let dto_markers = try_conv!(markers
+                .into_iter()
+                .map(|m| ChangeMarkerDto::try_from(m))
+                .collect::<Result<Vec<_>, _>>());
+            put_host_agent(host_agent);
+            ok(TurnResultOutput {
+                events: dto_events,
+                directives,
+                markers: dto_markers,
+            })
+        }
+        Err(e) => {
+            put_host_agent(host_agent);
+            err(&e)
+        }
+    }
+}
+
 #[wasm_bindgen(js_name = "hostAcceptCompaction")]
 pub fn host_accept_compaction(
     handle: u32,

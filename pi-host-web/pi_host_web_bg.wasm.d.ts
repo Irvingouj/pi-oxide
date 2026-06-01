@@ -1,0 +1,36 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const createHostState: (a: any) => any;
+export const destroyHostState: (a: number) => any;
+export const estimateTokens: (a: any) => any;
+export const estimateTokensForText: (a: number, b: number) => any;
+export const getHostStatePersistData: (a: number) => any;
+export const hostReadArtifact: (a: number, b: number, c: number) => [number, number, number, number];
+export const hostSearchArtifacts: (a: number, b: number, c: number) => [number, number, number];
+export const restoreHostState: (a: any) => any;
+export const restoreHostStateFromJson: (a: number, b: number) => any;
+export const setLogLevel: (a: number, b: number) => void;
+export const createHostAgent: (a: any, b: any) => any;
+export const destroyHostAgent: (a: number) => any;
+export const getHostAgentPersistData: (a: number) => any;
+export const hostAbort: (a: number) => any;
+export const hostAcceptCompaction: (a: number, b: number, c: number, d: number, e: number) => any;
+export const hostContinueTurn: (a: number) => any;
+export const hostFeedLlmChunk: (a: number, b: any) => any;
+export const hostLlmDone: (a: number, b: any) => any;
+export const hostReset: (a: number) => any;
+export const hostSteer: (a: number, b: any) => any;
+export const hostToolCancelled: (a: number, b: number, c: number, d: any) => any;
+export const hostToolDone: (a: number, b: any, c: any) => any;
+export const hostToolFailed: (a: number, b: any, c: any) => any;
+export const restoreHostAgent: (a: any, b: any) => any;
+export const startTurn: (a: number, b: any) => any;
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
+export const __wbindgen_externrefs: WebAssembly.Table;
+export const __externref_table_dealloc: (a: number) => void;
+export const __wbindgen_start: () => void;

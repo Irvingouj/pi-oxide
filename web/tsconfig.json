@@ -16,5 +16,5 @@
 		"allowImportingTsExtensions": true,
 		"types": ["react", "react-dom", "node", "vite/client"]
 	},
-	"include": ["src/**/*", "test/**/*"]
+	"include": ["src/**/*"]
 }

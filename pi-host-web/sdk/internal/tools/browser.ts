@@ -12,12 +12,14 @@ import type {
 	ToolCall,
 	ToolDefinition,
 	ToolResult,
-} from "@pi-oxide/pi-host-web";
+} from "../../../pi_host_web.js";
 import type {
 	BrowserConsoleEntry,
 	BrowserElementSnapshot,
 	BrowserRuntime,
 } from "./browserRuntime.ts";
+import { LiveBrowserRuntime } from "./liveRuntime.ts";
+import type { AgentTools, AgentToolDefinition } from "../../types.ts";
 
 // ========================================================================
 // Tool schemas
@@ -407,4 +409,41 @@ export function executeBrowserTool(
 		default:
 			throw new Error(`no browser tool handler for: ${call.name}`);
 	}
+}
+
+/**
+ * Create an AgentTools pack for browser-native tools.
+ * Auto-injects LiveBrowserRuntime in browser environments.
+ */
+export function browserTools(runtime?: BrowserRuntime): AgentTools {
+	const rt = runtime ?? new LiveBrowserRuntime();
+
+	// Build handlers map: each handler returns a ToolResult (preserves details)
+	const handlers: Record<string, (call: ToolCall) => ToolResult | Promise<ToolResult>> = {};
+	for (const def of BROWSER_TOOLS) {
+		handlers[def.name] = (call: ToolCall) => executeBrowserTool(call, rt);
+	}
+
+	const definitions: AgentToolDefinition[] = BROWSER_TOOLS.map((t) => ({
+		name: t.name,
+		description: t.description,
+		inputSchema: t.parameters,
+		run: (input: unknown) => {
+			const handler = handlers[t.name];
+			if (!handler) return null;
+			return handler({ id: "", name: t.name, arguments: input as Record<string, unknown> });
+		},
+	}));
+
+	return {
+		definitions,
+		getHandler(name: string) {
+			const handler = handlers[name];
+			if (!handler) return null;
+			return async (input: unknown) => {
+				const result = await handler({ id: "", name, arguments: input as Record<string, unknown> });
+				return result;
+			};
+		},
+	};
 }

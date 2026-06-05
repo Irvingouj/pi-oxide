@@ -7,6 +7,7 @@
 import type { ToolCall, ToolDefinition, ToolResult } from "../../../pi_host_web.js";
 import type { BrowserRuntime } from "./browserRuntime.ts";
 import type { ArtifactStore } from "../engine.ts";
+import { getString } from "../../internal/util/types.ts";
 import {
   BROWSER_TOOLS,
   executeBrowserTool,
@@ -17,7 +18,7 @@ import {
 // Artifact tool schemas
 // ========================================================================
 
-const artifactReadSchema: object = {
+const artifactReadSchema: Record<string, unknown> = {
   type: "object",
   properties: {
     artifact_id: {
@@ -31,7 +32,7 @@ const artifactReadSchema: object = {
 
 const MAX_SEARCH_RESULTS = 50;
 
-const artifactSearchSchema: object = {
+const artifactSearchSchema: Record<string, unknown> = {
   type: "object",
   properties: {
     pattern: {
@@ -98,7 +99,7 @@ export function createArtifactToolRegistry(
 ): ToolMap {
   return {
     artifact_read: wrapToolHandler(async (call: ToolCall) => {
-      const artifactId = call.arguments.artifact_id as string;
+      const artifactId = getString(call.arguments, "artifact_id");
       if (typeof artifactId !== "string" || artifactId.length === 0) {
         throw new Error("artifact_id must be a non-empty string");
       }
@@ -122,7 +123,7 @@ export function createArtifactToolRegistry(
       };
     }),
     artifact_search: wrapToolHandler(async (call: ToolCall) => {
-      const pattern = call.arguments.pattern as string;
+      const pattern = getString(call.arguments, "pattern");
       if (typeof pattern !== "string" || pattern.length === 0) {
         throw new Error("pattern must be a non-empty string");
       }

@@ -19,6 +19,14 @@ pub(crate) fn convert_actions_to_directives(
                     context: summary_context,
                 });
             }
+            pi_core::AgentAction::PrepareToolCalls { calls } => {
+                directives.push(HostDirective::PrepareToolCalls {
+                    calls: calls
+                        .into_iter()
+                        .map(|c| c.try_into())
+                        .collect::<Result<Vec<_>, _>>()?,
+                });
+            }
             pi_core::AgentAction::ExecuteTools { calls } => {
                 directives.push(HostDirective::ExecuteTools {
                     calls: calls

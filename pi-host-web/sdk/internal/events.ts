@@ -75,8 +75,6 @@ export class EventMapper {
         if (delta.kind === "text_delta" && delta.text) {
           state.text += delta.text;
           events.push({ type: "text", payload: delta.text });
-        } else if (delta.kind === "tool_call_start" && delta.tool_call) {
-          // Track tool call in current message
         } else if (delta.kind === "thinking_delta") {
           events.push({ type: "status", payload: { state: "thinking", message: "Thinking..." } as AgentStatus });
         }
@@ -123,18 +121,29 @@ export class EventMapper {
       }
 
       case "tool_execution_end": {
-        const tool = state.toolCalls.find((t) => t.id === rawEvent.tool_call_id);
-        if (tool) {
-          tool.status = rawEvent.is_error ? "failed" : "completed";
-          tool.endedAt = Date.now();
-          // Extract output from result
-          const resultText = rawEvent.result.content
-            .filter((c): c is { type: "text"; text: string } => c.type === "text")
-            .map((c) => c.text)
-            .join("\n");
-          tool.output = resultText;
-          events.push({ type: "toolEnd", payload: tool });
+        let tool = state.toolCalls.find((t) => t.id === rawEvent.tool_call_id);
+        if (!tool) {
+          const toolName = rawEvent.tool_name ?? "unknown";
+          tool = {
+            id: rawEvent.tool_call_id,
+            name: toolName,
+            title: toolName,
+            input: rawEvent.args ?? {},
+            status: rawEvent.is_error ? "failed" : "completed",
+            startedAt: Date.now(),
+            endedAt: Date.now(),
+          };
+          state.toolCalls.push(tool);
         }
+        tool.status = rawEvent.is_error ? "failed" : "completed";
+        tool.endedAt = Date.now();
+        // Extract output from result
+        const resultText = rawEvent.result.content
+          .filter((c): c is { type: "text"; text: string } => c.type === "text")
+          .map((c) => c.text)
+          .join("\n");
+        tool.output = resultText;
+        events.push({ type: "toolEnd", payload: tool });
         break;
       }
 
@@ -160,16 +169,27 @@ export class EventMapper {
 
         // Extract tool results
         for (const tr of rawEvent.tool_results) {
-          const tool = state.toolCalls.find((t) => t.id === tr.tool_call_id);
-          if (tool) {
-            tool.status = tr.is_error ? "failed" : "completed";
-            tool.endedAt = Date.now();
-            const resultText = tr.content
-              .filter((c): c is { type: "text"; text: string } => c.type === "text")
-              .map((c) => c.text)
-              .join("\n");
-            tool.output = resultText;
+          let tool = state.toolCalls.find((t) => t.id === tr.tool_call_id);
+          if (!tool) {
+            const toolName = tr.tool_name ?? "unknown";
+            tool = {
+              id: tr.tool_call_id,
+              name: toolName,
+              title: toolName,
+              input: {},
+              status: tr.is_error ? "failed" : "completed",
+              startedAt: Date.now(),
+              endedAt: Date.now(),
+            };
+            state.toolCalls.push(tool);
           }
+          tool.status = tr.is_error ? "failed" : "completed";
+          tool.endedAt = Date.now();
+          const resultText = tr.content
+            .filter((c): c is { type: "text"; text: string } => c.type === "text")
+            .map((c) => c.text)
+            .join("\n");
+          tool.output = resultText;
         }
 
         events.push({ type: "status", payload: { state: "completed" } as AgentStatus });

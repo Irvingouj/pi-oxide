@@ -53,11 +53,11 @@ export function unwrap(result: { ok: boolean; data?: unknown; error?: { code: st
 }
 
 /** Build a successful tool result payload. */
-export function toolResult(text: string, opts: { terminate?: boolean; details?: object } = {}) {
+export function toolResult(text: string, opts: { terminate?: boolean; details?: Record<string, unknown> } = {}) {
 	const payload: {
 		content: Array<{ type: "text"; text: string }>;
 		terminate?: boolean;
-		details?: object;
+		details?: Record<string, unknown>;
 	} = {
 		content: [{ type: "text", text }],
 	};

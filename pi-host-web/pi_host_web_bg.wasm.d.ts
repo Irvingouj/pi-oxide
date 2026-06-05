@@ -19,6 +19,7 @@ export const hostAcceptCompaction: (a: number, b: number, c: number, d: number, 
 export const hostContinueTurn: (a: number) => any;
 export const hostFeedLlmChunk: (a: number, b: any) => any;
 export const hostLlmDone: (a: number, b: any) => any;
+export const hostPrepareToolCalls: (a: number, b: number, c: number) => any;
 export const hostReset: (a: number) => any;
 export const hostSteer: (a: number, b: any) => any;
 export const hostToolCancelled: (a: number, b: number, c: number, d: any) => any;

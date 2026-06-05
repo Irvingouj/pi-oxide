@@ -20,19 +20,20 @@ import type {
 } from "./browserRuntime.ts";
 import { LiveBrowserRuntime } from "./liveRuntime.ts";
 import { getLogger } from "../../internal/logger.ts";
+import { getString, getBoolean, getNumber } from "../../internal/util/types.ts";
 import type { AgentTools, AgentToolDefinition } from "../../types.ts";
 
 // ========================================================================
 // Tool schemas
 // ========================================================================
 
-const browserGetPageSchema: object = {
+const browserGetPageSchema: Record<string, unknown> = {
 	type: "object",
 	properties: {},
 	additionalProperties: false,
 };
 
-const browserEvalJsSchema: object = {
+const browserEvalJsSchema: Record<string, unknown> = {
 	type: "object",
 	properties: {
 		source: {
@@ -44,7 +45,7 @@ const browserEvalJsSchema: object = {
 	additionalProperties: false,
 };
 
-const browserQuerySelectorSchema: object = {
+const browserQuerySelectorSchema: Record<string, unknown> = {
 	type: "object",
 	properties: {
 		selector: {
@@ -61,7 +62,7 @@ const browserQuerySelectorSchema: object = {
 	additionalProperties: false,
 };
 
-const browserClickSchema: object = {
+const browserClickSchema: Record<string, unknown> = {
 	type: "object",
 	properties: {
 		selector: {
@@ -73,7 +74,7 @@ const browserClickSchema: object = {
 	additionalProperties: false,
 };
 
-const browserTypeSchema: object = {
+const browserTypeSchema: Record<string, unknown> = {
 	type: "object",
 	properties: {
 		selector: {
@@ -89,7 +90,7 @@ const browserTypeSchema: object = {
 	additionalProperties: false,
 };
 
-const browserConsoleSchema: object = {
+const browserConsoleSchema: Record<string, unknown> = {
 	type: "object",
 	properties: {
 		level: {
@@ -321,7 +322,7 @@ export function executeBrowserTool(
 		}
 
 		case "browser_eval_js": {
-			const source = call.arguments.source as string;
+			const source = getString(call.arguments, "source");
 			if (typeof source !== "string" || source.length === 0) {
 				throw new Error("source must be a non-empty string");
 			}
@@ -332,8 +333,8 @@ export function executeBrowserTool(
 		}
 
 		case "browser_query_selector": {
-			const selector = call.arguments.selector as string;
-			const all = call.arguments.all as boolean | undefined;
+			const selector = getString(call.arguments, "selector");
+			const all = getBoolean(call.arguments, "all");
 			if (!selector) {
 				throw new Error("selector is required");
 			}
@@ -355,7 +356,7 @@ export function executeBrowserTool(
 		}
 
 		case "browser_click": {
-			const selector = call.arguments.selector as string;
+			const selector = getString(call.arguments, "selector");
 			if (!selector) {
 				throw new Error("selector is required");
 			}
@@ -372,8 +373,8 @@ export function executeBrowserTool(
 		}
 
 		case "browser_type": {
-			const selector = call.arguments.selector as string;
-			const text = call.arguments.text as string;
+			const selector = getString(call.arguments, "selector");
+			const text = getString(call.arguments, "text");
 			if (!selector) {
 				throw new Error("selector is required");
 			}
@@ -398,8 +399,8 @@ export function executeBrowserTool(
 		}
 
 		case "browser_console": {
-			const level = call.arguments.level as string | undefined;
-			const limit = call.arguments.limit as number | undefined;
+			const level = getString(call.arguments, "level");
+			const limit = getNumber(call.arguments, "limit");
 			const entries = runtime.getConsole();
 			const formatted = formatConsoleEntries(entries, level, limit);
 			const text = JSON.stringify(formatted, null, 2);
@@ -436,7 +437,7 @@ export function browserTools(runtime?: BrowserRuntime): AgentTools {
 		run: (input: unknown) => {
 			const handler = handlers[t.name];
 			if (!handler) return null;
-			return handler({ id: "", name: t.name, arguments: input as Record<string, unknown> });
+			return handler({ id: "", name: t.name, arguments: input });
 		},
 	}));
 
@@ -446,7 +447,7 @@ export function browserTools(runtime?: BrowserRuntime): AgentTools {
 			const handler = handlers[name];
 			if (!handler) return null;
 			return async (input: unknown) => {
-				const result = await handler({ id: "", name, arguments: input as Record<string, unknown> });
+				const result = await handler({ id: "", name, arguments: input });
 				return result;
 			};
 		},

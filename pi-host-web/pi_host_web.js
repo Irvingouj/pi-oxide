@@ -130,6 +130,18 @@ export function hostLlmDone(handle, result) {
 
 /**
  * @param {number} handle
+ * @param {string} preparations_json
+ * @returns {TurnResultResult}
+ */
+export function hostPrepareToolCalls(handle, preparations_json) {
+    const ptr0 = passStringToWasm0(preparations_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.hostPrepareToolCalls(handle, ptr0, len0);
+    return ret;
+}
+
+/**
+ * @param {number} handle
  * @param {string} artifact_id
  * @returns {string}
  */

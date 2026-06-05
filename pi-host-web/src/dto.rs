@@ -67,17 +67,17 @@ pub struct ToolName(pub String);
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(transparent)]
-pub struct JsonSchema(pub serde_json::Value);
+pub struct JsonSchema(#[tsify(type = "Record<string, unknown>")] pub serde_json::Value);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(transparent)]
-pub struct ToolArguments(pub serde_json::Value);
+pub struct ToolArguments(#[tsify(type = "unknown")] pub serde_json::Value);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(transparent)]
-pub struct ToolDetails(pub serde_json::Value);
+pub struct ToolDetails(#[tsify(type = "Record<string, unknown>")] pub serde_json::Value);
 
 // ---------------------------------------------------------------------------
 // Model
@@ -249,6 +249,7 @@ pub enum LlmChunk {
     },
     ToolCallDelta {
         tool_call_id: ToolCallId,
+        #[tsify(type = "Record<string, unknown>")]
         delta: serde_json::Value,
     },
     Done,
@@ -270,6 +271,7 @@ pub struct LlmError {
     pub code: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[tsify(type = "unknown")]
     pub details: Option<serde_json::Value>,
 }
 
@@ -370,10 +372,37 @@ pub struct ToolExecutionUpdate {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct ToolCallPreparation {
+    pub tool_call_id: ToolCallId,
+    pub transform: ToolCallTransform,
+    pub permission: ToolCallPermission,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolCallTransform {
+    None,
+    RewriteArgs { arguments: ToolArguments },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolCallPermission {
+    Allow,
+    Block { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostDirective {
     StreamLlm {
         context: LlmContext,
+    },
+    PrepareToolCalls {
+        calls: Vec<ToolCall>,
     },
     ExecuteTools {
         calls: Vec<ToolCall>,
@@ -428,7 +457,10 @@ pub enum AgentEvent {
     },
     ToolExecutionEnd {
         tool_call_id: ToolCallId,
+        tool_name: ToolName,
         result: ToolResult,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        args: Option<ToolArguments>,
         is_error: bool,
     },
     ToolExecutionCancelled {
@@ -464,6 +496,7 @@ pub enum ContentDelta {
     },
     ToolCallDelta {
         tool_call_id: ToolCallId,
+        #[tsify(type = "Record<string, unknown>")]
         delta: serde_json::Value,
     },
     ToolCallEnd {
@@ -617,21 +650,12 @@ pub struct StartTurnInput {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
+#[derive(Default)]
 pub struct TurnResultOutput {
     pub events: Vec<AgentEvent>,
     pub directives: Vec<HostDirective>,
     #[serde(default)]
     pub markers: Vec<ChangeMarkerDto>,
-}
-
-impl Default for TurnResultOutput {
-    fn default() -> Self {
-        Self {
-            events: vec![],
-            directives: vec![],
-            markers: vec![],
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
@@ -697,9 +721,11 @@ pub struct CreateHostAgentResult {
 pub struct PersistData {
     /// TrimmedMessage list as JSON value (serde roundtrip via dto_conv).
     #[serde(rename = "T", default)]
+    #[tsify(type = "unknown[]")]
     pub transcript: serde_json::Value,
     /// Artifacts map as JSON value (serde roundtrip via dto_conv).
     #[serde(rename = "A", default)]
+    #[tsify(type = "Record<string, unknown>")]
     pub artifacts: serde_json::Value,
     #[serde(default)]
     pub turn_number: u32,
@@ -792,6 +818,10 @@ dto_conv!(ExecutionMode, pi_core::ExecutionMode);
 dto_conv!(ToolRunMode, pi_core::ToolRunMode);
 dto_conv!(ToolResult, pi_core::ToolResult);
 dto_conv!(ToolError, pi_core::ToolError);
+
+dto_conv!(ToolCallPreparation, pi_core::ToolCallPreparation);
+dto_conv!(ToolCallTransform, pi_core::ToolCallTransform);
+dto_conv!(ToolCallPermission, pi_core::ToolCallPermission);
 
 dto_conv!(ToolOutputStream, pi_core::ToolOutputStream);
 dto_conv!(CancelReason, pi_core::CancelReason);

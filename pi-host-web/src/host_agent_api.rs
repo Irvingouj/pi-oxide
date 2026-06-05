@@ -1,5 +1,4 @@
 use super::*;
-use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = "createHostAgent")]
 pub fn create_host_agent(
@@ -163,7 +162,7 @@ pub fn start_turn(handle: u32, input: StartTurnInput) -> TurnResultResult {
             let dto_events = try_conv!(convert_events(events));
             let dto_markers = try_conv!(markers
                 .into_iter()
-                .map(|m| ChangeMarkerDto::try_from(m))
+                .map(ChangeMarkerDto::try_from)
                 .collect::<Result<Vec<_>, _>>());
             put_host_agent(host_agent);
             ok(TurnResultOutput {
@@ -271,7 +270,84 @@ pub fn host_llm_done(handle: u32, result: LlmResult) -> TurnResultResult {
             let dto_events = try_conv!(convert_events(events));
             let dto_markers = try_conv!(markers
                 .into_iter()
-                .map(|m| ChangeMarkerDto::try_from(m))
+                .map(ChangeMarkerDto::try_from)
+                .collect::<Result<Vec<_>, _>>());
+            put_host_agent(host_agent);
+            ok(TurnResultOutput {
+                events: dto_events,
+                directives,
+                markers: dto_markers,
+            })
+        }
+        Err(e) => {
+            put_host_agent(host_agent);
+            err(&e)
+        }
+    }
+}
+
+#[wasm_bindgen(js_name = "hostPrepareToolCalls")]
+pub fn host_prepare_tool_calls(handle: u32, preparations_json: String) -> TurnResultResult {
+    console_error_panic_hook::set_once();
+    info!(handle, "hostPrepareToolCalls called");
+
+    let dto_preps: Vec<ToolCallPreparation> = try_conv!(serde_json::from_str(&preparations_json));
+    let core_preps: Vec<pi_core::ToolCallPreparation> = try_conv!(dto_preps
+        .into_iter()
+        .map(|p| p.try_into())
+        .collect::<Result<Vec<_>, _>>());
+
+    let mut host_agent = match take_host_agent(handle) {
+        Ok(a) => a,
+        Err(e) => return err(&e),
+    };
+
+    let result = match host_agent.runtime {
+        AgentRuntime::WaitingTools(waiting) => {
+            let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) =
+                waiting
+                    .prepare_tool_calls(
+                        core_preps,
+                        host_agent.transcript,
+                        host_agent.artifacts,
+                        host_agent.turn_number,
+                    )
+                    .into_parts();
+            host_agent.runtime = new_runtime;
+            host_agent.transcript = transcript;
+            host_agent.artifacts = artifacts;
+            host_agent.turn_number = turn_number;
+            for marker in &markers {
+                if let pi_core::ChangeMarker::NewArtifacts { entry_ids } = marker {
+                    host_agent
+                        .host_state
+                        .sync_artifacts_from_core(&host_agent.artifacts, entry_ids);
+                }
+            }
+            Ok((events, actions, markers))
+        }
+        other => {
+            let actual = runtime_phase_name(&other);
+            host_agent.runtime = other;
+            Err(HostError::WrongPhase {
+                expected: "WaitingTools",
+                actual,
+            })
+        }
+    };
+
+    match result {
+        Ok((events, actions, markers)) => {
+            let mut directives = try_conv!(convert_actions_to_directives(actions));
+            if matches!(host_agent.runtime, AgentRuntime::ReadyToContinue(_)) {
+                directives.push(HostDirective::WaitForInput {
+                    mode: WaitMode::Any,
+                });
+            }
+            let dto_events = try_conv!(convert_events(events));
+            let dto_markers = try_conv!(markers
+                .into_iter()
+                .map(ChangeMarkerDto::try_from)
                 .collect::<Result<Vec<_>, _>>());
             put_host_agent(host_agent);
             ok(TurnResultOutput {
@@ -348,7 +424,7 @@ pub fn host_tool_done(handle: u32, id: ToolCallId, result: ToolResult) -> TurnRe
             let dto_events = try_conv!(convert_events(events));
             let dto_markers = try_conv!(markers
                 .into_iter()
-                .map(|m| ChangeMarkerDto::try_from(m))
+                .map(ChangeMarkerDto::try_from)
                 .collect::<Result<Vec<_>, _>>());
             put_host_agent(host_agent);
             ok(TurnResultOutput {
@@ -423,7 +499,7 @@ pub fn host_tool_failed(handle: u32, id: ToolCallId, error: ToolError) -> TurnRe
             let dto_events = try_conv!(convert_events(events));
             let dto_markers = try_conv!(markers
                 .into_iter()
-                .map(|m| ChangeMarkerDto::try_from(m))
+                .map(ChangeMarkerDto::try_from)
                 .collect::<Result<Vec<_>, _>>());
             put_host_agent(host_agent);
             ok(TurnResultOutput {
@@ -493,7 +569,7 @@ pub fn host_accept_compaction(
             let dto_events = try_conv!(convert_events(events));
             let dto_markers = try_conv!(markers
                 .into_iter()
-                .map(|m| ChangeMarkerDto::try_from(m))
+                .map(ChangeMarkerDto::try_from)
                 .collect::<Result<Vec<_>, _>>());
             put_host_agent(host_agent);
             ok(TurnResultOutput {
@@ -604,7 +680,7 @@ pub fn host_continue_turn(handle: u32) -> TurnResultResult {
             let dto_events = try_conv!(convert_events(events));
             let dto_markers = try_conv!(markers
                 .into_iter()
-                .map(|m| ChangeMarkerDto::try_from(m))
+                .map(ChangeMarkerDto::try_from)
                 .collect::<Result<Vec<_>, _>>());
             put_host_agent(host_agent);
             ok(TurnResultOutput {
@@ -695,7 +771,7 @@ pub fn host_tool_cancelled(
             let dto_events = try_conv!(convert_events(events));
             let dto_markers = try_conv!(markers
                 .into_iter()
-                .map(|m| ChangeMarkerDto::try_from(m))
+                .map(ChangeMarkerDto::try_from)
                 .collect::<Result<Vec<_>, _>>());
             put_host_agent(host_agent);
             ok(TurnResultOutput {

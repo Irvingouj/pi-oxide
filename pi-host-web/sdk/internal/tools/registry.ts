@@ -11,6 +11,7 @@ import type { ArtifactStore } from "../engine.ts";
 import { HostError } from "../../init.ts";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { isRecord } from "../../internal/util/types.ts";
 
 export type ToolMap = Record<string, (call: ToolCall) => Promise<ToolResult> | ToolResult>;
 
@@ -121,11 +122,12 @@ export class ToolRegistryBuilder {
         }
         seenNames.add(def.name);
 
-        let parameters: object;
+        let parameters: Record<string, unknown>;
         if (isZodSchema(def.inputSchema)) {
-          parameters = zodToJsonSchema(def.inputSchema as z.ZodTypeAny, { name: def.name }) as object;
-        } else if (typeof def.inputSchema === "object" && def.inputSchema !== null) {
-          parameters = def.inputSchema as object;
+          const schemaResult = zodToJsonSchema(def.inputSchema as z.ZodTypeAny, { name: def.name });
+          parameters = isRecord(schemaResult) ? schemaResult : { type: "object", properties: {} };
+        } else if (isRecord(def.inputSchema)) {
+          parameters = def.inputSchema;
         } else {
           parameters = { type: "object", properties: {} };
         }

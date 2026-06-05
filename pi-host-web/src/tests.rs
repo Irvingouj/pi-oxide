@@ -1,4 +1,13 @@
 use super::*;
+use crate::host_agent_api::{
+    create_host_agent, destroy_host_agent, get_host_agent_persist_data, host_accept_compaction,
+    host_continue_turn, host_llm_done, host_prepare_tool_calls, host_steer, host_tool_cancelled,
+    host_tool_done, restore_host_agent, start_turn,
+};
+use crate::host_state_api::{
+    destroy_host_state, estimate_tokens_export, estimate_tokens_for_text_export,
+    get_host_state_persist_data, restore_host_state, restore_host_state_from_json,
+};
 
 fn dummy_options() -> AgentOptions {
     AgentOptions {
@@ -176,8 +185,21 @@ fn directive_execute_tools_after_llm() {
     assert!(
         directives
             .iter()
+            .any(|d| matches!(d, HostDirective::PrepareToolCalls { .. })),
+        "should emit PrepareToolCalls directive after LLM with tool calls"
+    );
+
+    // Call hostPrepareToolCalls with Allow for all pending calls
+    let prep_json =
+        r#"[{"tool_call_id":"tc-1","transform":{"type":"none"},"permission":{"type":"allow"}}]"#;
+    let resp = host_prepare_tool_calls(handle, prep_json.to_string());
+    assert!(resp.ok);
+    let directives = resp.data.unwrap().directives;
+    assert!(
+        directives
+            .iter()
             .any(|d| matches!(d, HostDirective::ExecuteTools { .. })),
-        "should emit ExecuteTools directive after LLM with tool calls"
+        "should emit ExecuteTools after preparing tool calls"
     );
     destroy_host_agent(handle);
 }
@@ -314,11 +336,21 @@ fn full_turn_directive_sequence() {
         .iter()
         .any(|d| matches!(d, HostDirective::StreamLlm { .. })));
 
-    // Step 2: llm_done with tool -> ExecuteTools
+    // Step 2: llm_done with tool -> PrepareToolCalls
     let resp = host_llm_done(
         handle,
         LlmResult::Ok(make_assistant_with_tool("test_tool", "tc-1")),
     );
+    assert!(resp.ok);
+    let directives = resp.data.unwrap().directives;
+    assert!(directives
+        .iter()
+        .any(|d| matches!(d, HostDirective::PrepareToolCalls { .. })));
+
+    // Step 2b: hostPrepareToolCalls with Allow -> ExecuteTools
+    let prep_json =
+        r#"[{"tool_call_id":"tc-1","transform":{"type":"none"},"permission":{"type":"allow"}}]"#;
+    let resp = host_prepare_tool_calls(handle, prep_json.to_string());
     assert!(resp.ok);
     let directives = resp.data.unwrap().directives;
     assert!(directives
@@ -756,7 +788,10 @@ fn sync_artifacts_from_core_guard() {
         },
     );
 
-    state.sync_artifacts_from_core(&core_artifacts, &["old-id".to_string(), "new-id".to_string()]);
+    state.sync_artifacts_from_core(
+        &core_artifacts,
+        &["old-id".to_string(), "new-id".to_string()],
+    );
 
     assert_eq!(
         state.read_artifact("old-id"),
@@ -923,7 +958,10 @@ fn marker_processing_in_host_llm_done() {
 
     // Verify NewArtifacts marker was emitted in turn 1's llm_done
     assert!(
-        output.markers.iter().any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
+        output
+            .markers
+            .iter()
+            .any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
         "should emit NewArtifacts marker after projection scan in turn 1"
     );
 
@@ -1069,7 +1107,9 @@ fn compaction_marker_emission() {
     assert!(resp.ok);
     let directives = resp.data.unwrap().directives;
     assert!(
-        directives.iter().any(|d| matches!(d, HostDirective::Summarize { .. })),
+        directives
+            .iter()
+            .any(|d| matches!(d, HostDirective::Summarize { .. })),
         "should emit Summarize directive when over budget"
     );
 
@@ -1080,7 +1120,10 @@ fn compaction_marker_emission() {
 
     // Verify NewArtifacts marker was emitted
     assert!(
-        output.markers.iter().any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
+        output
+            .markers
+            .iter()
+            .any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
         "should emit NewArtifacts marker after compaction"
     );
 
@@ -1152,9 +1195,7 @@ fn marker_processing_in_host_tool_done() {
 
     let large_text = "x".repeat(3001);
     let tool_result = ToolResult {
-        content: vec![Content::Text(TextContent {
-            text: large_text,
-        })],
+        content: vec![Content::Text(TextContent { text: large_text })],
         details: None,
         terminate: None,
     };
@@ -1173,9 +1214,7 @@ fn marker_processing_in_host_tool_done() {
     // Turn 2: tool_done (large result for tc-2) — this triggers projection of the old tool from turn 1
     let large_text2 = "y".repeat(3001);
     let tool_result2 = ToolResult {
-        content: vec![Content::Text(TextContent {
-            text: large_text2,
-        })],
+        content: vec![Content::Text(TextContent { text: large_text2 })],
         details: None,
         terminate: None,
     };
@@ -1185,7 +1224,10 @@ fn marker_processing_in_host_tool_done() {
 
     // Verify NewArtifacts marker was emitted (for the old tool from turn 1)
     assert!(
-        output.markers.iter().any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
+        output
+            .markers
+            .iter()
+            .any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
         "should emit NewArtifacts marker after tool_done when old tools are projected"
     );
 
@@ -1225,9 +1267,7 @@ fn marker_processing_in_host_continue_turn() {
 
     let large_text = "x".repeat(3001);
     let tool_result = ToolResult {
-        content: vec![Content::Text(TextContent {
-            text: large_text,
-        })],
+        content: vec![Content::Text(TextContent { text: large_text })],
         details: None,
         terminate: None,
     };
@@ -1241,7 +1281,10 @@ fn marker_processing_in_host_continue_turn() {
 
     // Verify markers field exists (continue_turn itself does not produce markers,
     // but the infrastructure must be present)
-    assert!(output.markers.is_empty(), "continue_turn should return empty markers");
+    assert!(
+        output.markers.is_empty(),
+        "continue_turn should return empty markers"
+    );
 
     // Continue to llm_done to trigger projection of the tool result
     let resp = host_llm_done(handle, LlmResult::Ok(make_assistant_text("done")));
@@ -1250,7 +1293,10 @@ fn marker_processing_in_host_continue_turn() {
 
     // Verify NewArtifacts marker was emitted
     assert!(
-        output.markers.iter().any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
+        output
+            .markers
+            .iter()
+            .any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
         "should emit NewArtifacts marker after continue_turn + llm_done with projected artifact"
     );
 
@@ -1290,9 +1336,7 @@ fn marker_processing_in_host_tool_cancelled() {
 
     let large_text = "x".repeat(3001);
     let tool_result = ToolResult {
-        content: vec![Content::Text(TextContent {
-            text: large_text,
-        })],
+        content: vec![Content::Text(TextContent { text: large_text })],
         details: None,
         terminate: None,
     };
@@ -1315,7 +1359,10 @@ fn marker_processing_in_host_tool_cancelled() {
 
     // Verify NewArtifacts marker was emitted (for the old tool from turn 1)
     assert!(
-        output.markers.iter().any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
+        output
+            .markers
+            .iter()
+            .any(|m| matches!(m, ChangeMarkerDto::NewArtifacts { .. })),
         "should emit NewArtifacts marker after tool_cancelled when old tools are projected"
     );
 

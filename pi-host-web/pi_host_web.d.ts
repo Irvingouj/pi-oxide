@@ -1,6 +1,5 @@
 /* tslint:disable */
 /* eslint-disable */
-type Value = any;
 export interface AgentContext {
     system_prompt: string;
     messages: AgentMessage[];
@@ -114,7 +113,7 @@ export interface LlmContext {
 export interface LlmError {
     code: string;
     message: string;
-    details?: Value;
+    details?: unknown;
 }
 
 export interface Model {
@@ -145,8 +144,8 @@ export interface ModelCost {
 }
 
 export interface PersistData {
-    T?: Value;
-    A?: Value;
+    T?: unknown[];
+    A?: Record<string, unknown>;
     turn_number?: number;
     host_artifacts?: [string, string][];
     budget?: ContextProjectionBudget;
@@ -175,6 +174,12 @@ export interface ToolCall {
     id: ToolCallId;
     name: ToolName;
     arguments: ToolArguments;
+}
+
+export interface ToolCallPreparation {
+    tool_call_id: ToolCallId;
+    transform: ToolCallTransform;
+    permission: ToolCallPermission;
 }
 
 export interface ToolDefinition {
@@ -232,7 +237,7 @@ export interface UserMessage {
     timestamp: number;
 }
 
-export type AgentEvent = { type: "agent_start" } | { type: "agent_end" } | { type: "turn_start" } | { type: "turn_end"; message: AgentMessage; tool_results: ToolResultMessage[] } | { type: "message_start"; message: AgentMessage } | { type: "message_update"; message: AgentMessage; delta: ContentDelta } | { type: "message_end"; message: AgentMessage } | { type: "tool_execution_start"; tool_call_id: ToolCallId; tool_name: ToolName; args?: ToolArguments } | { type: "tool_execution_update"; tool_call_id: ToolCallId; stream: ToolOutputStream; chunk: string; sequence: number; timestamp: number } | { type: "tool_execution_end"; tool_call_id: ToolCallId; result: ToolResult; is_error: boolean } | { type: "tool_execution_cancelled"; tool_call_id: ToolCallId; reason: CancelReason } | { type: "queue_update"; steer: AgentMessage[]; follow_up: AgentMessage[] } | { type: "save_point"; had_pending_writes: boolean } | { type: "settled" };
+export type AgentEvent = { type: "agent_start" } | { type: "agent_end" } | { type: "turn_start" } | { type: "turn_end"; message: AgentMessage; tool_results: ToolResultMessage[] } | { type: "message_start"; message: AgentMessage } | { type: "message_update"; message: AgentMessage; delta: ContentDelta } | { type: "message_end"; message: AgentMessage } | { type: "tool_execution_start"; tool_call_id: ToolCallId; tool_name: ToolName; args?: ToolArguments } | { type: "tool_execution_update"; tool_call_id: ToolCallId; stream: ToolOutputStream; chunk: string; sequence: number; timestamp: number } | { type: "tool_execution_end"; tool_call_id: ToolCallId; tool_name: ToolName; result: ToolResult; args?: ToolArguments; is_error: boolean } | { type: "tool_execution_cancelled"; tool_call_id: ToolCallId; reason: CancelReason } | { type: "queue_update"; steer: AgentMessage[]; follow_up: AgentMessage[] } | { type: "save_point"; had_pending_writes: boolean } | { type: "settled" };
 
 export type AgentMessage = ({ role: "user" } & UserMessage) | ({ role: "assistant" } & AssistantMessage) | ({ role: "tool_result" } & ToolResultMessage);
 
@@ -244,15 +249,15 @@ export type ChangeMarkerDto = { type: "compaction_applied" } | { type: "new_arti
 
 export type Content = ({ type: "text" } & TextContent) | ({ type: "image" } & ImageContent) | ({ type: "tool_call" } & ToolCall);
 
-export type ContentDelta = { kind: "text_start" } | { kind: "text_delta"; text: string } | { kind: "text_end" } | { kind: "thinking_start" } | { kind: "thinking_delta"; text: string } | { kind: "thinking_end" } | { kind: "tool_call_start"; tool_call: ToolCall } | { kind: "tool_call_delta"; tool_call_id: ToolCallId; delta: Value } | { kind: "tool_call_end"; tool_call_id: ToolCallId };
+export type ContentDelta = { kind: "text_start" } | { kind: "text_delta"; text: string } | { kind: "text_end" } | { kind: "thinking_start" } | { kind: "thinking_delta"; text: string } | { kind: "thinking_end" } | { kind: "tool_call_start"; tool_call: ToolCall } | { kind: "tool_call_delta"; tool_call_id: ToolCallId; delta: Record<string, unknown> } | { kind: "tool_call_end"; tool_call_id: ToolCallId };
 
 export type ExecutionMode = "parallel" | "sequential";
 
-export type HostDirective = { type: "stream_llm"; context: LlmContext } | { type: "execute_tools"; calls: ToolCall[] } | { type: "cancel_tools"; tool_call_ids: ToolCallId[]; reason: CancelReason } | { type: "persist" } | { type: "summarize"; context: LlmContext } | { type: "finished" } | { type: "wait_for_input"; mode: WaitMode };
+export type HostDirective = { type: "stream_llm"; context: LlmContext } | { type: "prepare_tool_calls"; calls: ToolCall[] } | { type: "execute_tools"; calls: ToolCall[] } | { type: "cancel_tools"; tool_call_ids: ToolCallId[]; reason: CancelReason } | { type: "persist" } | { type: "summarize"; context: LlmContext } | { type: "finished" } | { type: "wait_for_input"; mode: WaitMode };
 
-export type JsonSchema = Value;
+export type JsonSchema = Record<string, unknown>;
 
-export type LlmChunk = ({ kind: "start" } & {} & AssistantMessage) | { kind: "text_delta"; text: string } | { kind: "thinking_delta"; text: string } | { kind: "tool_call_delta"; tool_call_id: ToolCallId; delta: Value } | { kind: "done" } | { kind: "error"; message: string };
+export type LlmChunk = ({ kind: "start" } & {} & AssistantMessage) | { kind: "text_delta"; text: string } | { kind: "thinking_delta"; text: string } | { kind: "tool_call_delta"; tool_call_id: ToolCallId; delta: Record<string, unknown> } | { kind: "done" } | { kind: "error"; message: string };
 
 export type LlmResult = { Ok: AssistantMessage } | { Err: { error: LlmError; aborted: boolean } };
 
@@ -272,11 +277,15 @@ export type StopReason = "end_turn" | "max_tokens" | "tool_use" | "aborted" | "e
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
-export type ToolArguments = Value;
+export type ToolArguments = unknown;
 
 export type ToolCallId = string;
 
-export type ToolDetails = Value;
+export type ToolCallPermission = { type: "allow" } | { type: "block"; reason: string };
+
+export type ToolCallTransform = { type: "none" } | { type: "rewrite_args"; arguments: ToolArguments };
+
+export type ToolDetails = Record<string, unknown>;
 
 export type ToolName = string;
 
@@ -312,6 +321,8 @@ export function hostContinueTurn(handle: number): TurnResultResult;
 export function hostFeedLlmChunk(handle: number, chunk: LlmChunk): TurnResultResult;
 
 export function hostLlmDone(handle: number, result: LlmResult): TurnResultResult;
+
+export function hostPrepareToolCalls(handle: number, preparations_json: string): TurnResultResult;
 
 export function hostReadArtifact(handle: number, artifact_id: string): string;
 
@@ -359,6 +370,7 @@ export interface InitOutput {
     readonly hostContinueTurn: (a: number) => any;
     readonly hostFeedLlmChunk: (a: number, b: any) => any;
     readonly hostLlmDone: (a: number, b: any) => any;
+    readonly hostPrepareToolCalls: (a: number, b: number, c: number) => any;
     readonly hostReset: (a: number) => any;
     readonly hostSteer: (a: number, b: any) => any;
     readonly hostToolCancelled: (a: number, b: number, c: number, d: any) => any;

@@ -7,6 +7,7 @@
 import type { AgentModel, ModelRequest, ModelResponse, AgentContentBlock } from "../../types.ts";
 import { createAgentError } from "../../errors.ts";
 import { getLogger } from "../../internal/logger.ts";
+import { isRecord } from "../../internal/util/types.ts";
 
 export function openaiCompatible(config: {
   apiKey: string;
@@ -78,7 +79,7 @@ export function openaiCompatible(config: {
         function: {
           name: t.name,
           description: t.description,
-          parameters: t.inputSchema as object,
+          parameters: isRecord(t.inputSchema) ? t.inputSchema : { type: "object", properties: {} },
         },
       }));
 

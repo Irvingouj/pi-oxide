@@ -26,10 +26,8 @@ mod directive;
 pub(crate) use directive::*;
 
 mod host_state_api;
-pub(crate) use host_state_api::*;
 
 mod host_agent_api;
-pub(crate) use host_agent_api::*;
 
 mod artifact_api;
 

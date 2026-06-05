@@ -38,6 +38,16 @@ export interface AgentConfig {
   telemetry?: AgentTelemetry;
   logger?: Logger;
   logLevel?: LogLevel;
+  prepareToolCalls?: {
+    transform?: (call: AgentToolCall) =>
+      | { type: "none" }
+      | { type: "rewrite_args"; arguments: unknown }
+      | Promise<{ type: "none" } | { type: "rewrite_args"; arguments: unknown }>;
+    permission?: (call: AgentToolCall) =>
+      | { type: "allow" }
+      | { type: "block"; reason: string }
+      | Promise<{ type: "allow" } | { type: "block"; reason: string }>;
+  };
 }
 
 export type AgentInput =
@@ -122,6 +132,12 @@ export interface AgentToolRun {
   error?: AgentError;
 }
 
+export type AgentToolCall = {
+  id: string;
+  name: string;
+  arguments: unknown;
+};
+
 export interface AgentStatus {
   state:
     | "idle"
@@ -168,7 +184,7 @@ export interface ModelResponse {
 }
 
 export interface ModelEvent {
-  type: "text_delta" | "tool_call_delta" | "done";
+  type: "start" | "text_delta" | "tool_call_delta" | "done";
   payload: unknown;
 }
 

@@ -15,7 +15,6 @@ use pi_core::{
 
 use crate::extension::{BashExtension, BuiltinExtension, Extension};
 use crate::host_state::{HostDirective, HostState};
-use crate::llm::LlmClient;
 #[allow(unused_imports)]
 use crate::llm::LlmProvider;
 use crate::session::FileSystemSessionBackend;
@@ -119,6 +118,7 @@ impl App {
         self.agent.as_mut().unwrap()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         system_prompt: &str,
         model_id: &str,

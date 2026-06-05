@@ -479,6 +479,12 @@ impl LlmProvider for LlmClient {
 #[cfg(not(any(feature = "record", feature = "replay")))]
 pub type LlmBackend = LlmClient;
 
+#[cfg(feature = "record")]
+pub type LlmBackend = crate::llm_record::RecordingLlmClient;
+
+#[cfg(all(feature = "replay", not(feature = "record")))]
+pub type LlmBackend = crate::llm_replay::ReplayLlmClient;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,9 +522,3 @@ mod tests {
         assert_eq!(converted[0]["role"], "assistant");
     }
 }
-
-#[cfg(feature = "record")]
-pub type LlmBackend = crate::llm_record::RecordingLlmClient;
-
-#[cfg(all(feature = "replay", not(feature = "record")))]
-pub type LlmBackend = crate::llm_replay::ReplayLlmClient;

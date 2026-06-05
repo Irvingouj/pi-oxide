@@ -10,7 +10,7 @@ describe("SDK Tool API", () => {
 			const clickTool = tool({
 				description: "Click an element",
 				input: z.object({ selector: z.string() }),
-				run: ({ selector }) => ({ clicked: true, selector }),
+				run: ({ selector }: { selector: string }) => ({ clicked: true, selector }),
 			});
 
 			assert.equal(clickTool.description, "Click an element");
@@ -23,7 +23,7 @@ describe("SDK Tool API", () => {
 				click: tool({
 					description: "Click",
 					input: z.object({ selector: z.string() }),
-					run: ({ selector }) => ({ clicked: true }),
+					run: (_input: { selector: string }) => ({ clicked: true }),
 				}),
 				type: tool({
 					description: "Type",
@@ -38,7 +38,7 @@ describe("SDK Tool API", () => {
 		});
 
 		it("getHandler returns the correct run function", () => {
-			const runFn = ({ selector }: { selector: string }) => ({ clicked: true });
+			const runFn = (_input: { selector: string }) => ({ clicked: true });
 			const tools = defineTools({
 				click: tool({
 					description: "Click",
@@ -57,7 +57,7 @@ describe("SDK Tool API", () => {
 				click: tool({
 					description: "Click",
 					input: z.object({ selector: z.string() }),
-					run: ({ selector }) => ({ clicked: true }),
+					run: (_input: { selector: string }) => ({ clicked: true }),
 				}),
 			});
 
@@ -88,8 +88,8 @@ describe("SDK Tool API", () => {
 			const toolMap = builder.build([pack1, pack2]);
 			const llmTools = builder.getLlmTools([pack1, pack2]);
 
-			assert.ok(typeof toolMap["toolA"] === "function");
-			assert.ok(typeof toolMap["toolB"] === "function");
+			assert.ok(typeof toolMap.toolA === "function");
+			assert.ok(typeof toolMap.toolB === "function");
 			assert.equal(llmTools.length, 2);
 			assert.equal(llmTools[0].name, "toolA");
 			assert.equal(llmTools[1].name, "toolB");
@@ -115,7 +115,11 @@ describe("SDK Tool API", () => {
 			const builder = new ToolRegistryBuilder();
 			assert.throws(
 				() => builder.build([pack1, pack2]),
-				(err: any) => err.code === "tool_duplicate",
+				(err: unknown) =>
+					typeof err === "object" &&
+					err !== null &&
+					"code" in err &&
+					(err as { code: string }).code === "tool_duplicate",
 			);
 		});
 
@@ -139,7 +143,11 @@ describe("SDK Tool API", () => {
 			const builder = new ToolRegistryBuilder();
 			assert.throws(
 				() => builder.getLlmTools([pack1, pack2]),
-				(err: any) => err.code === "tool_duplicate",
+				(err: unknown) =>
+					typeof err === "object" &&
+					err !== null &&
+					"code" in err &&
+					(err as { code: string }).code === "tool_duplicate",
 			);
 		});
 
@@ -154,7 +162,7 @@ describe("SDK Tool API", () => {
 
 			const builder = new ToolRegistryBuilder();
 			const toolMap = builder.build([testTool]);
-			const handler = toolMap["validateMe"];
+			const handler = toolMap.validateMe;
 
 			const result = await handler({
 				id: "1",
@@ -176,7 +184,7 @@ describe("SDK Tool API", () => {
 
 			const builder = new ToolRegistryBuilder();
 			const toolMap = builder.build([testTool]);
-			const handler = toolMap["detailed"];
+			const handler = toolMap.detailed;
 
 			const result = await handler({ id: "1", name: "detailed", arguments: {} });
 			assert.deepStrictEqual(result.details, {

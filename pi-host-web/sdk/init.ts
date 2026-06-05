@@ -41,7 +41,7 @@ export class HostError extends Error {
 
 export function unwrap(result: { ok: boolean; data?: unknown; error?: { code: string; message: string } }): unknown {
 	if (!result.ok) {
-		throw new HostError(result.error!.code, result.error!.message);
+		throw new HostError(result.error?.code, result.error?.message);
 	}
 	return result.data;
 }

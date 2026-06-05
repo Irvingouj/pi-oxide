@@ -160,7 +160,11 @@ export function getLogger(scope: string): Logger {
 	if (!loggers.has(scope)) {
 		loggers.set(scope, new ConsoleLogger(scope));
 	}
-	return loggers.get(scope)!;
+	const logger = loggers.get(scope);
+	if (!logger) {
+		throw new Error(`Logger for scope "${scope}" not found`);
+	}
+	return logger;
 }
 
 export function setLogger(scope: string, logger: Logger): void {

@@ -1,6 +1,9 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
 	"assist": { "actions": { "source": { "organizeImports": "on" } } },
+	"files": {
+		"maxSize": 10000000
+	},
 	"formatter": {
 		"enabled": true,
 		"indentStyle": "tab",
@@ -26,7 +29,7 @@
 			}
 		},
 		{
-			"includes": ["dist/**", "pkg/**", "node_modules/**"],
+			"includes": ["dist/**", "pkg/**", "pkg/dist/**", "node_modules/**", "*.js", "*.d.ts"],
 			"linter": {
 				"enabled": false
 			},

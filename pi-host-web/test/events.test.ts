@@ -5,7 +5,7 @@ import { EventEmitter } from "../sdk/events.ts";
 describe("EventEmitter", () => {
 	it("emits events to registered handlers", () => {
 		const emitter = new EventEmitter();
-		const payloads: any[] = [];
+		const payloads: unknown[] = [];
 
 		const unsubscribe = emitter.on("text", (payload) => {
 			payloads.push(payload);
@@ -20,7 +20,7 @@ describe("EventEmitter", () => {
 
 	it("does not emit to unregistered handlers", () => {
 		const emitter = new EventEmitter();
-		const payloads: any[] = [];
+		const payloads: unknown[] = [];
 
 		emitter.on("text", (payload) => {
 			payloads.push(payload);
@@ -39,9 +39,9 @@ describe("EventEmitter", () => {
 
 	it("off removes a specific handler", () => {
 		const emitter = new EventEmitter();
-		const payloads: any[] = [];
+		const payloads: unknown[] = [];
 
-		const handler = (payload: any) => payloads.push(payload);
+		const handler = (payload: unknown) => payloads.push(payload);
 		emitter.on("text", handler);
 		emitter.off("text", handler);
 		emitter.emit("text", "hello");
@@ -51,7 +51,7 @@ describe("EventEmitter", () => {
 
 	it("clear removes all handlers", () => {
 		const emitter = new EventEmitter();
-		const payloads: any[] = [];
+		const payloads: unknown[] = [];
 
 		emitter.on("text", (payload) => payloads.push(payload));
 		emitter.on("messageStart", (payload) => payloads.push(payload));
@@ -64,8 +64,8 @@ describe("EventEmitter", () => {
 
 	it("supports multiple event types independently", () => {
 		const emitter = new EventEmitter();
-		const texts: any[] = [];
-		const messages: any[] = [];
+		const texts: unknown[] = [];
+		const messages: unknown[] = [];
 
 		emitter.on("text", (payload) => texts.push(payload));
 		emitter.on("messageStart", (payload) => messages.push(payload));
@@ -81,7 +81,7 @@ describe("EventEmitter", () => {
 
 	it("unsubscribe returns a function that removes the handler", () => {
 		const emitter = new EventEmitter();
-		const payloads: any[] = [];
+		const payloads: unknown[] = [];
 
 		const unsubscribe = emitter.on("text", (payload) => {
 			payloads.push(payload);

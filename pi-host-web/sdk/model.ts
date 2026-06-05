@@ -1,7 +1,7 @@
 // Model exports — AgentModel interface and defineModel() factory.
 // Provider-neutral contract. Provider factories live in internal/providers/.
 
-import type { AgentModel, ModelRequest, ModelResponse } from "./types.ts";
+import type { AgentModel } from "./types.ts";
 
 export type { AgentModel } from "./types.ts";
 

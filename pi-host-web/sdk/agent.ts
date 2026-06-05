@@ -87,7 +87,7 @@ export class Agent {
 				options.signal.addEventListener(
 					"abort",
 					() => {
-						abortController.abort(options.signal!.reason);
+						abortController.abort(options.signal?.reason);
 					},
 					{ once: true },
 				);

@@ -3,7 +3,6 @@
 // Uses the raw WASM API directly (createHostAgent, startTurn, hostFeedLlmChunk, etc.).
 
 import {
-	type CancelReason,
 	type Content,
 	createHostAgent,
 	destroyHostAgent,
@@ -47,7 +46,6 @@ import type {
 	Logger,
 	ModelEvent,
 	ModelResponse,
-	TokenUsage,
 } from "../types.ts";
 import { EventMapper } from "./events.ts";
 import { getLogger } from "./logger.ts";
@@ -196,7 +194,7 @@ export async function runTurnWithHostAgent(
 		if (signal?.aborted) {
 			try {
 				unwrap(hostAbort(hostAgent.handle));
-			} catch (e) {
+			} catch (_e) {
 				// ignore wrong_phase errors
 			}
 			throw new HostError("user_aborted", "Turn stopped by user");
@@ -313,7 +311,7 @@ export async function runTurnWithHostAgent(
 
 					case "summarize": {
 						logger.info("Summarizing context");
-						const summary = await config.llm.summarize!(action.context.messages, signal);
+						const summary = await config.llm.summarize?.(action.context.messages, signal);
 						step = unwrap(hostAcceptCompaction(hostAgent.handle, summary, []));
 						for (const e of step.events) config.onEvent?.(e);
 						await processStepMarkers(step, hostAgent, config);
@@ -377,7 +375,7 @@ export async function runTurnWithHostAgent(
 
 export async function createEngineAgent(
 	config: AgentConfig,
-	callbacks: {
+	_callbacks: {
 		onEvent: (event: { type: string; payload: unknown }) => void;
 		onStatus: (status: AgentStatus) => void;
 	},
@@ -483,7 +481,7 @@ export async function runAgentTurn(
 			? async (wasmMessages: WasmAgentMessage[], sig?: AbortSignal) => {
 					logger.info("Calling model summarizer");
 					const sdkMessages = convertWasmMessagesToAgentMessages(wasmMessages);
-					return config.model.summarize!(sdkMessages, sig);
+					return config.model.summarize?.(sdkMessages, sig);
 				}
 			: async (wasmMessages: WasmAgentMessage[], sig?: AbortSignal) => {
 					logger.info("Using default summarizer");
@@ -728,9 +726,12 @@ function toolErrorFromUnknown(e: unknown): ToolError {
 
 function unwrap<T>(result: { ok: boolean; data?: T; error?: { code: string; message: string } }): T {
 	if (!result.ok) {
-		throw new HostError(result.error!.code, result.error!.message);
+		throw new HostError(result.error?.code, result.error?.message);
 	}
-	return result.data!;
+	if (result.data === undefined) {
+		throw new HostError("unwrap_error", "expected data but got undefined");
+	}
+	return result.data;
 }
 
 interface ToolCallPrepResult {
@@ -838,28 +839,31 @@ function buildArtifactStore(config: AgentConfig): ArtifactStore | undefined {
 		}
 		return {
 			save: (sessionId: string, artifactId: string, content: string) =>
-				store.saveArtifact!(sessionId, {
+				store.saveArtifact?.(sessionId, {
 					id: artifactId,
 					kind: "text",
 					content,
 					createdAt: Date.now(),
 				}),
 			load: (sessionId: string, artifactId: string) =>
-				store.loadArtifact!(sessionId, artifactId).then((a: import("../types.ts").AgentArtifact | null) =>
-					a && typeof a.content === "string" ? a.content : null,
-				),
+				store
+					.loadArtifact?.(sessionId, artifactId)
+					.then((a: import("../types.ts").AgentArtifact | null) =>
+						a && typeof a.content === "string" ? a.content : null,
+					),
 			search: (sessionId: string, query: string) => {
 				if (typeof store.searchArtifacts !== "function") {
 					return Promise.resolve([]);
 				}
-				return store.searchArtifacts!(sessionId, { text: query }).then(
-					(results: import("../types.ts").ArtifactSearchResult[]) =>
+				return store
+					.searchArtifacts?.(sessionId, { text: query })
+					.then((results: import("../types.ts").ArtifactSearchResult[]) =>
 						results.map((r: import("../types.ts").ArtifactSearchResult) => ({
 							id: r.artifact.id,
 							snippet: r.snippet ?? "",
 							match_count: r.matchCount ?? 0,
 						})),
-				);
+					);
 			},
 		};
 	}
@@ -936,7 +940,6 @@ function toWasmStopReason(reason: ModelResponse["stopReason"]): "end_turn" | "to
 			return "max_tokens";
 		case "error":
 			return "error";
-		case "end":
 		default:
 			return "end_turn";
 	}

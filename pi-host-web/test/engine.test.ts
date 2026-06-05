@@ -1,7 +1,7 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import { hostLlmDone, hostPrepareToolCalls, startTurn } from "../pi_host_web.js";
 import type { AgentConfig, Content, LlmContext, ToolCall, ToolResult } from "../pi_host_web.js";
+import { hostLlmDone, hostPrepareToolCalls, startTurn } from "../pi_host_web.js";
 import { ensureInit } from "../sdk/init.ts";
 import {
 	type AgentRunConfig,
@@ -24,7 +24,7 @@ function makeMockModel(returnResult: MockModelResponse | MockModelResponse[]) {
 	let callIndex = 0;
 
 	return {
-		call: async (context: LlmContext, signal?: AbortSignal): Promise<LlmStream> => {
+		call: async (_context: LlmContext, _signal?: AbortSignal): Promise<LlmStream> => {
 			const response = responses[Math.min(callIndex++, responses.length - 1)];
 			const content: Content[] = [];
 			if (response.text) {
@@ -113,7 +113,7 @@ function makeAgentConfig(): AgentConfig {
 describe("runTurnWithHostAgent", () => {
 	it("executes tool calls with default allow-all policy", async () => {
 		const hostAgent = await createHostAgentInstance(makeAgentConfig());
-		const events: any[] = [];
+		const events: unknown[] = [];
 		const config = makeToolConfig({
 			llm: makeMockModel([
 				{ toolCalls: [{ id: "tc-1", name: "test_tool", arguments: {} }], stopReason: "tool_use" },
@@ -139,7 +139,7 @@ describe("runTurnWithHostAgent", () => {
 
 	it("blocks tool calls via permission hook", async () => {
 		const hostAgent = await createHostAgentInstance(makeAgentConfig());
-		const events: any[] = [];
+		const events: unknown[] = [];
 		const config = makeToolConfig({
 			llm: makeMockModel([
 				{ toolCalls: [{ id: "tc-1", name: "test_tool", arguments: {} }], stopReason: "tool_use" },
@@ -222,7 +222,7 @@ describe("runTurnWithHostAgent", () => {
 
 	it("transform hook rewrites arguments before permission", async () => {
 		const hostAgent = await createHostAgentInstance(makeAgentConfig());
-		const events: any[] = [];
+		const events: unknown[] = [];
 		let permissionSeenArgs: unknown = null;
 
 		const config = makeToolConfig({
@@ -249,7 +249,7 @@ describe("runTurnWithHostAgent", () => {
 
 	it("mixed batch: allowed and blocked calls produce correct results", async () => {
 		const hostAgent = await createHostAgentInstance(makeAgentConfig());
-		const events: any[] = [];
+		const events: unknown[] = [];
 		const toolRuns: string[] = [];
 
 		const config = makeToolConfig({
@@ -291,7 +291,7 @@ describe("runTurnWithHostAgent", () => {
 
 	it("all blocked calls finalize batch without executing tools", async () => {
 		const hostAgent = await createHostAgentInstance(makeAgentConfig());
-		const events: any[] = [];
+		const events: unknown[] = [];
 		let toolRan = false;
 
 		const config = makeToolConfig({
@@ -324,7 +324,7 @@ describe("runTurnWithHostAgent", () => {
 
 	it("hook error synthesizes blocked results for remaining calls", async () => {
 		const hostAgent = await createHostAgentInstance(makeAgentConfig());
-		const events: any[] = [];
+		const events: unknown[] = [];
 		const toolRuns: string[] = [];
 
 		const config = makeToolConfig({

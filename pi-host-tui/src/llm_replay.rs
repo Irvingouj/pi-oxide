@@ -16,6 +16,7 @@ pub struct ReplayLlmClient {
 }
 
 impl ReplayLlmClient {
+    #[allow(dead_code)]
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let json = std::fs::read_to_string(path)?;
         let cassette: Cassette = serde_json::from_str(&json)?;
@@ -36,7 +37,7 @@ impl LlmProvider for ReplayLlmClient {
 
     fn stream_sync(
         &self,
-        system_prompt: &str,
+        _system_prompt: &str,
         messages: &[pi_core::AgentMessage],
         tools: &[pi_core::ToolDefinition],
     ) -> Result<ReplayLlmStream, Box<dyn std::error::Error>> {

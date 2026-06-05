@@ -9,7 +9,7 @@ import type { ToolCall, ToolDefinition, ToolResult } from "../../../pi_host_web.
 import { createAgentError } from "../../errors.ts";
 import { HostError } from "../../init.ts";
 import { isRecord } from "../../internal/util/types.ts";
-import type { AgentToolDefinition, AgentTools } from "../../types.ts";
+import type { AgentTools } from "../../types.ts";
 import type { ArtifactStore } from "../engine.ts";
 import { createArtifactToolRegistry } from "./service.ts";
 

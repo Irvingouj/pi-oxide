@@ -304,7 +304,7 @@ mod tests {
         let mut t = Vec::new();
         for i in 0..10 {
             t.push(TrimmedMessage::User(crate::message::UserMessage::new_text(
-                &"A".repeat(10_000),
+                "A".repeat(10_000),
             )));
             t.push(TrimmedMessage::Assistant(AssistantMessage {
                 content: vec![Content::Text(TextContent {
@@ -337,7 +337,7 @@ mod tests {
         let mut t = Vec::new();
         for i in 0..10 {
             t.push(TrimmedMessage::User(crate::message::UserMessage::new_text(
-                &"A".repeat(1_000),
+                "A".repeat(1_000),
             )));
             t.push(TrimmedMessage::Assistant(AssistantMessage {
                 content: vec![Content::Text(TextContent {
@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn plan_compaction_never_cuts_mid_tool() {
         let t = vec![
-            TrimmedMessage::User(crate::message::UserMessage::new_text(&"A".repeat(500))),
+            TrimmedMessage::User(crate::message::UserMessage::new_text("A".repeat(500))),
             TrimmedMessage::Assistant(AssistantMessage {
                 content: vec![
                     Content::Text(TextContent {
@@ -396,7 +396,7 @@ mod tests {
                 is_error: false,
                 turn: 0,
             }),
-            TrimmedMessage::User(crate::message::UserMessage::new_text(&"C".repeat(500))),
+            TrimmedMessage::User(crate::message::UserMessage::new_text("C".repeat(500))),
             TrimmedMessage::Assistant(AssistantMessage {
                 content: vec![Content::Text(TextContent {
                     text: "D".repeat(500),
@@ -532,7 +532,7 @@ mod tests {
     #[test]
     fn apply_compaction_with_projected_tool_entries() {
         let t = vec![
-            TrimmedMessage::User(crate::message::UserMessage::new_text(&"A".repeat(1000))),
+            TrimmedMessage::User(crate::message::UserMessage::new_text("A".repeat(1000))),
             // A ProjectedTool — already projected, should be handled in compaction
             TrimmedMessage::ProjectedTool(crate::message::ProjectedToolResult {
                 entry_id: "entry-0".to_string(),
@@ -554,7 +554,7 @@ mod tests {
                 is_error: false,
                 turn: 1,
             }),
-            TrimmedMessage::User(crate::message::UserMessage::new_text(&"C".repeat(1000))),
+            TrimmedMessage::User(crate::message::UserMessage::new_text("C".repeat(1000))),
             TrimmedMessage::Assistant(AssistantMessage {
                 content: vec![Content::Text(TextContent {
                     text: "D".repeat(1000),

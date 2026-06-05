@@ -42,7 +42,10 @@ pub use message::{
     TrimmedMessage, UserMessage,
 };
 pub use session::{apply_compaction, build_summary_messages, plan_compaction, CompactionPlan};
-pub use tool::{ExecutionMode, ToolDefinition, ToolError, ToolResult, ToolRunMode};
+pub use tool::{
+    ExecutionMode, ToolCallPermission, ToolCallPreparation, ToolCallTransform, ToolDefinition,
+    ToolError, ToolResult, ToolRunMode,
+};
 pub use types::{
     ApiName, JsonSchema, ModelId, ModelName, ProviderName, SessionId, ToolArguments, ToolCallId,
     ToolDetails, ToolName,

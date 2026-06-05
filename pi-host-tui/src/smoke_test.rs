@@ -186,7 +186,8 @@ mod tests {
         )> = vec![];
         for action in actions {
             match action {
-                pi_core::AgentAction::ExecuteTools { calls } => {
+                pi_core::AgentAction::ExecuteTools { calls }
+                | pi_core::AgentAction::PrepareToolCalls { calls } => {
                     for call in calls {
                         let ctx = ExtensionContext {
                             cwd: Path::new("/tmp").to_path_buf(),
@@ -290,20 +291,16 @@ mod tests {
         // Auto-continue
         let actions = match runtime.take().unwrap() {
             AgentRuntime::ReadyToContinue(ready) => {
-                let (events, actions, new_runtime, new_transcript, new_artifacts, tn, _markers) =
+                let (events, actions, new_runtime, _new_transcript, _new_artifacts, _tn, _markers) =
                     ready
                         .continue_turn(transcript, artifacts, turn_number, &budget, "")
                         .into_parts();
                 println!("continue_turn events: {:?}", events);
                 println!("continue_turn actions: {:?}", actions);
                 runtime = Some(new_runtime);
-                turn_number = tn;
-                transcript = new_transcript;
-                artifacts = new_artifacts;
                 actions
             }
-            other => {
-                runtime = Some(other);
+            _other => {
                 println!(
                     "Not ReadyToContinue after tools: agent runtime not in ReadyToContinue state"
                 );

@@ -412,44 +412,6 @@ fn convert_messages(messages: &[pi_core::AgentMessage]) -> Vec<serde_json::Value
     result
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_llm_client_construction() {
-        let client = LlmClient::new(
-            "test-key",
-            "https://api.anthropic.com",
-            "claude-sonnet-4-20250514",
-        );
-        assert_eq!(client.model_id(), "claude-sonnet-4-20250514");
-    }
-
-    #[test]
-    fn test_llm_client_trailing_slash() {
-        let client = LlmClient::new("key", "https://api.anthropic.com/", "model");
-        assert_eq!(client.base_url, "https://api.anthropic.com");
-    }
-
-    #[test]
-    fn test_convert_user_message() {
-        let msgs = vec![pi_core::AgentMessage::user("hello")];
-        let converted = convert_messages(&msgs);
-        assert_eq!(converted.len(), 1);
-        assert_eq!(converted[0]["role"], "user");
-        assert_eq!(converted[0]["content"], "hello");
-    }
-
-    #[test]
-    fn test_convert_assistant_message() {
-        let msgs = vec![pi_core::AgentMessage::assistant_text("hi there")];
-        let converted = convert_messages(&msgs);
-        assert_eq!(converted.len(), 1);
-        assert_eq!(converted[0]["role"], "assistant");
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Provider trait + feature-gated backend
 // ---------------------------------------------------------------------------
@@ -517,8 +479,46 @@ impl LlmProvider for LlmClient {
 #[cfg(not(any(feature = "record", feature = "replay")))]
 pub type LlmBackend = LlmClient;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_llm_client_construction() {
+        let client = LlmClient::new(
+            "test-key",
+            "https://api.anthropic.com",
+            "claude-sonnet-4-20250514",
+        );
+        assert_eq!(client.model_id(), "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn test_llm_client_trailing_slash() {
+        let client = LlmClient::new("key", "https://api.anthropic.com/", "model");
+        assert_eq!(client.base_url, "https://api.anthropic.com");
+    }
+
+    #[test]
+    fn test_convert_user_message() {
+        let msgs = vec![pi_core::AgentMessage::user("hello")];
+        let converted = convert_messages(&msgs);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0]["role"], "user");
+        assert_eq!(converted[0]["content"], "hello");
+    }
+
+    #[test]
+    fn test_convert_assistant_message() {
+        let msgs = vec![pi_core::AgentMessage::assistant_text("hi there")];
+        let converted = convert_messages(&msgs);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0]["role"], "assistant");
+    }
+}
+
 #[cfg(feature = "record")]
 pub type LlmBackend = crate::llm_record::RecordingLlmClient;
 
-#[cfg(feature = "replay")]
+#[cfg(all(feature = "replay", not(feature = "record")))]
 pub type LlmBackend = crate::llm_replay::ReplayLlmClient;

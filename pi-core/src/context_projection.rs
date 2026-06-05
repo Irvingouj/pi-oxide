@@ -203,7 +203,7 @@ pub fn projection_strategy(tool_name: &str) -> NewProjectionStrategy {
 ///
 /// Returns `NewArtifacts` marker with entry_ids of newly archived originals.
 pub fn projection_scan(
-    t: &mut Vec<crate::message::TrimmedMessage>,
+    t: &mut [crate::message::TrimmedMessage],
     a: &mut crate::message::Artifacts,
     current_turn: u32,
 ) -> Vec<ChangeMarker> {

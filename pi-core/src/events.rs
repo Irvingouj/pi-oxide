@@ -50,6 +50,9 @@ pub enum AgentAction {
         #[serde(skip_serializing_if = "Option::is_none")]
         session_id: Option<SessionId>,
     },
+    PrepareToolCalls {
+        calls: Vec<ToolCall>,
+    },
     ExecuteTools {
         calls: Vec<ToolCall>,
     },
@@ -103,7 +106,10 @@ pub enum AgentEvent {
     },
     ToolExecutionEnd {
         tool_call_id: ToolCallId,
+        tool_name: ToolName,
         result: ToolExecResult,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        args: Option<ToolArguments>,
         is_error: bool,
     },
     ToolExecutionCancelled {

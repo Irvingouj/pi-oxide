@@ -159,15 +159,10 @@ impl Agent {
             return (events, actions, markers, t, a);
         }
 
-        // Track all tools uniformly — execution strategy is a host concern
+        // Track proposed tools. Execution starts only after host preparation allows them.
         for tc in &tool_calls {
             self.pending_tool_calls.insert(tc.id.clone(), tc.clone());
             self.state.pending_tool_calls.push(tc.id.0.clone());
-            events.push(AgentEvent::ToolExecutionStart {
-                tool_call_id: tc.id.clone(),
-                tool_name: tc.name.clone(),
-                args: Some(tc.arguments.clone()),
-            });
         }
 
         self.phase = Phase::Idle;
@@ -175,7 +170,7 @@ impl Agent {
             tool_count = tool_calls.len(),
             "assistant requested tool execution"
         );
-        actions.push(AgentAction::ExecuteTools { calls: tool_calls });
+        actions.push(AgentAction::PrepareToolCalls { calls: tool_calls });
         (events, actions, markers, t, a)
     }
 }

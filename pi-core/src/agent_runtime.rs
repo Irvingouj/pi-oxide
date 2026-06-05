@@ -16,6 +16,22 @@ use crate::tool::{ToolDefinition, ToolError, ToolResult};
 use crate::types::ToolCallId;
 
 // ---------------------------------------------------------------------------
+// Type aliases
+// ---------------------------------------------------------------------------
+
+pub type CoreTransitionParts<T> = (
+    Vec<AgentEvent>,
+    Vec<AgentAction>,
+    T,
+    Vec<TrimmedMessage>,
+    Artifacts,
+    u32,
+    Vec<ChangeMarker>,
+);
+
+pub type TransitionParts = CoreTransitionParts<AgentRuntime>;
+
+// ---------------------------------------------------------------------------
 // Transition types
 // ---------------------------------------------------------------------------
 
@@ -32,17 +48,7 @@ pub struct Transition<T> {
 
 impl<T> Transition<T> {
     /// Destructure into the 7-tuple of components.
-    pub fn into_parts(
-        self,
-    ) -> (
-        Vec<AgentEvent>,
-        Vec<AgentAction>,
-        T,
-        Vec<TrimmedMessage>,
-        Artifacts,
-        u32,
-        Vec<ChangeMarker>,
-    ) {
+    pub fn into_parts(self) -> CoreTransitionParts<T> {
         let Transition {
             events,
             actions,
@@ -75,17 +81,7 @@ pub enum FinishLlmTransition {
 
 impl FinishLlmTransition {
     /// Destructure into the common parts regardless of which phase we land in.
-    pub fn into_parts(
-        self,
-    ) -> (
-        Vec<AgentEvent>,
-        Vec<AgentAction>,
-        AgentRuntime,
-        Vec<TrimmedMessage>,
-        Artifacts,
-        u32,
-        Vec<ChangeMarker>,
-    ) {
+    pub fn into_parts(self) -> TransitionParts {
         match self {
             FinishLlmTransition::MoreStreaming(t) => {
                 let (events, actions, state, transcript, artifacts, turn_number, markers) =
@@ -164,17 +160,7 @@ pub enum ToolTransition {
 }
 
 impl ToolTransition {
-    pub fn into_parts(
-        self,
-    ) -> (
-        Vec<AgentEvent>,
-        Vec<AgentAction>,
-        AgentRuntime,
-        Vec<TrimmedMessage>,
-        Artifacts,
-        u32,
-        Vec<ChangeMarker>,
-    ) {
+    pub fn into_parts(self) -> TransitionParts {
         match self {
             ToolTransition::WaitingTools(t) => {
                 let (events, actions, state, transcript, artifacts, turn_number, markers) =
@@ -226,17 +212,7 @@ pub enum StartTurnTransition {
 }
 
 impl StartTurnTransition {
-    pub fn into_parts(
-        self,
-    ) -> (
-        Vec<AgentEvent>,
-        Vec<AgentAction>,
-        AgentRuntime,
-        Vec<TrimmedMessage>,
-        Artifacts,
-        u32,
-        Vec<ChangeMarker>,
-    ) {
+    pub fn into_parts(self) -> TransitionParts {
         match self {
             StartTurnTransition::Streaming(t) => {
                 let (events, actions, state, transcript, artifacts, turn_number, markers) =
@@ -275,17 +251,7 @@ pub enum ContinueTurnTransition {
 }
 
 impl ContinueTurnTransition {
-    pub fn into_parts(
-        self,
-    ) -> (
-        Vec<AgentEvent>,
-        Vec<AgentAction>,
-        AgentRuntime,
-        Vec<TrimmedMessage>,
-        Artifacts,
-        u32,
-        Vec<ChangeMarker>,
-    ) {
+    pub fn into_parts(self) -> TransitionParts {
         match self {
             ContinueTurnTransition::Streaming(t) => {
                 let (events, actions, state, transcript, artifacts, turn_number, markers) =
@@ -464,6 +430,7 @@ impl IdleAgent {
         self.agent
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn start_turn(
         mut self,
         msg: AgentMessage,
@@ -605,7 +572,7 @@ impl StreamingAgent {
         // Tool execution requested
         if actions
             .iter()
-            .any(|a| matches!(a, AgentAction::ExecuteTools { .. }))
+            .any(|a| matches!(a, AgentAction::PrepareToolCalls { .. }))
         {
             return FinishLlmTransition::WaitingTools(Transition {
                 events,
@@ -803,6 +770,40 @@ impl WaitingToolsAgent {
             turn_number,
             markers: vec![],
         }
+    }
+
+    pub fn prepare_tool_calls(
+        mut self,
+        preparations: Vec<crate::tool::ToolCallPreparation>,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+    ) -> ToolTransition {
+        let (events, actions, markers, transcript, artifacts) =
+            self.agent
+                .prepare_tool_calls(preparations, transcript, artifacts, turn_number);
+
+        if self.agent.state().pending_tool_calls.is_empty() {
+            return ToolTransition::Ready(Transition {
+                events,
+                actions,
+                state: ReadyAgent { agent: self.agent },
+                transcript,
+                artifacts,
+                turn_number: turn_number + 1,
+                markers,
+            });
+        }
+
+        ToolTransition::WaitingTools(Transition {
+            events,
+            actions,
+            state: WaitingToolsAgent { agent: self.agent },
+            transcript,
+            artifacts,
+            turn_number,
+            markers,
+        })
     }
 
     pub fn into_runtime(self) -> AgentRuntime {

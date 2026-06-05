@@ -81,3 +81,33 @@ impl ToolError {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tool call preparation types
+// ---------------------------------------------------------------------------
+
+/// Host decision for a single tool call before execution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolCallPreparation {
+    pub tool_call_id: crate::types::ToolCallId,
+    pub transform: ToolCallTransform,
+    pub permission: ToolCallPermission,
+}
+
+/// How the host wants to transform a tool call before permission evaluation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolCallTransform {
+    None,
+    RewriteArgs {
+        arguments: crate::types::ToolArguments,
+    },
+}
+
+/// Whether the host allows the (possibly transformed) tool call to execute.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolCallPermission {
+    Allow,
+    Block { reason: String },
+}

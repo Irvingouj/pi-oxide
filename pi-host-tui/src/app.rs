@@ -240,7 +240,7 @@ impl App {
                 record_to.unwrap_or_else(|| std::path::PathBuf::from("cassette.json")),
             ))
         }
-        #[cfg(feature = "replay")]
+        #[cfg(all(feature = "replay", not(feature = "record")))]
         {
             Ok(crate::llm_replay::ReplayLlmClient::load(
                 replay_from
@@ -725,6 +725,12 @@ impl App {
                 }
                 AgentAction::Summarize { context, .. } => {
                     directives.push(HostDirective::Summarize { context });
+                }
+                AgentAction::PrepareToolCalls { calls } => {
+                    // TUI does not implement transform/permission hooks and maps
+                    // PrepareToolCalls directly to ExecuteTools as a pragmatic fallback.
+                    // This is acceptable since TUI is not a primary target for this feature.
+                    directives.push(HostDirective::ExecuteTools { calls });
                 }
                 AgentAction::ExecuteTools { calls } => {
                     directives.push(HostDirective::ExecuteTools { calls });

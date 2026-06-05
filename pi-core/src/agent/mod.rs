@@ -72,6 +72,8 @@ pub struct Agent {
     pub(crate) streaming_assistant: Option<AssistantMessage>,
     /// Counter for generating entry IDs.
     pub(crate) entry_counter: u32,
+    /// Set to true after `prepare_tool_calls` is applied to prevent duplicate calls.
+    pub(crate) preparations_applied: bool,
 }
 
 impl Agent {
@@ -96,6 +98,7 @@ impl Agent {
             turn_tools: Vec::new(),
             streaming_assistant: None,
             entry_counter: 0,
+            preparations_applied: false,
         }
     }
 
@@ -111,6 +114,7 @@ impl Agent {
         self.state.pending_tool_calls.clear();
         self.streaming_assistant = None;
         self.turn_tools.clear();
+        self.preparations_applied = false;
         self.phase = Phase::Idle;
 
         vec![
@@ -144,6 +148,7 @@ impl Agent {
         self.completed_tool_results.clear();
         self.completed_tool_terminations.clear();
         self.turn_tools.clear();
+        self.preparations_applied = false;
         self.phase = Phase::Idle;
     }
 
@@ -360,7 +365,10 @@ mod tests {
         let (_events, _actions, markers, _result_t) =
             agent.accept_summary("summary".to_string(), t, &mut a, &plan);
 
-        assert!(markers.is_empty(), "expected no markers when no OriginalTools compacted");
+        assert!(
+            markers.is_empty(),
+            "expected no markers when no OriginalTools compacted"
+        );
     }
 }
 

@@ -107,5 +107,7 @@ pkg.dependencies = {
 	"zod-to-json-schema": sourcePkg.dependencies["zod-to-json-schema"],
 };
 
+pkg.version = sourcePkg.version;
+
 writeFileSync(pkgJsonPath, JSON.stringify(pkg, null, 2) + "\n");
 console.log("Package built successfully.");

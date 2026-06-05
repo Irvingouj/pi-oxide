@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { useAgent } from "@pi-oxide/pi-host-web/react";
+import { useAgent } from "../react/useAgent.ts";
 import { defineModel, memoryStore } from "@pi-oxide/pi-host-web";
 import type { AgentConfig } from "@pi-oxide/pi-host-web";
 import ChatPanel from "./ChatPanel/ChatPanel.tsx";

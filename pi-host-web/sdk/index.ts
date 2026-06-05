@@ -30,6 +30,7 @@ export { browserTools } from "./internal/tools/browser.ts";
 export { defineModel } from "./model.ts";
 export { httpStore, indexedDbStore, localStorageStore, memoryStore } from "./stores.ts";
 export { defineTools, tool } from "./tools.ts";
+export type { ToolConfig, ToolInputSchema } from "./tools.ts";
 export type {
 	AgentConfig,
 	AgentContentBlock,

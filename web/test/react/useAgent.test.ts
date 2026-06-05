@@ -2,7 +2,8 @@ import assert from "node:assert";
 import { describe, it } from "node:test";
 import React from "react";
 import { renderToString } from "react-dom/server";
-import { useAgent, defineModel } from "../../../pi-host-web/sdk/index.ts";
+import { useAgent } from "../../src/react/useAgent.ts";
+import { defineModel } from "../../../pi-host-web/sdk/index.ts";
 import type { AgentConfig, AgentMessage } from "../../../pi-host-web/sdk/types.ts";
 
 function makeMockModel(responseText: string = "Hello") {

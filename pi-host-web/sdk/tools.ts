@@ -1,12 +1,22 @@
 // Public tool API for the pi-oxide SDK.
 // Tools are easy to declare and strongly typed at the boundary.
 
-import type { ZodType } from "zod";
 import type { AgentToolDefinition, AgentTools } from "./types.ts";
+
+/** Structural interface for Zod-compatible schemas without exporting Zod types. */
+export interface ToolInputSchema<Input> {
+	parse(data: unknown): Input;
+	safeParse(data: unknown):
+		| { success: true; data: Input }
+		| { success: false; error: unknown };
+	_def: {
+		typeName?: string;
+	};
+}
 
 export interface ToolConfig<Input, Output> {
 	description: string;
-	input: ZodType<Input>;
+	input: ToolInputSchema<Input>;
 	run: (input: Input) => Promise<Output> | Output;
 	details?: (output: Output) => Record<string, unknown>;
 }

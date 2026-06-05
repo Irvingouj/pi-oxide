@@ -1,5 +1,6 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
+import { z } from "zod";
 import { ensureInit, type AgentMessage as WasmAgentMessage } from "../../../pi-host-web/sdk/index.ts";
 import {
   createEngineAgent,
@@ -10,7 +11,8 @@ import {
 import { defineModel } from "../../../pi-host-web/sdk/model.ts";
 import { memoryStore } from "../../../pi-host-web/sdk/stores.ts";
 import { SnapshotSerializer } from "../../../pi-host-web/sdk/snapshot.ts";
-import type { AgentConfig, AgentMessage } from "../../../pi-host-web/sdk/types.ts";
+import { tool, defineTools } from "../../../pi-host-web/sdk/tools.ts";
+import type { AgentConfig, AgentMessage, AgentToolCall } from "../../../pi-host-web/sdk/types.ts";
 
 await ensureInit();
 
@@ -33,6 +35,43 @@ function makeMockModel(responseText: string = "Hello") {
     }),
   });
 }
+
+type MockResponse = {
+  content: Array<{ type: "text"; text: string } | { type: "tool_call"; id: string; name: string; arguments: unknown }>;
+  stopReason: "end" | "tool_call";
+};
+
+function makeMockModelSequence(responses: MockResponse[]) {
+  let callIndex = 0;
+  return defineModel({
+    id: "mock-model",
+    contextWindow: 128000,
+    maxTokens: 4096,
+    capabilities: { vision: true, jsonMode: true, functionCalling: true, streaming: true },
+    generate: async () => {
+      const response = responses[Math.min(callIndex++, responses.length - 1)];
+      return {
+        content: response.content,
+        stopReason: response.stopReason,
+        usage: {
+          input: 0,
+          output: 0,
+          cache_read: 0,
+          cache_write: 0,
+          total_tokens: 0,
+        },
+      };
+    },
+  });
+}
+
+const testTools = defineTools({
+  test_tool: tool({
+    description: "A test tool",
+    input: z.object({}),
+    run: () => ({ result: "ok" }),
+  }),
+});
 
 describe("Engine", () => {
   describe("TM-29: Context policy mapping", () => {
@@ -327,6 +366,211 @@ describe("Engine", () => {
 
       // Should not throw
       await resetAgentState(hostAgent);
+    });
+  });
+
+  describe("TM-44: prepareToolCalls engine integration", () => {
+    it("executes tool calls with default allow-all policy", async () => {
+      const config: AgentConfig = {
+        sessionId: "prep-default-session",
+        model: makeMockModelSequence([
+          {
+            content: [{ type: "tool_call", id: "tc-1", name: "test_tool", arguments: {} }],
+            stopReason: "tool_call",
+          },
+          { content: [{ type: "text", text: "done" }], stopReason: "end" },
+        ]),
+        tools: testTools,
+      };
+
+      const hostAgent = await createEngineAgent(config, {
+        onEvent: () => {},
+        onStatus: () => {},
+      });
+
+      const toolEvents: Array<{ type: string; payload: any }> = [];
+      await runAgentTurn(
+        hostAgent,
+        config,
+        "use tool",
+        undefined,
+        new AbortController().signal,
+        {
+          onEvent: (e) => {
+            if (e.type === "toolStart" || e.type === "toolEnd") {
+              toolEvents.push({ type: e.type, payload: e.payload });
+            }
+          },
+          onStatus: () => {},
+        },
+      );
+
+      hostAgent.destroy();
+
+      assert.equal(
+        toolEvents.filter((e) => e.type === "toolStart" && e.payload.id === "tc-1").length,
+        1,
+        "allowed call should emit exactly one toolStart",
+      );
+      assert.ok(
+        toolEvents.some((e) => e.type === "toolEnd" && e.payload.name === "test_tool" && e.payload.status === "completed"),
+        "should execute tool with default allow policy",
+      );
+    });
+
+    it("blocks tool calls via permission hook", async () => {
+      const config: AgentConfig = {
+        sessionId: "prep-block-session",
+        model: makeMockModelSequence([
+          {
+            content: [{ type: "tool_call", id: "tc-1", name: "test_tool", arguments: {} }],
+            stopReason: "tool_call",
+          },
+          { content: [{ type: "text", text: "done" }], stopReason: "end" },
+        ]),
+        tools: testTools,
+        prepareToolCalls: {
+          permission: () => ({ type: "block", reason: "not allowed" }),
+        },
+      };
+
+      const hostAgent = await createEngineAgent(config, {
+        onEvent: () => {},
+        onStatus: () => {},
+      });
+
+      const toolEvents: Array<{ type: string; payload: any }> = [];
+      await runAgentTurn(
+        hostAgent,
+        config,
+        "use tool",
+        undefined,
+        new AbortController().signal,
+        {
+          onEvent: (e) => {
+            if (e.type === "toolStart" || e.type === "toolEnd") {
+              toolEvents.push({ type: e.type, payload: e.payload });
+            }
+          },
+          onStatus: () => {},
+        },
+      );
+
+      hostAgent.destroy();
+
+      assert.equal(
+        toolEvents.filter((e) => e.type === "toolStart" && e.payload.id === "tc-1").length,
+        0,
+        "blocked call should not emit toolStart",
+      );
+      assert.ok(
+        toolEvents.some((e) => e.type === "toolEnd" && e.payload.name === "test_tool" && e.payload.status === "failed"),
+        "blocked tool should end as failed",
+      );
+    });
+
+    it("transform hook rewrites arguments before permission", async () => {
+      let permissionSeenArgs: unknown = null;
+
+      const config: AgentConfig = {
+        sessionId: "prep-transform-session",
+        model: makeMockModelSequence([
+          {
+            content: [{ type: "tool_call", id: "tc-1", name: "test_tool", arguments: { original: true } }],
+            stopReason: "tool_call",
+          },
+          { content: [{ type: "text", text: "done" }], stopReason: "end" },
+        ]),
+        tools: testTools,
+        prepareToolCalls: {
+          transform: () => ({ type: "rewrite_args", arguments: { rewritten: true } }),
+          permission: (call: AgentToolCall) => {
+            permissionSeenArgs = call.arguments;
+            return { type: "allow" };
+          },
+        },
+      };
+
+      const hostAgent = await createEngineAgent(config, {
+        onEvent: () => {},
+        onStatus: () => {},
+      });
+
+      await runAgentTurn(
+        hostAgent,
+        config,
+        "use tool",
+        undefined,
+        new AbortController().signal,
+        {
+          onEvent: () => {},
+          onStatus: () => {},
+        },
+      );
+
+      hostAgent.destroy();
+
+      assert.deepStrictEqual(
+        permissionSeenArgs,
+        { rewritten: true },
+        "permission hook should see transformed arguments",
+      );
+    });
+
+    it("mixed batch: allowed and blocked calls produce correct results", async () => {
+      const config: AgentConfig = {
+        sessionId: "prep-mixed-session",
+        model: makeMockModelSequence([
+          {
+            content: [
+              { type: "tool_call", id: "tc-1", name: "test_tool", arguments: {} },
+              { type: "tool_call", id: "tc-2", name: "test_tool", arguments: {} },
+            ],
+            stopReason: "tool_call",
+          },
+          { content: [{ type: "text", text: "done" }], stopReason: "end" },
+        ]),
+        tools: testTools,
+        prepareToolCalls: {
+          permission: (call: AgentToolCall) => {
+            if (call.id === "tc-1") return { type: "allow" };
+            return { type: "block", reason: "blocked" };
+          },
+        },
+      };
+
+      const hostAgent = await createEngineAgent(config, {
+        onEvent: () => {},
+        onStatus: () => {},
+      });
+
+      const toolCalls: any[] = [];
+      await runAgentTurn(
+        hostAgent,
+        config,
+        "use tools",
+        undefined,
+        new AbortController().signal,
+        {
+          onEvent: (e) => {
+            if (e.type === "toolEnd") {
+              toolCalls.push(e.payload);
+            }
+          },
+          onStatus: () => {},
+        },
+      );
+
+      hostAgent.destroy();
+
+      assert.ok(
+        toolCalls.some((t) => t.id === "tc-1" && t.status === "completed"),
+        "allowed call should complete",
+      );
+      assert.ok(
+        toolCalls.some((t) => t.id === "tc-2" && t.status === "failed"),
+        "blocked call should fail",
+      );
     });
   });
 });

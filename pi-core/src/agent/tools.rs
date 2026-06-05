@@ -344,8 +344,60 @@ impl Agent {
         let mut actions = Vec::new();
         let mut markers = Vec::new();
         let mut allowed_calls = Vec::new();
+        let mut seen_preparation_ids = std::collections::HashSet::new();
+        let mut duplicate_preparation_ids = std::collections::HashSet::new();
+        for prep in &preparations {
+            if !seen_preparation_ids.insert(prep.tool_call_id.clone()) {
+                duplicate_preparation_ids.insert(prep.tool_call_id.clone());
+            }
+        }
+        let mut prepared_ids = std::collections::HashSet::new();
 
         for prep in &preparations {
+            if duplicate_preparation_ids.contains(&prep.tool_call_id) {
+                if !prepared_ids.insert(prep.tool_call_id.clone()) {
+                    continue;
+                }
+                let tool_call = match self.pending_tool_calls.remove(&prep.tool_call_id) {
+                    Some(tc) => tc,
+                    None => {
+                        warn!(
+                            tool_call_id = prep.tool_call_id.as_str(),
+                            "duplicate preparation for unknown tool call ignored"
+                        );
+                        continue;
+                    }
+                };
+                warn!(
+                    tool_call_id = prep.tool_call_id.as_str(),
+                    "duplicate tool call preparations blocked"
+                );
+                self.state
+                    .pending_tool_calls
+                    .retain(|id| id != prep.tool_call_id.as_str());
+
+                let blocked_result = ToolResult {
+                    content: vec![Content::Text(TextContent {
+                        text: "Tool call blocked by host policy: duplicate preparation entries"
+                            .to_string(),
+                    })],
+                    details: None,
+                    terminate: None,
+                };
+
+                let (original_tool, _result_msg, tool_events) = self.emit_tool_result(
+                    prep.tool_call_id.clone(),
+                    tool_call.name,
+                    tool_call.arguments,
+                    blocked_result,
+                    true,
+                    turn_number,
+                );
+                t.push(TrimmedMessage::OriginalTool(original_tool));
+                events.extend(tool_events);
+                continue;
+            }
+
             let tool_call = match self.pending_tool_calls.get(&prep.tool_call_id) {
                 Some(tc) => tc.clone(),
                 None => {
@@ -356,6 +408,7 @@ impl Agent {
                     continue;
                 }
             };
+            prepared_ids.insert(prep.tool_call_id.clone());
 
             // Apply transform
             let transformed_tool = match &prep.transform {
@@ -410,10 +463,6 @@ impl Agent {
         }
 
         // Default any pending tools not covered by preparations to Allow
-        let prepared_ids: std::collections::HashSet<_> = preparations
-            .iter()
-            .map(|p| p.tool_call_id.clone())
-            .collect();
         for (id, tc) in &self.pending_tool_calls {
             if !prepared_ids.contains(id) {
                 allowed_calls.push(tc.clone());

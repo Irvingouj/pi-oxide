@@ -5,10 +5,10 @@ import type { ZodType } from "zod";
 import type { AgentToolDefinition, AgentTools } from "./types.ts";
 
 export interface ToolConfig<Input, Output> {
-  description: string;
-  input: ZodType<Input>;
-  run: (input: Input) => Promise<Output> | Output;
-  details?: (output: Output) => Record<string, unknown>;
+	description: string;
+	input: ZodType<Input>;
+	run: (input: Input) => Promise<Output> | Output;
+	details?: (output: Output) => Record<string, unknown>;
 }
 
 /**
@@ -16,15 +16,13 @@ export interface ToolConfig<Input, Output> {
  * The `name` is filled in by `defineTools()`.
  */
 export function tool<Input, Output>(config: ToolConfig<Input, Output>): AgentToolDefinition {
-  return {
-    name: "",
-    description: config.description,
-    inputSchema: config.input,
-    run: config.run as (input: unknown) => Promise<unknown> | unknown,
-    details: config.details
-      ? (config.details as (output: unknown) => Record<string, unknown>)
-      : undefined,
-  };
+	return {
+		name: "",
+		description: config.description,
+		inputSchema: config.input,
+		run: config.run as (input: unknown) => Promise<unknown> | unknown,
+		details: config.details ? (config.details as (output: unknown) => Record<string, unknown>) : undefined,
+	};
 }
 
 /**
@@ -32,16 +30,16 @@ export function tool<Input, Output>(config: ToolConfig<Input, Output>): AgentToo
  * Multiple packs can be composed as an array in AgentConfig.tools.
  */
 export function defineTools(tools: Record<string, AgentToolDefinition>): AgentTools {
-  const entries = Object.entries(tools).map(([name, def]) => ({
-    ...def,
-    name,
-  }));
+	const entries = Object.entries(tools).map(([name, def]) => ({
+		...def,
+		name,
+	}));
 
-  return {
-    definitions: entries,
-    getHandler(name: string) {
-      const def = entries.find((d) => d.name === name);
-      return def?.run ?? null;
-    },
-  };
+	return {
+		definitions: entries,
+		getHandler(name: string) {
+			const def = entries.find((d) => d.name === name);
+			return def?.run ?? null;
+		},
+	};
 }

@@ -2366,3 +2366,87 @@ fn prepare_tool_calls_permission_sees_transformed_args() {
         "blocked result should be error"
     );
 }
+
+#[test]
+fn prepare_tool_calls_duplicate_id_is_blocked_once_without_start() {
+    let runtime = AgentRuntime::new(dummy_options());
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let (t, a, tn) = empty();
+    let t = idle.start_turn(
+        AgentMessage::user("use tool"),
+        vec![],
+        t,
+        a,
+        tn,
+        &ContextProjectionBudget::default(),
+        "",
+    );
+    let StartTurnTransition::Streaming(t) = t else {
+        panic!("expected Streaming")
+    };
+    let (_events, _actions, _state, T, A, turn_number, _markers) = t.into_parts();
+
+    let streaming = _state;
+    let transition = streaming.finish_llm(
+        LlmResult::Ok(assistant_with_tool_calls(vec![tool_call("call-1", "read")])),
+        T,
+        A,
+        turn_number,
+        &ContextProjectionBudget::default(),
+    );
+    let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
+
+    let AgentRuntime::WaitingTools(waiting) = runtime else {
+        panic!("expected WaitingTools")
+    };
+
+    let preps = vec![
+        ToolCallPreparation {
+            tool_call_id: ToolCallId::new("call-1"),
+            transform: ToolCallTransform::None,
+            permission: ToolCallPermission::Allow,
+        },
+        ToolCallPreparation {
+            tool_call_id: ToolCallId::new("call-1"),
+            transform: ToolCallTransform::None,
+            permission: ToolCallPermission::Allow,
+        },
+    ];
+
+    let transition = waiting.prepare_tool_calls(preps, T, A, turn_number);
+    let (events, actions, runtime, T, _A, _turn_number, _markers) = transition.into_parts();
+
+    assert!(
+        !actions
+            .iter()
+            .any(|a| matches!(a, AgentAction::ExecuteTools { .. })),
+        "duplicate preparation should not execute the tool"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolExecutionStart { .. })),
+        "duplicate preparation should not emit ToolExecutionStart"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::ToolExecutionEnd { is_error: true, .. }))
+            .count(),
+        1,
+        "duplicate preparation should emit one error result"
+    );
+    assert!(
+        matches!(runtime, AgentRuntime::ReadyToContinue(_)),
+        "duplicate preparation should finalize the blocked batch"
+    );
+    assert_eq!(
+        T.iter()
+            .filter(|m| matches!(m, TrimmedMessage::OriginalTool(_)))
+            .count(),
+        1,
+        "duplicate preparation should push one OriginalTool"
+    );
+}

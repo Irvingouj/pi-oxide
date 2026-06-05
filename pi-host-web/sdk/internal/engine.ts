@@ -3,55 +3,55 @@
 // Uses the raw WASM API directly (createHostAgent, startTurn, hostFeedLlmChunk, etc.).
 
 import {
-	type AgentEvent as RawAgentEvent,
-	type AgentMessage as WasmAgentMessage,
-	type Content,
-	type LlmChunk,
-	type LlmResult,
-	type PersistData,
-	type LlmContext,
-	type ToolCall,
-	type ToolError,
-	type ToolResult,
-	type ToolDefinition,
 	type CancelReason,
-	type ToolCallPreparation,
+	type Content,
 	createHostAgent,
 	destroyHostAgent,
-	startTurn,
-	hostFeedLlmChunk,
-	hostLlmDone,
-	hostToolDone,
-	hostToolFailed,
-	hostToolCancelled,
-	hostContinueTurn,
+	getHostAgentPersistData,
 	hostAbort,
 	hostAcceptCompaction,
-	hostSteer,
-	hostReset,
-	hostReadArtifact,
+	hostContinueTurn,
+	hostFeedLlmChunk,
+	hostLlmDone,
 	hostPrepareToolCalls,
-	getHostAgentPersistData,
+	hostReadArtifact,
+	hostReset,
+	hostSteer,
+	hostToolCancelled,
+	hostToolDone,
+	hostToolFailed,
+	type LlmChunk,
+	type LlmContext,
+	type LlmResult,
+	type PersistData,
+	type AgentEvent as RawAgentEvent,
 	restoreHostAgent,
+	startTurn,
+	type ToolCall,
+	type ToolCallPreparation,
+	type ToolDefinition,
+	type ToolError,
+	type ToolResult,
+	type AgentMessage as WasmAgentMessage,
 } from "../../pi_host_web.js";
+import { createAgentError } from "../errors.ts";
 import { ensureInit, HostError } from "../init.ts";
-import { EventMapper } from "./events.ts";
 import { SnapshotSerializer } from "../snapshot.ts";
-import { ToolRegistryBuilder } from "./tools/registry.ts";
-import { getLogger } from "./logger.ts";
 import type {
 	AgentConfig,
 	AgentInput,
+	AgentMessage,
 	AgentRunOptions,
 	AgentRunResult,
 	AgentStatus,
-	AgentMessage,
-	ModelResponse,
-	ModelEvent,
-	TokenUsage,
 	Logger,
+	ModelEvent,
+	ModelResponse,
+	TokenUsage,
 } from "../types.ts";
-import { createAgentError } from "../errors.ts";
+import { EventMapper } from "./events.ts";
+import { getLogger } from "./logger.ts";
+import { ToolRegistryBuilder } from "./tools/registry.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -77,8 +77,18 @@ export interface AgentRunConfig {
 	artifactStore?: ArtifactStore;
 	logger?: Logger;
 	prepareToolCalls?: {
-		transform?: (call: ToolCall) => { type: "none" } | { type: "rewrite_args"; arguments: unknown } | Promise<{ type: "none" } | { type: "rewrite_args"; arguments: unknown }>;
-		permission?: (call: ToolCall) => { type: "allow" } | { type: "block"; reason: string } | Promise<{ type: "allow" } | { type: "block"; reason: string }>;
+		transform?: (
+			call: ToolCall,
+		) =>
+			| { type: "none" }
+			| { type: "rewrite_args"; arguments: unknown }
+			| Promise<{ type: "none" } | { type: "rewrite_args"; arguments: unknown }>;
+		permission?: (
+			call: ToolCall,
+		) =>
+			| { type: "allow" }
+			| { type: "block"; reason: string }
+			| Promise<{ type: "allow" } | { type: "block"; reason: string }>;
 	};
 }
 
@@ -111,10 +121,7 @@ function safeHook<T>(fn: () => T | Promise<T>): Promise<Result<T>> {
 	}
 }
 
-function matchResult<T, U>(
-	result: Result<T>,
-	arms: { ok: (value: T) => U; err: (error: Error) => U },
-): U {
+function matchResult<T, U>(result: Result<T>, arms: { ok: (value: T) => U; err: (error: Error) => U }): U {
 	return result.ok ? arms.ok(result.value) : arms.err(result.error);
 }
 
@@ -155,10 +162,7 @@ export class HostAgent {
 // Host agent lifecycle
 // ---------------------------------------------------------------------------
 
-export async function createHostAgentInstance(
-	config: AgentConfig,
-	sessionState?: PersistData,
-): Promise<HostAgent> {
+export async function createHostAgentInstance(config: AgentConfig, sessionState?: PersistData): Promise<HostAgent> {
 	await ensureInit();
 	const logger = config.logger ?? getLogger("engine");
 	const options = {
@@ -224,7 +228,10 @@ export async function runTurnWithHostAgent(
 				checkAbort();
 				switch (action.type) {
 					case "stream_llm": {
-						logger.info("Streaming LLM", { messageCount: action.context.messages.length, toolCount: action.context.tools.length });
+						logger.info("Streaming LLM", {
+							messageCount: action.context.messages.length,
+							toolCount: action.context.tools.length,
+						});
 						const stream = await config.llm.call(action.context, signal);
 						for await (const chunk of stream.chunks) {
 							checkAbort();
@@ -244,7 +251,9 @@ export async function runTurnWithHostAgent(
 						logger.info("Preparing tool calls", { count: action.calls.length, names: action.calls.map((c) => c.name) });
 						const preparations = await buildToolCallPreparations(action.calls, config.prepareToolCalls, logger);
 						if (preparations.hadError) {
-							logger.warn("Tool call preparation failed, blocked remaining calls", { error: preparations.errorMessage });
+							logger.warn("Tool call preparation failed, blocked remaining calls", {
+								error: preparations.errorMessage,
+							});
 						}
 						step = unwrap(hostPrepareToolCalls(hostAgent.handle, JSON.stringify(preparations.items)));
 						for (const e of step.events) config.onEvent?.(e);
@@ -260,17 +269,22 @@ export async function runTurnWithHostAgent(
 							const handler = config.tools[call.name];
 							if (!handler) {
 								logger.warn("Tool handler not found", { toolName: call.name });
-								step = unwrap(hostToolFailed(hostAgent.handle, call.id, {
-									code: "tool_not_found",
-									message: `No handler for ${call.name}`,
-								}));
+								step = unwrap(
+									hostToolFailed(hostAgent.handle, call.id, {
+										code: "tool_not_found",
+										message: `No handler for ${call.name}`,
+									}),
+								);
 							} else {
 								try {
 									const result = await handler(call);
 									logger.debug("Tool completed", { toolName: call.name });
 									step = unwrap(hostToolDone(hostAgent.handle, call.id, result));
 								} catch (e) {
-									logger.warn("Tool failed", { toolName: call.name, error: e instanceof Error ? e.message : String(e) });
+									logger.warn("Tool failed", {
+										toolName: call.name,
+										error: e instanceof Error ? e.message : String(e),
+									});
 									step = unwrap(hostToolFailed(hostAgent.handle, call.id, toolErrorFromUnknown(e)));
 								}
 							}
@@ -347,8 +361,7 @@ export async function runTurnWithHostAgent(
 		}
 	} catch (e: unknown) {
 		const isUserAbort =
-			(e instanceof HostError && e.code === "user_aborted") ||
-			(e instanceof DOMException && e.name === "AbortError");
+			(e instanceof HostError && e.code === "user_aborted") || (e instanceof DOMException && e.name === "AbortError");
 		if (isUserAbort) {
 			logger.info("Turn aborted by user");
 			return { aborted: true };
@@ -556,7 +569,9 @@ function modelStreamToLlmStream(
 
 	// Promise that resolves when chunks iteration finishes
 	let chunksDoneResolve: () => void;
-	const chunksDone = new Promise<void>((r) => { chunksDoneResolve = r; });
+	const chunksDone = new Promise<void>((r) => {
+		chunksDoneResolve = r;
+	});
 
 	const chunks: AsyncIterable<LlmChunk> = {
 		[Symbol.asyncIterator]: async function* () {
@@ -584,7 +599,11 @@ function modelStreamToLlmStream(
 								name: delta.name || existing?.name || "",
 								arguments: (existing?.arguments ?? "") + argumentFragment,
 							});
-							yield { kind: "tool_call_delta", tool_call_id: delta.id, delta: { type: "string", value: argumentFragment } };
+							yield {
+								kind: "tool_call_delta",
+								tool_call_id: delta.id,
+								delta: { type: "string", value: argumentFragment },
+							};
 							break;
 						}
 						case "done": {
@@ -618,7 +637,15 @@ function modelStreamToLlmStream(
 		await chunksDone;
 
 		if (streamError) {
-			return { Err: { error: { code: "stream_error", message: streamError instanceof Error ? streamError.message : String(streamError) }, aborted: false } } as LlmResult;
+			return {
+				Err: {
+					error: {
+						code: "stream_error",
+						message: streamError instanceof Error ? streamError.message : String(streamError),
+					},
+					aborted: false,
+				},
+			} as LlmResult;
 		}
 
 		const content: Content[] = [];
@@ -626,7 +653,12 @@ function modelStreamToLlmStream(
 			content.push({ type: "text" as const, text: textAccumulator });
 		}
 		for (const tc of toolCalls.values()) {
-			content.push({ type: "tool_call" as const, id: tc.id, name: tc.name, arguments: parseToolArguments(tc.arguments) });
+			content.push({
+				type: "tool_call" as const,
+				id: tc.id,
+				name: tc.name,
+				arguments: parseToolArguments(tc.arguments),
+			});
 		}
 
 		return {
@@ -730,9 +762,8 @@ async function buildToolCallPreparations(
 
 		const result = await safeHook(async () => {
 			const rawTransform = await (hooks?.transform?.(call) ?? { type: "none" as const });
-			const transformedCall = rawTransform.type === "rewrite_args"
-				? { ...call, arguments: rawTransform.arguments }
-				: call;
+			const transformedCall =
+				rawTransform.type === "rewrite_args" ? { ...call, arguments: rawTransform.arguments } : call;
 			const rawPermission = await (hooks?.permission?.(transformedCall) ?? { type: "allow" as const });
 			return { rawTransform, rawPermission };
 		});
@@ -757,13 +788,17 @@ async function buildToolCallPreparations(
 	return { items, hadError, errorMessage };
 }
 
-function normalizeTools(tools: import("../types.ts").AgentTools | import("../types.ts").AgentTools[] | undefined): import("../types.ts").AgentTools[] {
+function normalizeTools(
+	tools: import("../types.ts").AgentTools | import("../types.ts").AgentTools[] | undefined,
+): import("../types.ts").AgentTools[] {
 	if (!tools) return [];
 	if (Array.isArray(tools)) return tools;
 	return [tools];
 }
 
-function buildContextBudget(context?: import("../types.ts").AgentContextPolicy): import("../../pi_host_web.js").ContextProjectionBudget {
+function buildContextBudget(
+	context?: import("../types.ts").AgentContextPolicy,
+): import("../../pi_host_web.js").ContextProjectionBudget {
 	return {
 		max_tool_result_chars: context?.toolResultLimit ?? 50000,
 		max_context_tokens: context?.maxTokens ?? 100000,
@@ -817,12 +852,13 @@ function buildArtifactStore(config: AgentConfig): ArtifactStore | undefined {
 				if (typeof store.searchArtifacts !== "function") {
 					return Promise.resolve([]);
 				}
-				return store.searchArtifacts!(sessionId, { text: query }).then((results: import("../types.ts").ArtifactSearchResult[]) =>
-					results.map((r: import("../types.ts").ArtifactSearchResult) => ({
-						id: r.artifact.id,
-						snippet: r.snippet ?? "",
-						match_count: r.matchCount ?? 0,
-					})),
+				return store.searchArtifacts!(sessionId, { text: query }).then(
+					(results: import("../types.ts").ArtifactSearchResult[]) =>
+						results.map((r: import("../types.ts").ArtifactSearchResult) => ({
+							id: r.artifact.id,
+							snippet: r.snippet ?? "",
+							match_count: r.matchCount ?? 0,
+						})),
 				);
 			},
 		};
@@ -849,7 +885,10 @@ function buildUserMessage(input: string | AgentInput): WasmAgentMessage {
 				content.push({
 					type: "image",
 					media_type: attachment.mimeType ?? "image/png",
-					data: typeof attachment.content === "string" ? attachment.content : btoa(String.fromCharCode(...new Uint8Array(attachment.content))),
+					data:
+						typeof attachment.content === "string"
+							? attachment.content
+							: btoa(String.fromCharCode(...new Uint8Array(attachment.content))),
 				});
 			}
 		}
@@ -862,9 +901,7 @@ function buildUserMessage(input: string | AgentInput): WasmAgentMessage {
 	};
 }
 
-function convertWasmMessagesToAgentMessages(
-	messages: WasmAgentMessage[],
-): AgentMessage[] {
+function convertWasmMessagesToAgentMessages(messages: WasmAgentMessage[]): AgentMessage[] {
 	return messages.map((msg) => ({
 		id: stableMessageId(msg),
 		role: msg.role,
@@ -880,12 +917,14 @@ function convertWasmMessagesToAgentMessages(
 }
 
 function stableMessageId(msg: WasmAgentMessage): string {
-	const contentHash = msg.content.map((c) => {
-		if (c.type === "text") return `t:${c.text?.slice(0, 64) ?? ""}`;
-		if (c.type === "tool_call") return `tc:${c.id ?? ""}:${c.name ?? ""}`;
-		if (c.type === "image") return `img:${c.media_type ?? ""}`;
-		return (c as { type: string }).type;
-	}).join("|");
+	const contentHash = msg.content
+		.map((c) => {
+			if (c.type === "text") return `t:${c.text?.slice(0, 64) ?? ""}`;
+			if (c.type === "tool_call") return `tc:${c.id ?? ""}:${c.name ?? ""}`;
+			if (c.type === "image") return `img:${c.media_type ?? ""}`;
+			return (c as { type: string }).type;
+		})
+		.join("|");
 	return `msg-${msg.role}-${msg.timestamp ?? 0}-${contentHash}`;
 }
 
@@ -903,10 +942,7 @@ function toWasmStopReason(reason: ModelResponse["stopReason"]): "end_turn" | "to
 	}
 }
 
-function modelResponseToLlmStream(
-	response: ModelResponse,
-	signal: AbortSignal,
-): LlmStream {
+function modelResponseToLlmStream(response: ModelResponse, signal: AbortSignal): LlmStream {
 	const chunks: AsyncIterable<LlmChunk> = {
 		[Symbol.asyncIterator]: async function* () {
 			if (signal.aborted) return;
@@ -981,7 +1017,8 @@ async function defaultSummarizer(
 	signal?: AbortSignal,
 ): Promise<string> {
 	const summaryRequest: import("../types.ts").ModelRequest = {
-		instructions: "Summarize the following conversation context concisely. Preserve key facts, decisions, and action items. Omit redundant details.",
+		instructions:
+			"Summarize the following conversation context concisely. Preserve key facts, decisions, and action items. Omit redundant details.",
 		messages: convertWasmMessagesToAgentMessages(messages),
 		tools: [],
 		signal,

@@ -1,11 +1,7 @@
 // WASM initialization and low-level helpers.
 // Kept separate from index.ts to avoid circular imports with internal modules.
 
-import {
-	default as init,
-	initSync,
-	setLogLevel as setWasmLogLevel,
-} from "../pi_host_web.js";
+import { default as init, initSync, setLogLevel as setWasmLogLevel } from "../pi_host_web.js";
 import { setGlobalLogLevel } from "./internal/logger.ts";
 import type { LogLevel } from "./types.ts";
 
@@ -16,9 +12,7 @@ export async function ensureInit() {
 	if (initialized) return;
 	if (typeof process !== "undefined" && process.versions?.node) {
 		const { readFileSync } = await import("node:fs");
-		const bytes = readFileSync(
-			new URL("../pi_host_web_bg.wasm", import.meta.url),
-		);
+		const bytes = readFileSync(new URL("../pi_host_web_bg.wasm", import.meta.url));
 		initSync({ module: bytes });
 	} else {
 		await init();

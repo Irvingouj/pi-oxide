@@ -1,29 +1,8 @@
 // Public SDK exports — the only surface normal apps should import.
 // Internal engine details are hidden in sdk/internal/.
 
-export { ensureInit, HostError, unwrap, toolResult } from "./init.ts";
-
 // SDK exports
 export { Agent } from "./agent.ts";
-export { defineModel } from "./model.ts";
-export { anthropic } from "./internal/providers/anthropic.ts";
-export { openai, openaiCompatible } from "./internal/providers/openai.ts";
-export { defineTools, tool } from "./tools.ts";
-export { browserTools } from "./internal/tools/browser.ts";
-export { artifactTools } from "./internal/tools/artifact.ts";
-export { indexedDbStore, memoryStore, localStorageStore, httpStore } from "./stores.ts";
-export {
-  ConsoleLogger,
-  NoopLogger,
-  CallbackLogger,
-  getLogger,
-  setLogger,
-  getGlobalLogLevel,
-  setGlobalLogLevel,
-  clearLoggers,
-} from "./internal/logger.ts";
-export type { LogLevel, Logger } from "./types.ts";
-export type { LogEntry } from "./internal/logger.ts";
 export type {
 	AgentArtifact,
 	AgentArtifactRef,
@@ -31,32 +10,51 @@ export type {
 	ArtifactSearchQuery,
 	ArtifactSearchResult,
 } from "./artifacts.ts";
-
+export { createAgentError } from "./errors.ts";
+export { ensureInit, HostError, toolResult, unwrap } from "./init.ts";
+export type { LogEntry } from "./internal/logger.ts";
+export {
+	CallbackLogger,
+	ConsoleLogger,
+	clearLoggers,
+	getGlobalLogLevel,
+	getLogger,
+	NoopLogger,
+	setGlobalLogLevel,
+	setLogger,
+} from "./internal/logger.ts";
+export { anthropic } from "./internal/providers/anthropic.ts";
+export { openai, openaiCompatible } from "./internal/providers/openai.ts";
+export { artifactTools } from "./internal/tools/artifact.ts";
+export { browserTools } from "./internal/tools/browser.ts";
+export { defineModel } from "./model.ts";
+export { httpStore, indexedDbStore, localStorageStore, memoryStore } from "./stores.ts";
+export { defineTools, tool } from "./tools.ts";
 export type {
 	AgentConfig,
+	AgentContentBlock,
+	AgentContextPolicy,
+	AgentError,
+	AgentEventHandler,
+	AgentEventName,
 	AgentInput,
+	AgentMessage,
+	AgentModel,
 	AgentRunOptions,
 	AgentRunResult,
-	AgentEventName,
-	AgentEventHandler,
-	AgentMessage,
-	AgentContentBlock,
-	AgentToolRun,
-	AgentStatus,
-	AgentModel,
-	ModelRequest,
-	ModelResponse,
-	ModelEvent,
-	AgentTools,
-	AgentToolDefinition,
-	AgentStore,
 	AgentSnapshot,
-	AgentContextPolicy,
+	AgentStatus,
+	AgentStore,
 	AgentSummarizer,
 	AgentTelemetry,
-	AgentError,
-	Unsubscribe,
+	AgentToolDefinition,
+	AgentToolRun,
+	AgentTools,
+	Logger,
+	LogLevel,
+	ModelEvent,
+	ModelRequest,
+	ModelResponse,
 	TokenUsage,
+	Unsubscribe,
 } from "./types.ts";
-
-export { createAgentError } from "./errors.ts";

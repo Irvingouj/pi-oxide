@@ -1,6 +1,6 @@
+import { resolve } from "path";
 import { defineConfig } from "vite";
 import dts from "vite-plugin-dts";
-import { resolve } from "path";
 
 export default defineConfig({
 	build: {
@@ -10,11 +10,7 @@ export default defineConfig({
 			fileName: "index",
 		},
 		rollupOptions: {
-			external: [
-				"zod",
-				"zod-to-json-schema",
-				/^node:.*/,
-			],
+			external: ["zod", "zod-to-json-schema", /^node:.*/],
 		},
 		outDir: "dist",
 		emptyOutDir: true,

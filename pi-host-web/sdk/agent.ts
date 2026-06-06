@@ -3,8 +3,8 @@
 
 import { createAgentError } from "./errors.ts";
 import { EventEmitter } from "./events.ts";
-import type { HostAgent } from "./internal/engine.ts";
-import { createEngineAgent, destroyEngineAgent, resetAgentState, runAgentTurn, steerAgent } from "./internal/engine.ts";
+import type { HostAgent } from "./bindings/host-agent.ts";
+import { createEngineAgent, destroyEngineAgent, resetAgentState, runAgentTurn, steerAgent } from "./orchestration/agent-engine.ts";
 import { getLogger } from "./internal/logger.ts";
 import type {
 	AgentConfig,

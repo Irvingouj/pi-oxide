@@ -1,131 +1,98 @@
 # @pi-oxide/pi-host-web
 
-WASM host for [pi-core](https://github.com/pi-oxide/pi-oxide) — a deterministic agent state machine, compiled to WebAssembly for browser and Node.js.
+WASM host for [pi-core](../pi-core) with a three-layer JavaScript API.
 
-## What it is
+## Architecture
 
-This package exposes the `pi-core` agent loop through typed JavaScript APIs. Every function returns a strongly-typed result envelope — never throws. The TypeScript definitions are generated directly from Rust structs via [tsify](https://github.com/madonoharu/tsify).
-
-## Install
-
-```bash
-npm install @pi-oxide/pi-host-web
+```
+Layer 1 — Raw WASM          @pi-oxide/pi-host-web/raw
+Layer 2 — Bindings          @pi-oxide/pi-host-web/bindings
+Layer 3 — High-level SDK    @pi-oxide/pi-host-web
 ```
 
-## Usage
+| Layer | Import | Use when |
+|-------|--------|----------|
+| **Raw WASM** | `@pi-oxide/pi-host-web/raw` | You own the event loop and want direct access to `createHostAgent`, `startTurn`, `hostLlmDone`, etc. |
+| **Bindings** | `@pi-oxide/pi-host-web/bindings` | You want `HostAgent`, directive turn loop, and tool-preparation hooks without the `Agent` class |
+| **SDK** | `@pi-oxide/pi-host-web` | You want `Agent.run()`, providers, tools, and stores — framework-agnostic |
 
-### Browser
+Every WASM function returns a typed result envelope (`{ ok, data?, error? }`) — never throws.
+
+## Quick start (SDK)
 
 ```typescript
-import init, * as wasm from "@pi-oxide/pi-host-web";
+import { Agent, defineModel, memoryStore, ensureInit } from "@pi-oxide/pi-host-web";
 
-// Initialize the WASM module (async, required once)
-await init();
+await ensureInit();
 
-// Create an agent
-const result = wasm.createAgent({
-  system_prompt: "You are a helpful assistant.",
-  model: {
-    id: "claude-sonnet-4-20250514",
-    name: "Claude Sonnet",
-    api: "anthropic",
-    provider: "anthropic",
-    reasoning: false,
-    context_window: 200000,
-    max_tokens: 4096,
-  },
+const agent = new Agent({
+  sessionId: "demo",
+  instructions: "You are a helpful assistant.",
+  model: defineModel({
+    id: "mock",
+    generate: async () => ({
+      content: [{ type: "text", text: "Hello!" }],
+      stopReason: "end",
+    }),
+  }),
+  store: memoryStore(),
 });
 
-const handle = result.data.handle;
-
-// Send a prompt
-const step = wasm.prompt(handle, { text: "Hello!" });
-console.log(step.data.actions);
+const result = await agent.run("Hello");
+console.log(result.text);
+agent.dispose();
 ```
 
-### Node.js
+## Bindings layer (advanced)
 
 ```typescript
-import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { ensureInit, createHostAgentInstance, runTurnWithHostAgent } from "@pi-oxide/pi-host-web/bindings";
 
-const require = createRequire(import.meta.url);
-const pkgDir = dirname(require.resolve("@pi-oxide/pi-host-web/package.json"));
-const wasmPath = join(pkgDir, "pi_host_web_bg.wasm");
-const wasmBytes = readFileSync(wasmPath);
+await ensureInit();
 
-const pkg = await import("@pi-oxide/pi-host-web");
-pkg.initSync({ module: wasmBytes });
+const hostAgent = await createHostAgentInstance({
+  sessionId: "demo",
+  instructions: "You are helpful.",
+  model: { id: "custom", generate: async () => ({ content: [], stopReason: "end" }) },
+});
 
-// Now use pkg.createAgent(), pkg.prompt(), etc.
-const result = pkg.createAgent({ ... });
+await runTurnWithHostAgent(hostAgent, {
+  role: "user",
+  content: [{ type: "text", text: "hi" }],
+  timestamp: Date.now(),
+}, {
+  llm: { call: async (ctx) => ({ chunks: async function* () {}, result: Promise.resolve({ Ok: { /* ... */ } }) }) },
+  tools: {},
+});
+
+hostAgent.destroy();
 ```
 
-## API
-
-### Agent lifecycle
-
-| Function | Input | Returns | Description |
-|----------|-------|---------|-------------|
-| `createAgent(options)` | `AgentOptions` | `CreateAgentResult` | Creates a new agent instance |
-| `destroyAgent(handle)` | `number` | `EmptyResult` | Destroys an agent and frees its slot |
-| `reset(handle)` | `number` | `EmptyResult` | Resets agent state (keeps config) |
-| `state(handle)` | `number` | `StateResult` | Returns current agent state |
-
-### Turn loop
-
-| Function | Input | Returns | Description |
-|----------|-------|---------|-------------|
-| `prompt(handle, request)` | `number`, `PromptRequest` | `StepResult` | Starts a new turn |
-| `feedLlmChunk(handle, chunk)` | `number`, `LlmChunk` | `EventsResult` | Feeds a streaming LLM chunk |
-| `onLlmDone(handle, result)` | `number`, `LlmResult` | `StepResult` | Signals LLM stream completion |
-| `onToolDone(handle, id, payload)` | `number`, `string`, `ToolDonePayload` | `StepResult` | Reports tool execution result |
-| `onToolStarted(handle, id)` | `number`, `string` | `EventsResult` | Signals tool execution started |
-| `onToolUpdate(handle, update)` | `number`, `ToolExecutionUpdate` | `EventsResult` | Streams tool stdout/stderr |
-| `onToolCancelled(handle, id, reason)` | `number`, `string`, `CancelReason` | `StepResult` | Cancels a running tool |
-
-### Context projection
-
-| Function | Input | Returns | Description |
-|----------|-------|---------|-------------|
-| `projectContext(input)` | `ProjectionInput` | `ProjectionResult` | Projects context to fit budget |
-
-### Steering
-
-| Function | Input | Returns | Description |
-|----------|-------|---------|-------------|
-| `steer(handle, message)` | `number`, `AgentMessage` | `EventsResult` | Injects a steering message |
-| `followUp(handle, message)` | `number`, `AgentMessage` | `EmptyResult` | Appends a follow-up message |
-
-### Observability
-
-| Function | Returns | Description |
-|----------|---------|-------------|
-| `drainTraceLog()` | `string[]` | Drains and clears the Rust trace buffer |
-
-## Result envelopes
-
-Every function returns a typed result with this shape:
+## Raw WASM
 
 ```typescript
-interface Result<T> {
-  ok: boolean;
-  data?: T;
-  error?: {
-    code: string;
-    message: string;
-  };
+import init, * as wasm from "@pi-oxide/pi-host-web/raw";
+
+await init();
+
+const { data } = wasm.createHostAgent({ system_prompt: "...", model: { /* ... */ } });
+const step = wasm.startTurn(data.handle, { prompt: { role: "user", content: [...], timestamp: 0 }, tools: [] });
+```
+
+## Tests
+
+- **SDK and bindings:** [`test/`](test/) — run with `npm test` in this directory
+- **React UI:** [`../web/test/react/`](../web/test/react/) — run with `npm test` in `web/`
+
+## Package exports
+
+```json
+{
+  ".": "./dist/index.js",
+  "./bindings": "./dist/sdk/bindings/index.js",
+  "./raw": "./pi_host_web.js"
 }
 ```
-
-Concrete types: `CreateAgentResult`, `StepResult`, `EventsResult`, `StateResult`, `EmptyResult`, `ProjectionResult`.
-
-## Files
-
-- `pi_host_web.js` — Main ESM entry point
-- `pi_host_web_bg.wasm` — Compiled WebAssembly binary
-- `pi_host_web.d.ts` — TypeScript declarations (generated from Rust)
 
 ## License
 

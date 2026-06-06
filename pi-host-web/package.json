@@ -6,7 +6,7 @@
 	"scripts": {
 		"build": "vite build",
 		"build:pkg": "vite build && node scripts/build-pkg.js",
-		"test": "node --experimental-strip-types --test test/*.test.ts"
+		"test": "node --experimental-strip-types --test test/**/*.test.ts"
 	},
 	"dependencies": {
 		"zod": "^3.24.0",

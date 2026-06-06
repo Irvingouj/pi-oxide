@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn convert_actions_to_directives(
+pub fn convert_actions_to_directives(
     actions: Vec<pi_core::AgentAction>,
 ) -> Result<Vec<HostDirective>, serde_json::Error> {
     let mut directives = Vec::new();

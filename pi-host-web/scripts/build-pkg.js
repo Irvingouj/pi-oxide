@@ -94,6 +94,10 @@ pkg.exports = {
 		import: "./dist/index.js",
 		types: "./dist/index.d.ts",
 	},
+	"./bindings": {
+		import: "./dist/sdk/bindings/index.js",
+		types: "./dist/sdk/bindings/index.d.ts",
+	},
 	"./raw": {
 		import: "./pi_host_web.js",
 		types: "./pi_host_web.d.ts",

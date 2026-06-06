@@ -255,4 +255,137 @@ mod tests {
         assert_eq!(state.system_prompt, "restored-prompt");
         assert_eq!(state.compaction_prompt, "restored-compaction");
     }
+
+    #[test]
+    fn sync_artifacts_from_core_guard() {
+        let mut state = HostState::new("sp".to_string(), "cp".to_string());
+        state.store_artifact("old-id".to_string(), "existing text".to_string());
+
+        let mut core_artifacts = pi_core::Artifacts::new();
+        core_artifacts.insert(
+            "old-id".to_string(),
+            pi_core::OriginalToolResult {
+                entry_id: "old-id".to_string(),
+                tool_call_id: pi_core::ToolCallId::new("tc1"),
+                tool_name: pi_core::ToolName::new("bash"),
+                content: vec![pi_core::Content::Text(pi_core::TextContent {
+                    text: "new text".to_string(),
+                })],
+                is_error: false,
+                turn: 1,
+            },
+        );
+        core_artifacts.insert(
+            "new-id".to_string(),
+            pi_core::OriginalToolResult {
+                entry_id: "new-id".to_string(),
+                tool_call_id: pi_core::ToolCallId::new("tc2"),
+                tool_name: pi_core::ToolName::new("bash"),
+                content: vec![pi_core::Content::Text(pi_core::TextContent {
+                    text: "new artifact".to_string(),
+                })],
+                is_error: false,
+                turn: 1,
+            },
+        );
+
+        state.sync_artifacts_from_core(
+            &core_artifacts,
+            &["old-id".to_string(), "new-id".to_string()],
+        );
+
+        assert_eq!(
+            state.read_artifact("old-id"),
+            Some("existing text"),
+            "old-id should NOT be overwritten"
+        );
+        assert_eq!(
+            state.read_artifact("new-id"),
+            Some("new artifact"),
+            "new-id should be inserted"
+        );
+    }
+
+    #[test]
+    fn sync_missing_artifacts_from_core() {
+        let mut state = HostState::new("sp".to_string(), "cp".to_string());
+        state.store_artifact("existing".to_string(), "existing text".to_string());
+
+        let mut core_artifacts = pi_core::Artifacts::new();
+        core_artifacts.insert(
+            "existing".to_string(),
+            pi_core::OriginalToolResult {
+                entry_id: "existing".to_string(),
+                tool_call_id: pi_core::ToolCallId::new("tc1"),
+                tool_name: pi_core::ToolName::new("bash"),
+                content: vec![pi_core::Content::Text(pi_core::TextContent {
+                    text: "new text".to_string(),
+                })],
+                is_error: false,
+                turn: 1,
+            },
+        );
+        core_artifacts.insert(
+            "missing".to_string(),
+            pi_core::OriginalToolResult {
+                entry_id: "missing".to_string(),
+                tool_call_id: pi_core::ToolCallId::new("tc2"),
+                tool_name: pi_core::ToolName::new("bash"),
+                content: vec![pi_core::Content::Text(pi_core::TextContent {
+                    text: "missing text".to_string(),
+                })],
+                is_error: false,
+                turn: 1,
+            },
+        );
+
+        state.sync_missing_artifacts_from_core(&core_artifacts);
+
+        assert_eq!(
+            state.read_artifact("existing"),
+            Some("existing text"),
+            "existing should be unchanged"
+        );
+        assert_eq!(
+            state.read_artifact("missing"),
+            Some("missing text"),
+            "missing should be inserted"
+        );
+    }
+
+    #[test]
+    fn extract_text_from_tool_result_all_variants() {
+        let original = pi_core::OriginalToolResult {
+            entry_id: "entry-1".to_string(),
+            tool_call_id: pi_core::ToolCallId::new("tc1"),
+            tool_name: pi_core::ToolName::new("bash"),
+            content: vec![
+                pi_core::Content::Text(pi_core::TextContent {
+                    text: "actual text".to_string(),
+                }),
+                pi_core::Content::Image(pi_core::ImageContent {
+                    media_type: "image/png".to_string(),
+                    data: "base64data".to_string(),
+                }),
+                pi_core::Content::ToolCall(pi_core::ToolCall {
+                    id: pi_core::ToolCallId::new("tc2"),
+                    name: pi_core::ToolName::new("read"),
+                    arguments: pi_core::ToolArguments(serde_json::json!({})),
+                }),
+            ],
+            is_error: false,
+            turn: 1,
+        };
+
+        let text = super::extract_text_from_tool_result(&original);
+        assert!(text.contains("actual text"), "should contain actual text");
+        assert!(
+            text.contains("[image: image/png]"),
+            "should contain image placeholder"
+        );
+        assert!(
+            text.contains("[tool_call: read]"),
+            "should contain tool_call placeholder"
+        );
+    }
 }

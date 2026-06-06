@@ -1,49 +1,5 @@
-use super::*;
-use crate::host_agent_api::{
-    create_host_agent, destroy_host_agent, get_host_agent_persist_data, host_accept_compaction,
-    host_continue_turn, host_llm_done, host_prepare_tool_calls, host_steer, host_tool_cancelled,
-    host_tool_done, restore_host_agent, start_turn,
-};
-use crate::host_state_api::{
-    destroy_host_state, estimate_tokens_export, estimate_tokens_for_text_export,
-    get_host_state_persist_data, restore_host_state, restore_host_state_from_json,
-};
-
-fn dummy_options() -> AgentOptions {
-    AgentOptions {
-        system_prompt: "test agent".to_string(),
-        model: Model {
-            id: ModelId("test-model".to_string()),
-            name: ModelName("Test".to_string()),
-            api: ApiName("test".to_string()),
-            provider: ProviderName("test".to_string()),
-            base_url: None,
-            reasoning: false,
-            context_window: 4096,
-            max_tokens: 1024,
-            capabilities: Default::default(),
-            cost: Default::default(),
-        },
-        thinking_level: Default::default(),
-        steering_mode: Default::default(),
-        follow_up_mode: Default::default(),
-        tool_execution_mode: Default::default(),
-        session_id: None,
-    }
-}
-
-#[test]
-fn empty_result_serialize() {
-    let r = EmptyResult {
-        ok: true,
-        data: Some(()),
-        error: None,
-    };
-    let json = serde_json::to_string(&r).unwrap();
-    println!("EmptyResult JSON: {}", json);
-    assert!(json.contains("\"ok\":true"));
-    assert!(json.contains("\"data\":null"));
-}
+mod common;
+use common::*;
 
 #[test]
 fn estimate_tokens_returns_value() {
@@ -60,76 +16,12 @@ fn estimate_tokens_returns_value() {
     assert_eq!(resp.data.unwrap().tokens, 3); // (11 + 3) / 4 = 3.5 -> 3
 }
 
+
 #[test]
 fn estimate_tokens_for_text_returns_value() {
     let resp = estimate_tokens_for_text_export("hello".to_string());
     assert!(resp.ok);
     assert_eq!(resp.data.unwrap().tokens, 2); // (5 + 3) / 4 = 2
-}
-
-// -----------------------------------------------------------------------
-// Phase 4 — HostAgent directive tests
-// -----------------------------------------------------------------------
-
-fn default_budget() -> ContextProjectionBudget {
-    ContextProjectionBudget {
-        max_tool_result_chars: 50000,
-        max_context_tokens: 100000,
-        microcompact_after_turns: 5,
-        compaction_threshold: 0.75,
-    }
-}
-
-fn make_tool_def(name: &str) -> ToolDefinition {
-    ToolDefinition {
-        name: ToolName(name.to_string()),
-        label: "Test".to_string(),
-        description: "A test tool.".to_string(),
-        parameters: JsonSchema(serde_json::json!({})),
-        execution_mode: Default::default(),
-        tool_run_mode: Default::default(),
-    }
-}
-
-fn make_user_prompt(text: &str) -> AgentMessage {
-    AgentMessage::User(UserMessage {
-        content: vec![Content::Text(TextContent {
-            text: text.to_string(),
-        })],
-        timestamp: 1,
-    })
-}
-
-fn make_assistant_text(text: &str) -> AssistantMessage {
-    AssistantMessage {
-        content: vec![Content::Text(TextContent {
-            text: text.to_string(),
-        })],
-        api: ApiName("test".to_string()),
-        provider: ProviderName("test".to_string()),
-        model: ModelId("test".to_string()),
-        stop_reason: StopReason::EndTurn,
-        error_message: None,
-        timestamp: 1,
-        usage: TokenUsage::default(),
-    }
-}
-
-fn make_assistant_with_tool(name: &str, id: &str) -> AssistantMessage {
-    AssistantMessage {
-        content: vec![Content::ToolCall(ToolCall {
-            id: ToolCallId(id.to_string()),
-            name: ToolName(name.to_string()),
-            arguments: ToolArguments(serde_json::json!({})),
-        })],
-        api: ApiName("test".to_string()),
-        provider: ProviderName("test".to_string()),
-        model: ModelId("test".to_string()),
-        stop_reason: StopReason::ToolUse,
-        error_message: None,
-        timestamp: 1,
-        usage: TokenUsage::default(),
-    }
 }
 
 #[test]
@@ -161,6 +53,7 @@ fn directive_stream_llm_has_projected_messages() {
     );
     destroy_host_agent(handle);
 }
+
 
 #[test]
 fn directive_execute_tools_after_llm() {
@@ -204,6 +97,7 @@ fn directive_execute_tools_after_llm() {
     destroy_host_agent(handle);
 }
 
+
 #[test]
 fn directive_finished_after_no_tools() {
     let resp = create_host_agent(dummy_options(), default_budget());
@@ -229,6 +123,7 @@ fn directive_finished_after_no_tools() {
     );
     destroy_host_agent(handle);
 }
+
 
 #[test]
 fn directive_persist_after_entry_append() {
@@ -262,6 +157,7 @@ fn directive_persist_after_entry_append() {
     destroy_host_agent(handle);
 }
 
+
 #[test]
 fn low_budget_turn_succeeds() {
     let budget = ContextProjectionBudget {
@@ -284,6 +180,7 @@ fn low_budget_turn_succeeds() {
     destroy_host_agent(handle);
 }
 
+
 #[test]
 fn directive_cancel_tools() {
     // CancelTools is not yet produced by the current AgentRuntime, so we
@@ -292,7 +189,7 @@ fn directive_cancel_tools() {
         tool_call_ids: vec![pi_core::ToolCallId::new("tc-1")],
         reason: pi_core::CancelReason::UserRequested,
     }];
-    let directives = super::convert_actions_to_directives(core_actions).unwrap();
+    let directives = pi_host_web::directive::convert_actions_to_directives(core_actions).unwrap();
     assert!(
         directives
             .iter()
@@ -301,6 +198,7 @@ fn directive_cancel_tools() {
     );
 }
 
+
 #[test]
 fn directive_wait_for_input() {
     // WaitForInput is not yet produced by the current AgentRuntime in the
@@ -308,7 +206,7 @@ fn directive_wait_for_input() {
     let core_actions = vec![pi_core::AgentAction::WaitForInput {
         mode: pi_core::WaitMode::Any,
     }];
-    let directives = super::convert_actions_to_directives(core_actions).unwrap();
+    let directives = pi_host_web::directive::convert_actions_to_directives(core_actions).unwrap();
     assert!(
         directives
             .iter()
@@ -316,6 +214,7 @@ fn directive_wait_for_input() {
         "should convert WaitForInput action to directive"
     );
 }
+
 
 #[test]
 fn full_turn_directive_sequence() {
@@ -394,6 +293,7 @@ fn full_turn_directive_sequence() {
     destroy_host_agent(handle);
 }
 
+
 #[test]
 fn multi_turn_directive_sequence() {
     let resp = create_host_agent(dummy_options(), default_budget());
@@ -440,6 +340,7 @@ fn multi_turn_directive_sequence() {
     destroy_host_agent(handle);
 }
 
+
 #[test]
 fn turn_then_finish_with_low_budget() {
     let budget = ContextProjectionBudget {
@@ -477,6 +378,7 @@ fn turn_then_finish_with_low_budget() {
     destroy_host_agent(handle);
 }
 
+
 #[test]
 fn events_still_emitted_alongside_directives() {
     let resp = create_host_agent(dummy_options(), default_budget());
@@ -501,6 +403,7 @@ fn events_still_emitted_alongside_directives() {
         .any(|d| matches!(d, HostDirective::StreamLlm { .. })));
     destroy_host_agent(handle);
 }
+
 
 #[test]
 fn steering_during_stream_produces_directives() {
@@ -529,123 +432,19 @@ fn steering_during_stream_produces_directives() {
 // Phase 6 — DTO and SDK Update
 // -----------------------------------------------------------------------
 
-#[test]
-fn dto_host_directive_serialize() {
-    let stream = HostDirective::StreamLlm {
-        context: LlmContext {
-            system_prompt: "test".to_string(),
-            messages: vec![],
-            tools: vec![],
-        },
-    };
-    let json = serde_json::to_string(&stream).unwrap();
-    assert!(
-        json.contains("stream_llm"),
-        "StreamLlm should serialize with tag"
-    );
-
-    let execute = HostDirective::ExecuteTools {
-        calls: vec![ToolCall {
-            id: ToolCallId("tc-1".to_string()),
-            name: ToolName("read".to_string()),
-            arguments: ToolArguments(serde_json::json!({})),
-        }],
-    };
-    let json = serde_json::to_string(&execute).unwrap();
-    assert!(
-        json.contains("execute_tools"),
-        "ExecuteTools should serialize with tag"
-    );
-
-    let cancel = HostDirective::CancelTools {
-        tool_call_ids: vec![ToolCallId("tc-1".to_string())],
-        reason: CancelReason::UserRequested,
-    };
-    let json = serde_json::to_string(&cancel).unwrap();
-    assert!(
-        json.contains("cancel_tools"),
-        "CancelTools should serialize with tag"
-    );
-
-    let persist = HostDirective::Persist;
-    let json = serde_json::to_string(&persist).unwrap();
-    assert!(
-        json.contains("persist"),
-        "Persist should serialize with tag"
-    );
-
-    let finished = HostDirective::Finished;
-    let json = serde_json::to_string(&finished).unwrap();
-    assert!(
-        json.contains("finished"),
-        "Finished should serialize with tag"
-    );
-
-    let wait = HostDirective::WaitForInput {
-        mode: WaitMode::Any,
-    };
-    let json = serde_json::to_string(&wait).unwrap();
-    assert!(
-        json.contains("wait_for_input"),
-        "WaitForInput should serialize with tag"
-    );
-}
-
-#[test]
-fn dto_turn_result_structure() {
-    let result = TurnResultResult {
-        ok: true,
-        data: Some(TurnResultOutput {
-            events: vec![AgentEvent::AgentStart],
-            directives: vec![HostDirective::Persist],
-            markers: vec![],
-        }),
-        error: None,
-    };
-    let json = serde_json::to_string(&result).unwrap();
-    assert!(json.contains("\"ok\":true"));
-    assert!(json.contains("events"));
-    assert!(json.contains("directives"));
-}
-
-#[test]
-fn dto_persist_data_structure() {
-    let data = PersistData {
-        transcript: serde_json::Value::Array(vec![]),
-        artifacts: serde_json::Value::Object(serde_json::Map::new()),
-        turn_number: 1,
-        host_artifacts: vec![("a1".to_string(), "hello".to_string())],
-        budget: ContextProjectionBudget::default(),
-        system_prompt: "You are helpful.".to_string(),
-        compaction_prompt: "Summarize.".to_string(),
-    };
-    let json = serde_json::to_string(&data).unwrap();
-    assert!(json.contains("host_artifacts"));
-    assert!(json.contains("budget"));
-    assert!(json.contains("system_prompt"));
-    assert!(json.contains("turn_number"));
-}
-
-#[test]
-fn dto_persist_data_roundtrip() {
-    let original = PersistData {
-        transcript: serde_json::Value::Array(vec![]),
-        artifacts: serde_json::Value::Object(serde_json::Map::new()),
-        turn_number: 2,
-        host_artifacts: vec![("a1".to_string(), "hello".to_string())],
-        budget: ContextProjectionBudget::default(),
-        system_prompt: "You are helpful.".to_string(),
-        compaction_prompt: "Summarize.".to_string(),
-    };
-    let json = serde_json::to_string(&original).unwrap();
-    let back: PersistData = serde_json::from_str(&json).unwrap();
-    assert_eq!(original, back);
-}
 
 #[test]
 fn get_host_state_persist_data_roundtrip() {
-    let state = HostState::new("You are helpful.".to_string(), "Summarize.".to_string());
-    let handle = put_host_state(state);
+    let seed = PersistData {
+        transcript: serde_json::Value::Array(vec![]),
+        artifacts: serde_json::Value::Object(serde_json::Map::new()),
+        turn_number: 0,
+        host_artifacts: vec![],
+        budget: default_budget(),
+        system_prompt: "You are helpful.".to_string(),
+        compaction_prompt: "Summarize.".to_string(),
+    };
+    let handle = restore_host_state(seed).data.unwrap().handle;
 
     let resp = get_host_state_persist_data(handle);
     assert!(resp.ok);
@@ -669,6 +468,7 @@ fn get_host_state_persist_data_roundtrip() {
 // Phase 7 — Session Migration
 // -----------------------------------------------------------------------
 
+
 #[test]
 fn migrate_old_session_extracts_projection() {
     // Old format with projection_state is no longer recognized by new PersistData format.
@@ -683,6 +483,7 @@ fn migrate_old_session_extracts_projection() {
     let resp = restore_host_state_from_json(old_json.to_string());
     assert!(!resp.ok, "old format with projection_state should fail");
 }
+
 
 #[test]
 fn migrate_new_session_noop() {
@@ -710,6 +511,7 @@ fn migrate_new_session_noop() {
     );
     destroy_host_state(handle);
 }
+
 
 #[test]
 fn roundtrip_persist_data() {
@@ -755,138 +557,6 @@ fn roundtrip_persist_data() {
 // Phase 8 — Marker and artifact sync verification
 // -----------------------------------------------------------------------
 
-#[test]
-fn sync_artifacts_from_core_guard() {
-    let mut state = HostState::new("sp".to_string(), "cp".to_string());
-    state.store_artifact("old-id".to_string(), "existing text".to_string());
-
-    let mut core_artifacts = pi_core::Artifacts::new();
-    core_artifacts.insert(
-        "old-id".to_string(),
-        pi_core::OriginalToolResult {
-            entry_id: "old-id".to_string(),
-            tool_call_id: pi_core::ToolCallId::new("tc1"),
-            tool_name: pi_core::ToolName::new("bash"),
-            content: vec![pi_core::Content::Text(pi_core::TextContent {
-                text: "new text".to_string(),
-            })],
-            is_error: false,
-            turn: 1,
-        },
-    );
-    core_artifacts.insert(
-        "new-id".to_string(),
-        pi_core::OriginalToolResult {
-            entry_id: "new-id".to_string(),
-            tool_call_id: pi_core::ToolCallId::new("tc2"),
-            tool_name: pi_core::ToolName::new("bash"),
-            content: vec![pi_core::Content::Text(pi_core::TextContent {
-                text: "new artifact".to_string(),
-            })],
-            is_error: false,
-            turn: 1,
-        },
-    );
-
-    state.sync_artifacts_from_core(
-        &core_artifacts,
-        &["old-id".to_string(), "new-id".to_string()],
-    );
-
-    assert_eq!(
-        state.read_artifact("old-id"),
-        Some("existing text"),
-        "old-id should NOT be overwritten"
-    );
-    assert_eq!(
-        state.read_artifact("new-id"),
-        Some("new artifact"),
-        "new-id should be inserted"
-    );
-}
-
-#[test]
-fn sync_missing_artifacts_from_core() {
-    let mut state = HostState::new("sp".to_string(), "cp".to_string());
-    state.store_artifact("existing".to_string(), "existing text".to_string());
-
-    let mut core_artifacts = pi_core::Artifacts::new();
-    core_artifacts.insert(
-        "existing".to_string(),
-        pi_core::OriginalToolResult {
-            entry_id: "existing".to_string(),
-            tool_call_id: pi_core::ToolCallId::new("tc1"),
-            tool_name: pi_core::ToolName::new("bash"),
-            content: vec![pi_core::Content::Text(pi_core::TextContent {
-                text: "new text".to_string(),
-            })],
-            is_error: false,
-            turn: 1,
-        },
-    );
-    core_artifacts.insert(
-        "missing".to_string(),
-        pi_core::OriginalToolResult {
-            entry_id: "missing".to_string(),
-            tool_call_id: pi_core::ToolCallId::new("tc2"),
-            tool_name: pi_core::ToolName::new("bash"),
-            content: vec![pi_core::Content::Text(pi_core::TextContent {
-                text: "missing text".to_string(),
-            })],
-            is_error: false,
-            turn: 1,
-        },
-    );
-
-    state.sync_missing_artifacts_from_core(&core_artifacts);
-
-    assert_eq!(
-        state.read_artifact("existing"),
-        Some("existing text"),
-        "existing should be unchanged"
-    );
-    assert_eq!(
-        state.read_artifact("missing"),
-        Some("missing text"),
-        "missing should be inserted"
-    );
-}
-
-#[test]
-fn extract_text_from_tool_result_all_variants() {
-    let original = pi_core::OriginalToolResult {
-        entry_id: "entry-1".to_string(),
-        tool_call_id: pi_core::ToolCallId::new("tc1"),
-        tool_name: pi_core::ToolName::new("bash"),
-        content: vec![
-            pi_core::Content::Text(pi_core::TextContent {
-                text: "actual text".to_string(),
-            }),
-            pi_core::Content::Image(pi_core::ImageContent {
-                media_type: "image/png".to_string(),
-                data: "base64data".to_string(),
-            }),
-            pi_core::Content::ToolCall(pi_core::ToolCall {
-                id: pi_core::ToolCallId::new("tc2"),
-                name: pi_core::ToolName::new("read"),
-                arguments: pi_core::ToolArguments(serde_json::json!({})),
-            }),
-        ],
-        is_error: false,
-        turn: 1,
-    };
-
-    let text = crate::host_state::extract_text_from_tool_result(&original);
-    assert!(text.contains("actual text"), "should contain actual text");
-    assert!(
-        text.contains("[image: image/png]"),
-        "should contain image placeholder"
-    );
-    assert!(
-        text.contains("[tool_call: read]"),
-        "should contain tool_call placeholder"
-    );
-}
 
 #[test]
 fn marker_processing_in_start_turn() {
@@ -916,6 +586,7 @@ fn marker_processing_in_start_turn() {
 
     destroy_host_agent(handle);
 }
+
 
 #[test]
 fn marker_processing_in_host_llm_done() {
@@ -976,6 +647,7 @@ fn marker_processing_in_host_llm_done() {
 
     destroy_host_agent(handle);
 }
+
 
 #[test]
 fn restore_syncs_missing_only() {
@@ -1051,6 +723,7 @@ fn restore_syncs_missing_only() {
 
     destroy_host_agent(handle);
 }
+
 
 #[test]
 fn compaction_marker_emission() {
@@ -1152,24 +825,6 @@ fn compaction_marker_emission() {
     destroy_host_agent(handle);
 }
 
-#[test]
-fn change_marker_dto_roundtrip() {
-    let markers = vec![
-        ChangeMarkerDto::CompactionApplied,
-        ChangeMarkerDto::NewArtifacts {
-            entry_ids: vec!["entry-1".to_string(), "entry-2".to_string()],
-        },
-    ];
-
-    let json = serde_json::to_string(&markers).unwrap();
-    let back: Vec<ChangeMarkerDto> = serde_json::from_str(&json).unwrap();
-
-    assert_eq!(markers, back);
-    assert!(matches!(back[0], ChangeMarkerDto::CompactionApplied));
-    assert!(
-        matches!(&back[1], ChangeMarkerDto::NewArtifacts { entry_ids } if entry_ids == &["entry-1", "entry-2"])
-    );
-}
 
 #[test]
 fn marker_processing_in_host_tool_done() {
@@ -1243,6 +898,7 @@ fn marker_processing_in_host_tool_done() {
     destroy_host_agent(handle);
 }
 
+
 #[test]
 fn marker_processing_in_host_continue_turn() {
     // Create agent
@@ -1312,6 +968,7 @@ fn marker_processing_in_host_continue_turn() {
     destroy_host_agent(handle);
 }
 
+
 #[test]
 fn marker_processing_in_host_tool_cancelled() {
     // Create agent
@@ -1377,3 +1034,4 @@ fn marker_processing_in_host_tool_cancelled() {
 
     destroy_host_agent(handle);
 }
+

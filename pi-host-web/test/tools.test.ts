@@ -2,6 +2,7 @@ import assert from "node:assert";
 import { describe, it } from "node:test";
 import { z } from "zod";
 import { ToolRegistryBuilder } from "../sdk/internal/tools/registry.ts";
+import { artifactTools } from "../sdk/internal/tools/artifact.ts";
 import { defineTools, tool } from "../sdk/tools.ts";
 
 describe("SDK Tool API", () => {
@@ -208,6 +209,21 @@ describe("SDK Tool API", () => {
 			assert.equal(llmTools.length, 1);
 			assert.equal(llmTools[0].name, "schemaTest");
 			assert.ok(typeof llmTools[0].parameters === "object");
+		});
+	});
+
+	describe("artifactTools", () => {
+		it("returns artifact tool definitions", () => {
+			const tools = artifactTools();
+
+			assert.equal(tools.definitions.length, 2);
+			assert.ok(tools.definitions.some((d) => d.name === "artifact_read"));
+			assert.ok(tools.definitions.some((d) => d.name === "artifact_search"));
+		});
+
+		it("getHandler returns null (handlers wired at build time)", () => {
+			const tools = artifactTools();
+			assert.strictEqual(tools.getHandler("artifact_read"), null);
 		});
 	});
 });

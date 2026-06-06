@@ -13,7 +13,7 @@ use tracing_subscriber::layer::SubscriberExt;
 #[allow(unused_imports)]
 use tracing_subscriber::util::SubscriberInitExt;
 
-mod dto;
+pub mod dto;
 pub(crate) use dto::*;
 
 mod host_state;
@@ -22,14 +22,14 @@ pub use host_state::{ArtifactSearchResult, HostState};
 mod handle_table;
 pub(crate) use handle_table::*;
 
-mod directive;
+pub mod directive;
 pub(crate) use directive::*;
 
-mod host_state_api;
+pub mod host_state_api;
 
-mod host_agent_api;
+pub mod host_agent_api;
 
-mod artifact_api;
+pub mod artifact_api;
 
 pub(crate) use pi_core::AgentRuntime;
 pub(crate) use tracing::info;
@@ -163,6 +163,3 @@ pub(crate) fn runtime_phase_name(runtime: &AgentRuntime) -> &'static str {
         AgentRuntime::Aborted(_) => "Aborted",
     }
 }
-
-#[cfg(test)]
-mod tests;

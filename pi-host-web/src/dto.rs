@@ -842,3 +842,155 @@ dto_conv!(AgentOptions, pi_core::AgentOptions);
 dto_conv!(ChangeMarkerDto, pi_core::ChangeMarker);
 
 dto_conv!(PersistData, crate::host_state::PersistData);
+
+#[cfg(test)]
+mod dto_tests {
+    use super::*;
+    use crate::AgentEvent;
+
+    #[test]
+    fn empty_result_serialize() {
+        let r = EmptyResult {
+            ok: true,
+            data: Some(()),
+            error: None,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        println!("EmptyResult JSON: {}", json);
+        assert!(json.contains("\"ok\":true"));
+        assert!(json.contains("\"data\":null"));
+    }
+
+    #[test]
+    fn dto_host_directive_serialize() {
+        let stream = HostDirective::StreamLlm {
+            context: LlmContext {
+                system_prompt: "test".to_string(),
+                messages: vec![],
+                tools: vec![],
+            },
+        };
+        let json = serde_json::to_string(&stream).unwrap();
+        assert!(
+            json.contains("stream_llm"),
+            "StreamLlm should serialize with tag"
+        );
+    
+        let execute = HostDirective::ExecuteTools {
+            calls: vec![ToolCall {
+                id: ToolCallId("tc-1".to_string()),
+                name: ToolName("read".to_string()),
+                arguments: ToolArguments(serde_json::json!({})),
+            }],
+        };
+        let json = serde_json::to_string(&execute).unwrap();
+        assert!(
+            json.contains("execute_tools"),
+            "ExecuteTools should serialize with tag"
+        );
+    
+        let cancel = HostDirective::CancelTools {
+            tool_call_ids: vec![ToolCallId("tc-1".to_string())],
+            reason: CancelReason::UserRequested,
+        };
+        let json = serde_json::to_string(&cancel).unwrap();
+        assert!(
+            json.contains("cancel_tools"),
+            "CancelTools should serialize with tag"
+        );
+    
+        let persist = HostDirective::Persist;
+        let json = serde_json::to_string(&persist).unwrap();
+        assert!(
+            json.contains("persist"),
+            "Persist should serialize with tag"
+        );
+    
+        let finished = HostDirective::Finished;
+        let json = serde_json::to_string(&finished).unwrap();
+        assert!(
+            json.contains("finished"),
+            "Finished should serialize with tag"
+        );
+    
+        let wait = HostDirective::WaitForInput {
+            mode: WaitMode::Any,
+        };
+        let json = serde_json::to_string(&wait).unwrap();
+        assert!(
+            json.contains("wait_for_input"),
+            "WaitForInput should serialize with tag"
+        );
+    }
+
+    #[test]
+    fn dto_turn_result_structure() {
+        let result = TurnResultResult {
+            ok: true,
+            data: Some(TurnResultOutput {
+                events: vec![AgentEvent::AgentStart],
+                directives: vec![HostDirective::Persist],
+                markers: vec![],
+            }),
+            error: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"ok\":true"));
+        assert!(json.contains("events"));
+        assert!(json.contains("directives"));
+    }
+
+    #[test]
+    fn dto_persist_data_structure() {
+        let data = PersistData {
+            transcript: serde_json::Value::Array(vec![]),
+            artifacts: serde_json::Value::Object(serde_json::Map::new()),
+            turn_number: 1,
+            host_artifacts: vec![("a1".to_string(), "hello".to_string())],
+            budget: ContextProjectionBudget::default(),
+            system_prompt: "You are helpful.".to_string(),
+            compaction_prompt: "Summarize.".to_string(),
+        };
+        let json = serde_json::to_string(&data).unwrap();
+        assert!(json.contains("host_artifacts"));
+        assert!(json.contains("budget"));
+        assert!(json.contains("system_prompt"));
+        assert!(json.contains("turn_number"));
+    }
+
+    #[test]
+    fn dto_persist_data_roundtrip() {
+        let original = PersistData {
+            transcript: serde_json::Value::Array(vec![]),
+            artifacts: serde_json::Value::Object(serde_json::Map::new()),
+            turn_number: 2,
+            host_artifacts: vec![("a1".to_string(), "hello".to_string())],
+            budget: ContextProjectionBudget::default(),
+            system_prompt: "You are helpful.".to_string(),
+            compaction_prompt: "Summarize.".to_string(),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let back: PersistData = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, back);
+    }
+
+    #[test]
+    fn change_marker_dto_roundtrip() {
+        let markers = vec![
+            ChangeMarkerDto::CompactionApplied,
+            ChangeMarkerDto::NewArtifacts {
+                entry_ids: vec!["entry-1".to_string(), "entry-2".to_string()],
+            },
+        ];
+    
+        let json = serde_json::to_string(&markers).unwrap();
+        let back: Vec<ChangeMarkerDto> = serde_json::from_str(&json).unwrap();
+    
+        assert_eq!(markers, back);
+        assert!(matches!(back[0], ChangeMarkerDto::CompactionApplied));
+        assert!(
+            matches!(&back[1], ChangeMarkerDto::NewArtifacts { entry_ids } if entry_ids == &["entry-1", "entry-2"])
+        );
+    }
+
+}

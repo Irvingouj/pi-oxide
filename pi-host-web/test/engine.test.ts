@@ -3,13 +3,9 @@ import { describe, it } from "node:test";
 import type { AgentConfig, Content, LlmContext, ToolCall, ToolResult } from "../pi_host_web.js";
 import { hostLlmDone, hostPrepareToolCalls, startTurn } from "../pi_host_web.js";
 import { ensureInit } from "../sdk/init.ts";
-import {
-	type AgentRunConfig,
-	createHostAgentInstance,
-	destroyEngineAgent,
-	type LlmStream,
-	runTurnWithHostAgent,
-} from "../sdk/internal/engine.ts";
+import type { AgentRunConfig, LlmStream } from "../sdk/bindings/types.ts";
+import { createHostAgentInstance, runTurnWithHostAgent } from "../sdk/bindings/index.ts";
+import { destroyEngineAgent } from "../sdk/orchestration/agent-engine.ts";
 
 await ensureInit();
 

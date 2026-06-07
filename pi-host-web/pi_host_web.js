@@ -685,4 +685,4 @@ async function __wbg_init(module_or_path) {
     return __wbg_finalize_init(instance, module);
 }
 
-export { __wbg_init as default, initSync };
+export { initSync, __wbg_init as default };

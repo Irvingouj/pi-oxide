@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-06-07
+
+### Fixed
+
+- Rebuilt and synchronized the checked-in WASM bindings so the web SDK uses the current `PreToolCall` and `ExecutingTools` state machine instead of the stale `WaitingTools` implementation.
+- Consecutive tool-call rounds no longer stop after the second preparation request.
+
+### Added
+
+- End-to-end SDK regression coverage for two consecutive tool-call rounds followed by a final LLM response.
+
+### Changed
+
+- Workspace version bumped to `0.4.0`.
+- `@pi-oxide/pi-host-web` SDK version bumped to `0.9.0`.
+- `pi-oxide-web` version bumped to `0.6.0`.
+
 ## [0.3.0] - 2026-06-06
 
 ### Added

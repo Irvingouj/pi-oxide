@@ -361,7 +361,6 @@ export interface InitOutput {
     readonly hostSearchArtifacts: (a: number, b: number, c: number) => [number, number, number];
     readonly restoreHostState: (a: any) => any;
     readonly restoreHostStateFromJson: (a: number, b: number) => any;
-    readonly setLogLevel: (a: number, b: number) => void;
     readonly createHostAgent: (a: any, b: any) => any;
     readonly destroyHostAgent: (a: number) => any;
     readonly getHostAgentPersistData: (a: number) => any;
@@ -378,6 +377,7 @@ export interface InitOutput {
     readonly hostToolFailed: (a: number, b: any, c: any) => any;
     readonly restoreHostAgent: (a: any, b: any) => any;
     readonly startTurn: (a: number, b: any) => any;
+    readonly setLogLevel: (a: number, b: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;

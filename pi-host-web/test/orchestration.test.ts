@@ -330,6 +330,54 @@ describe("Engine", () => {
 	});
 
 	describe("TM-44: prepareToolCalls engine integration", () => {
+		it("executes consecutive tool-call rounds with default preparation", async () => {
+			let modelCalls = 0;
+			const responses: MockResponse[] = [
+				{
+					content: [{ type: "tool_call", id: "tc-1", name: "test_tool", arguments: {} }],
+					stopReason: "tool_call",
+				},
+				{
+					content: [{ type: "tool_call", id: "tc-2", name: "test_tool", arguments: {} }],
+					stopReason: "tool_call",
+				},
+				{ content: [{ type: "text", text: "done" }], stopReason: "end" },
+			];
+			const model = defineModel({
+				id: "mock-model",
+				contextWindow: 128000,
+				maxTokens: 4096,
+				capabilities: { vision: true, jsonMode: true, functionCalling: true, streaming: true },
+				generate: async () => {
+					const response = responses[Math.min(modelCalls++, responses.length - 1)];
+					return response;
+				},
+			});
+			const config: AgentConfig = {
+				sessionId: "prep-multi-round-session",
+				model,
+				tools: testTools,
+			};
+			const hostAgent = await createEngineAgent(config, {
+				onEvent: () => {},
+				onStatus: () => {},
+			});
+			const completedToolIds: string[] = [];
+
+			await runAgentTurn(hostAgent, config, "use tools twice", undefined, new AbortController().signal, {
+				onEvent: (event) => {
+					if (event.type === "toolEnd" && event.payload.status === "completed") {
+						completedToolIds.push(event.payload.id);
+					}
+				},
+				onStatus: () => {},
+			});
+
+			hostAgent.destroy();
+			assert.deepEqual(completedToolIds, ["tc-1", "tc-2"]);
+			assert.equal(modelCalls, 3);
+		});
+
 		it("executes tool calls with default allow-all policy", async () => {
 			const config: AgentConfig = {
 				sessionId: "prep-default-session",

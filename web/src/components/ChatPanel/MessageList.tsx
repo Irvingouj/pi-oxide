@@ -1,6 +1,11 @@
 import { useEffect, useRef } from "react";
 import MessageItem from "./MessageItem.tsx";
-import type { AgentMessage, AgentToolRun, AgentStatus, AgentError } from "@pi-oxide/pi-host-web";
+import type {
+	AgentMessage,
+	AgentToolRun,
+	AgentStatus,
+	AgentError,
+} from "@pi-oxide/pi-host-web";
 
 interface MessageListProps {
 	messages: AgentMessage[];
@@ -9,7 +14,12 @@ interface MessageListProps {
 	error: AgentError | null;
 }
 
-export default function MessageList({ messages, toolCalls, status, error }: MessageListProps) {
+export default function MessageList({
+	messages,
+	toolCalls,
+	status,
+	error,
+}: MessageListProps) {
 	const ref = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
@@ -18,88 +28,43 @@ export default function MessageList({ messages, toolCalls, status, error }: Mess
 		}
 	}, [messages.length, toolCalls.length]);
 
+	const isActive =
+		status.state !== "idle" &&
+		status.state !== "completed" &&
+		status.state !== "failed" &&
+		status.state !== "aborted";
+
 	return (
-		<div
-			ref={ref}
-			style={{
-				flex: 1,
-				overflowY: "auto",
-				padding: "16px",
-			}}
-		>
-			{/* Status indicator */}
-			{status.state !== "idle" && status.state !== "completed" && status.state !== "failed" && status.state !== "aborted" && (
-				<div
-					style={{
-						padding: "6px 12px",
-						marginBottom: "8px",
-						background: "#0f3460",
-						borderRadius: "4px",
-						fontSize: "12px",
-						color: "#888",
-						textAlign: "center",
-					}}
-				>
+		<div ref={ref} className="flex-1 overflow-y-auto p-4 bg-bg">
+			{isActive && (
+				<div className="px-3 py-1.5 mb-2 bg-surface border border-border rounded-xl text-xs text-text-muted text-center font-medium">
 					{status.state}
 					{status.message ? ` — ${status.message}` : ""}
 				</div>
 			)}
 
-			{/* Error display */}
 			{error && (
-				<div
-					style={{
-						padding: "8px 12px",
-						marginBottom: "12px",
-						background: "#2e0a0a",
-						border: "1px solid #e94560",
-						borderRadius: "4px",
-						color: "#e94560",
-						fontSize: "13px",
-					}}
-				>
+				<div className="px-3 py-2 mb-3 bg-danger/10 border border-danger rounded-xl text-danger text-sm">
 					<strong>Error:</strong> {error.message} ({error.code})
 				</div>
 			)}
 
-			{/* Messages */}
 			{messages.map((msg) => (
 				<MessageItem key={msg.id} message={msg} />
 			))}
 
-			{/* Tool calls */}
 			{toolCalls.map((tool) => (
 				<div
 					key={tool.id}
-					style={{
-						marginBottom: "12px",
-						padding: "8px 12px",
-						borderRadius: "8px",
-						background: "#1a0a2e",
-						border: "1px solid #533483",
-						fontSize: "12px",
-						fontFamily: "monospace",
-					}}
+					className="mb-3 px-3 py-2 rounded-2xl bg-surface border border-border text-xs font-mono shadow-sm backdrop-blur-[22px]"
 				>
-					<span style={{ color: "#e94560", fontWeight: "bold" }}>
-						{tool.name}
-					</span>{" "}
-					<span style={{ color: "#888" }}>({tool.status})</span>
+					<span className="text-danger font-bold">{tool.name}</span>{" "}
+					<span className="text-text-muted">({tool.status})</span>
 					{tool.error && (
-						<div style={{ color: "#e94560", marginTop: "4px" }}>
-							{tool.error.message}
-						</div>
+						<div className="text-danger mt-1">{tool.error.message}</div>
 					)}
 					{tool.output !== undefined && (
-						<div
-							style={{
-								color: "#53c285",
-								whiteSpace: "pre-wrap",
-								maxHeight: "200px",
-								overflowY: "auto",
-								marginTop: "4px",
-							}}
-						>
+						<div className="text-text whitespace-pre-wrap max-h-[200px] overflow-y-auto mt-1">
 							{typeof tool.output === "string"
 								? tool.output
 								: JSON.stringify(tool.output, null, 2)}

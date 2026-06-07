@@ -5,17 +5,8 @@ import TodoListDemo from "./TodoListDemo.tsx";
 
 export default function DemoArea() {
 	return (
-		<div
-			style={{
-				width: "50%",
-				padding: "24px",
-				overflowY: "auto",
-				borderRight: "1px solid #0f3460",
-			}}
-		>
-			<h2 style={{ color: "#e94560", marginBottom: "12px", fontSize: "18px" }}>
-				Demo Page
-			</h2>
+		<div className="w-1/2 p-6 overflow-y-auto border-r border-border bg-bg">
+			<h2 className="text-xl text-text font-semibold tracking-tight mb-4">Demo Page</h2>
 			<CounterDemo />
 			<ContactFormDemo />
 			<TodoListDemo />

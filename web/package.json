@@ -7,7 +7,8 @@
 		"dev": "vite",
 		"build": "vite build",
 		"preview": "vite preview",
-		"test": "node --experimental-strip-types --test test/*.test.ts",
+		"test": "node --experimental-strip-types --test test/**/*.test.ts",
+		"test:sdk": "cd ../pi-host-web && npm test",
 		"smoke:real-llm": "node --experimental-strip-types scripts/real-llm-smoke.ts",
 		"smoke:real-local-coding": "node --experimental-strip-types scripts/real-local-coding-smoke.ts",
 		"record:multi-turn": "node --experimental-strip-types scripts/record-multi-turn.ts",
@@ -17,15 +18,17 @@
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.60.0",
+		"@tailwindcss/vite": "^4.3.0",
 		"@types/node": "^25.9.1",
 		"@types/react": "^19.2.15",
 		"@types/react-dom": "^19.2.3",
 		"@vitejs/plugin-react": "^6.0.2",
 		"playwright": "^1.60.0",
+		"tailwindcss": "^4.3.0",
 		"vite": "^8.0.14"
 	},
 	"dependencies": {
-		"@pi-oxide/pi-host-web": "^0.6.0",
+		"@pi-oxide/pi-host-web": "^0.5.0",
 		"react": "^19.2.6",
 		"react-dom": "^19.2.6",
 		"zod": "^3.24.0",

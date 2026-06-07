@@ -1,46 +1,14 @@
-import { useEffect, useState } from "react";
+import { useUIStore } from "../../stores/uiStore.ts";
 
 export default function ConsoleOutput() {
-	const [lines, setLines] = useState<string[]>(["Ready."]);
-
-	useEffect(() => {
-		const handler = (e: Event) => {
-			const detail = (e as CustomEvent).detail;
-			if (typeof detail === "string") {
-				setLines((prev) => [...prev, detail]);
-			}
-		};
-		window.addEventListener("demo-console", handler);
-		return () => window.removeEventListener("demo-console", handler);
-	}, []);
+	const lines = useUIStore((state) => state.consoleLines);
 
 	return (
-		<div
-			style={{
-				background: "#16213e",
-				border: "1px solid #0f3460",
-				borderRadius: "8px",
-				padding: "16px",
-				marginBottom: "16px",
-			}}
-		>
-			<h3 style={{ color: "#533483", marginBottom: "8px", fontSize: "14px" }}>
+		<div className="bg-surface border border-border rounded-2xl shadow-sm p-5 mb-5 backdrop-blur-[22px]">
+			<h3 className="text-text-muted text-sm font-semibold mb-2">
 				Console Output
 			</h3>
-			<div
-				style={{
-					background: "#0a0a1a",
-					border: "1px solid #333",
-					borderRadius: "4px",
-					padding: "8px",
-					fontFamily: "monospace",
-					fontSize: "12px",
-					maxHeight: "120px",
-					overflowY: "auto",
-					whiteSpace: "pre-wrap",
-					color: "#aaa",
-				}}
-			>
+			<div className="bg-surface-solid border border-border rounded-xl p-2 font-mono text-xs max-h-[120px] overflow-y-auto whitespace-pre-wrap text-text-muted">
 				{lines.join("\n")}
 			</div>
 		</div>

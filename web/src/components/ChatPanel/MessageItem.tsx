@@ -4,52 +4,13 @@ interface MessageItemProps {
 	message: AgentMessage;
 }
 
-const baseStyle: React.CSSProperties = {
-	marginBottom: "12px",
-	padding: "8px 12px",
-	borderRadius: "8px",
-	fontSize: "14px",
-	lineHeight: 1.5,
-	maxWidth: "90%",
-};
-
-const styles: Record<string, React.CSSProperties> = {
-	user: {
-		...baseStyle,
-		background: "#0f3460",
-		marginLeft: "auto",
-		borderBottomRightRadius: "2px",
-	},
-	assistant: {
-		...baseStyle,
-		background: "#16213e",
-		border: "1px solid #0f3460",
-		borderBottomLeftRadius: "2px",
-	},
-	tool_result: {
-		...baseStyle,
-		background: "#1a0a2e",
-		border: "1px solid #533483",
-		fontSize: "12px",
-		fontFamily: "monospace",
-		borderBottomLeftRadius: "2px",
-	},
-	error: {
-		...baseStyle,
-		background: "#2e0a0a",
-		border: "1px solid #e94560",
-		color: "#e94560",
-	},
-	steer: {
-		...baseStyle,
-		background: "#1a0a2e",
-		border: "1px dashed #533483",
-		color: "#888",
-		fontSize: "12px",
-		fontStyle: "italic",
-		marginLeft: "auto",
-		borderBottomRightRadius: "2px",
-	},
+const roleClasses: Record<string, string> = {
+	user: "bg-surface-muted ml-auto rounded-2xl rounded-br-md",
+	assistant: "bg-surface border border-border rounded-2xl rounded-bl-md shadow-sm backdrop-blur-[22px]",
+	tool_result:
+		"bg-surface-muted border border-border text-xs font-mono rounded-2xl rounded-bl-md shadow-sm",
+	error: "bg-danger/10 border border-danger text-danger rounded-2xl",
+	steer: "bg-surface-muted border border-dashed border-border text-text-muted text-xs italic ml-auto rounded-2xl rounded-br-md shadow-sm",
 };
 
 function getMessageType(message: AgentMessage): string {
@@ -57,7 +18,10 @@ function getMessageType(message: AgentMessage): string {
 	return message.role;
 }
 
-function renderContentBlock(block: AgentContentBlock, index: number): React.ReactNode {
+function renderContentBlock(
+	block: AgentContentBlock,
+	index: number,
+): React.ReactNode {
 	switch (block.type) {
 		case "text":
 			return <span key={index}>{block.text}</span>;
@@ -67,28 +31,18 @@ function renderContentBlock(block: AgentContentBlock, index: number): React.Reac
 					key={index}
 					src={`data:${block.mimeType};base64,${block.data}`}
 					alt="agent-generated"
-					style={{ maxWidth: "100%", borderRadius: "4px", marginTop: "4px" }}
+					className="max-w-full rounded-xl mt-1"
 				/>
 			);
 		case "tool_call":
 			return (
 				<div
 					key={index}
-					style={{
-						marginTop: "4px",
-						padding: "4px 8px",
-						background: "#1a0a2e",
-						border: "1px solid #533483",
-						borderRadius: "4px",
-						fontSize: "12px",
-						fontFamily: "monospace",
-					}}
+					className="mt-1 px-2 py-1 bg-surface-muted border border-border rounded-xl text-xs font-mono"
 				>
-					<span style={{ color: "#e94560", fontWeight: "bold" }}>
-						{block.name}
-					</span>{" "}
-					<span style={{ color: "#888" }}>({block.id})</span>
-					<div style={{ color: "#888", marginTop: "2px" }}>
+					<span className="text-danger font-bold">{block.name}</span>{" "}
+					<span className="text-text-muted">({block.id})</span>
+					<div className="text-text-muted mt-0.5">
 						{JSON.stringify(block.arguments, null, 2)}
 					</div>
 				</div>
@@ -97,13 +51,7 @@ function renderContentBlock(block: AgentContentBlock, index: number): React.Reac
 			return (
 				<div
 					key={index}
-					style={{
-						marginTop: "4px",
-						padding: "4px 8px",
-						background: "#0f3460",
-						borderRadius: "4px",
-						fontSize: "12px",
-					}}
+					className="mt-1 px-2 py-1 bg-surface rounded-xl text-xs"
 				>
 					📎 File ({block.mimeType})
 				</div>
@@ -116,6 +64,9 @@ function renderContentBlock(block: AgentContentBlock, index: number): React.Reac
 export default function MessageItem({ message }: MessageItemProps) {
 	const type = getMessageType(message);
 
+	const baseClasses =
+		"mb-3 px-3 py-2 rounded-2xl text-sm leading-relaxed max-w-[90%]";
+
 	if (type === "tool_result") {
 		const text = message.content
 			.filter((c): c is { type: "text"; text: string } => c.type === "text")
@@ -127,21 +78,11 @@ export default function MessageItem({ message }: MessageItemProps) {
 				? toolCallBlock.name
 				: "tool";
 		return (
-			<div className="msg-tool" style={styles.tool_result}>
-				<span style={{ color: "#e94560", fontWeight: "bold" }}>
-					{toolName}
-				</span>{" "}
-				<span style={{ color: "#888" }}>{message.tool_call_id}</span>
+			<div className={`${baseClasses} ${roleClasses.tool_result || ""}`}>
+				<span className="text-danger font-bold">{toolName}</span>{" "}
+				<span className="text-text-muted">{message.tool_call_id}</span>
 				{text && (
-					<div
-						style={{
-							color: "#53c285",
-							whiteSpace: "pre-wrap",
-							maxHeight: "200px",
-							overflowY: "auto",
-							marginTop: "4px",
-						}}
-					>
+					<div className="text-text whitespace-pre-wrap max-h-[200px] overflow-y-auto mt-1">
 						{text}
 					</div>
 				)}
@@ -150,7 +91,7 @@ export default function MessageItem({ message }: MessageItemProps) {
 	}
 
 	return (
-		<div className={`msg-${type}`} style={styles[type] || baseStyle}>
+		<div className={`${baseClasses} ${roleClasses[type] || ""}`}>
 			{message.content.map((block, i) => renderContentBlock(block, i))}
 		</div>
 	);

@@ -1,6 +1,11 @@
 import InputBar from "./InputBar.tsx";
 import MessageList from "./MessageList.tsx";
-import type { AgentMessage, AgentToolRun, AgentStatus, AgentError } from "@pi-oxide/pi-host-web";
+import type {
+	AgentMessage,
+	AgentToolRun,
+	AgentStatus,
+	AgentError,
+} from "@pi-oxide/pi-host-web";
 
 interface ChatPanelProps {
 	onSend: (text: string) => void;
@@ -26,15 +31,13 @@ export default function ChatPanel({
 	error,
 }: ChatPanelProps) {
 	return (
-		<div
-			data-running={isRunning}
-			style={{
-				width: "50%",
-				display: "flex",
-				flexDirection: "column",
-			}}
-		>
-			<MessageList messages={messages} toolCalls={toolCalls} status={status} error={error} />
+		<div className="w-1/2 flex flex-col bg-bg">
+			<MessageList
+				messages={messages}
+				toolCalls={toolCalls}
+				status={status}
+				error={error}
+			/>
 			<InputBar
 				onSend={onSend}
 				onStop={onStop}

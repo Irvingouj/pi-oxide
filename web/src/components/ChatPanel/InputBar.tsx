@@ -32,16 +32,7 @@ export default function InputBar({
 	}, [text, onSteer]);
 
 	return (
-		<div
-			style={{
-				padding: "12px 16px",
-				background: "#16213e",
-				borderTop: "1px solid #0f3460",
-				display: "flex",
-				gap: "8px",
-				flexShrink: 0,
-			}}
-		>
+		<div className="px-4 py-3 bg-surface border-t border-border flex gap-2 flex-shrink-0 backdrop-blur-[22px]">
 			<textarea
 				id="user-input"
 				rows={2}
@@ -58,46 +49,21 @@ export default function InputBar({
 						}
 					}
 				}}
-				style={{
-					flex: 1,
-					background: "#0f3460",
-					border: "1px solid #533483",
-					color: "#e0e0e0",
-					padding: "8px 12px",
-					borderRadius: "4px",
-					fontSize: "14px",
-					resize: "none",
-				}}
+				className="flex-1 bg-surface-solid text-text border border-border rounded-xl px-3 py-2.5 text-sm resize-none outline-none focus:border-accent focus:ring-4 focus:ring-accent-soft transition-all duration-150 ease-out"
 			/>
 			{isRunning && (
 				<>
 					<button
 						type="button"
 						onClick={handleSteer}
-						style={{
-							background: "#533483",
-							color: "white",
-							border: "none",
-							padding: "8px 16px",
-							borderRadius: "4px",
-							cursor: "pointer",
-							fontSize: "14px",
-						}}
+						className="bg-text text-bg rounded-full px-4 py-2.5 text-sm font-medium hover:text-text-muted transition-colors duration-150 ease-out"
 					>
 						Steer
 					</button>
 					<button
 						type="button"
 						onClick={onStop}
-						style={{
-							background: "#e94560",
-							color: "white",
-							border: "none",
-							padding: "8px 16px",
-							borderRadius: "4px",
-							cursor: "pointer",
-							fontSize: "14px",
-						}}
+						className="bg-danger text-white rounded-full px-4 py-2.5 text-sm font-medium hover:opacity-90 transition-opacity duration-150 ease-out"
 					>
 						Stop
 					</button>
@@ -108,30 +74,14 @@ export default function InputBar({
 				type="button"
 				onClick={handleSend}
 				disabled={isRunning || !text.trim()}
-				style={{
-					background: isRunning || !text.trim() ? "#555" : "#e94560",
-					color: "white",
-					border: "none",
-					padding: "8px 20px",
-					borderRadius: "4px",
-					cursor: isRunning || !text.trim() ? "not-allowed" : "pointer",
-					fontSize: "14px",
-				}}
+				className="bg-text text-bg rounded-full px-5 py-2.5 text-sm font-medium hover:text-text-muted transition-colors duration-150 ease-out disabled:bg-surface-muted disabled:text-text-faint disabled:cursor-not-allowed"
 			>
 				Send
 			</button>
 			<button
 				type="button"
 				onClick={onReset}
-				style={{
-					background: "#555",
-					color: "white",
-					border: "none",
-					padding: "8px 16px",
-					borderRadius: "4px",
-					cursor: "pointer",
-					fontSize: "14px",
-				}}
+				className="bg-surface-muted text-text border border-border rounded-full px-4 py-2.5 text-sm font-medium hover:bg-surface-solid transition-colors duration-150 ease-out"
 			>
 				Reset
 			</button>

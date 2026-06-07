@@ -1,27 +1,21 @@
 import { useState } from "react";
+import { useUIStore } from "../../stores/uiStore.ts";
 
 export default function ContactFormDemo() {
 	const [name, setName] = useState("");
 	const [email, setEmail] = useState("");
 	const [output, setOutput] = useState("");
+	const addConsoleLine = useUIStore((state) => state.addConsoleLine);
 
 	return (
-		<div
-			style={{
-				background: "#16213e",
-				border: "1px solid #0f3460",
-				borderRadius: "8px",
-				padding: "16px",
-				marginBottom: "16px",
-			}}
-		>
-			<h3 style={{ color: "#533483", marginBottom: "8px", fontSize: "14px" }}>
+		<div className="bg-surface border border-border rounded-2xl shadow-sm p-5 mb-5 backdrop-blur-[22px]">
+			<h3 className="text-text-muted text-sm font-semibold mb-2">
 				Contact Form
 			</h3>
-			<div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+			<div className="flex flex-col gap-2">
 				<label
 					htmlFor="contact-name"
-					style={{ fontSize: "13px", color: "#888" }}
+					className="text-xs text-text-muted font-medium"
 				>
 					Name
 				</label>
@@ -31,18 +25,11 @@ export default function ContactFormDemo() {
 					placeholder="Enter your name"
 					value={name}
 					onChange={(e) => setName(e.target.value)}
-					style={{
-						padding: "6px 10px",
-						background: "#0f3460",
-						border: "1px solid #533483",
-						color: "#e0e0e0",
-						borderRadius: "4px",
-						fontSize: "14px",
-					}}
+					className="bg-surface-solid text-text border border-border rounded-xl px-3 py-2 text-sm outline-none focus:border-accent focus:ring-4 focus:ring-accent-soft transition-all duration-150 ease-out"
 				/>
 				<label
 					htmlFor="contact-email"
-					style={{ fontSize: "13px", color: "#888" }}
+					className="text-xs text-text-muted font-medium"
 				>
 					Email
 				</label>
@@ -52,51 +39,21 @@ export default function ContactFormDemo() {
 					placeholder="Enter your email"
 					value={email}
 					onChange={(e) => setEmail(e.target.value)}
-					style={{
-						padding: "6px 10px",
-						background: "#0f3460",
-						border: "1px solid #533483",
-						color: "#e0e0e0",
-						borderRadius: "4px",
-						fontSize: "14px",
-					}}
+					className="bg-surface-solid text-text border border-border rounded-xl px-3 py-2 text-sm outline-none focus:border-accent focus:ring-4 focus:ring-accent-soft transition-all duration-150 ease-out"
 				/>
 				<button
 					type="button"
 					onClick={() => {
 						const msg = `Submitted: ${name} (${email})`;
 						setOutput((prev) => (prev ? `${prev}\n${msg}` : msg));
-						console.log("Form submitted:", { name, email });
+						addConsoleLine(`Form submitted: ${name} (${email})`);
 					}}
-					style={{
-						background: "#533483",
-						color: "white",
-						border: "none",
-						padding: "8px 16px",
-						borderRadius: "4px",
-						cursor: "pointer",
-						marginTop: "4px",
-						alignSelf: "flex-start",
-					}}
+					className="bg-text text-bg rounded-full px-4 py-2.5 text-sm font-medium self-start mt-1 hover:text-text-muted transition-colors duration-150 ease-out"
 				>
 					Submit
 				</button>
 				{output && (
-					<pre
-						style={{
-							background: "#0a0a1a",
-							border: "1px solid #333",
-							borderRadius: "4px",
-							padding: "8px",
-							fontFamily: "monospace",
-							fontSize: "12px",
-							whiteSpace: "pre-wrap",
-							color: "#aaa",
-							maxHeight: "120px",
-							overflowY: "auto",
-							marginTop: "8px",
-						}}
-					>
+					<pre className="bg-surface-solid border border-border rounded-xl p-2 font-mono text-xs whitespace-pre-wrap text-text-muted max-h-[120px] overflow-y-auto mt-2">
 						{output}
 					</pre>
 				)}

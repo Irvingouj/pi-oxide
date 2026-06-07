@@ -1,75 +1,56 @@
 import { useState } from "react";
+import { useUIStore } from "../../stores/uiStore.ts";
+
+interface Todo {
+	id: string;
+	text: string;
+}
 
 export default function TodoListDemo() {
-	const [todos, setTodos] = useState([
-		"Build browser agent",
-		"Test with real LLM",
-		"Ship it",
+	const [todos, setTodos] = useState<Todo[]>([
+		{ id: "1", text: "Build browser agent" },
+		{ id: "2", text: "Test with real LLM" },
+		{ id: "3", text: "Ship it" },
 	]);
 	const [input, setInput] = useState("");
+	const addConsoleLine = useUIStore((state) => state.addConsoleLine);
+
+	const addTodo = (text: string) => {
+		const trimmed = text.trim();
+		if (!trimmed) return;
+		const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+		setTodos((prev) => [...prev, { id, text: trimmed }]);
+		setInput("");
+		addConsoleLine(`Todo added: ${trimmed}`);
+	};
 
 	return (
-		<div
-			style={{
-				background: "#16213e",
-				border: "1px solid #0f3460",
-				borderRadius: "8px",
-				padding: "16px",
-				marginBottom: "16px",
-			}}
-		>
-			<h3 style={{ color: "#533483", marginBottom: "8px", fontSize: "14px" }}>
+		<div className="bg-surface border border-border rounded-2xl shadow-sm p-5 mb-5 backdrop-blur-[22px]">
+			<h3 className="text-text-muted text-sm font-semibold mb-2">
 				Todo List
 			</h3>
-			<ul style={{ marginBottom: "8px", paddingLeft: "20px" }}>
-				{todos.map((t) => (
-					<li key={t} style={{ color: "#e0e0e0", fontSize: "14px" }}>
-						{t}
+			<ul className="mb-2 pl-5">
+				{todos.map((todo) => (
+					<li key={todo.id} className="text-text text-sm">
+						{todo.text}
 					</li>
 				))}
 			</ul>
-			<div style={{ display: "flex", gap: "8px" }}>
+			<div className="flex gap-2">
 				<input
 					type="text"
 					placeholder="Add a todo..."
 					value={input}
 					onChange={(e) => setInput(e.target.value)}
 					onKeyDown={(e) => {
-						if (e.key === "Enter") {
-							const text = input.trim();
-							if (!text) return;
-							setTodos((prev) => [...prev, text]);
-							setInput("");
-							console.log("Todo added:", text);
-						}
+						if (e.key === "Enter") addTodo(input);
 					}}
-					style={{
-						flex: 1,
-						padding: "6px 10px",
-						background: "#0f3460",
-						border: "1px solid #533483",
-						color: "#e0e0e0",
-						borderRadius: "4px",
-						fontSize: "14px",
-					}}
+					className="flex-1 bg-surface-solid text-text border border-border rounded-xl px-3 py-2 text-sm outline-none focus:border-accent focus:ring-4 focus:ring-accent-soft transition-all duration-150 ease-out"
 				/>
 				<button
 					type="button"
-					onClick={() => {
-						const text = input.trim();
-						if (!text) return;
-						setTodos((prev) => [...prev, text]);
-						setInput("");
-						console.log("Todo added:", text);
-					}}
-					style={{
-						background: "#533483",
-						color: "white",
-						border: "none",
-						padding: "8px 16px",
-						borderRadius: "4px",
-						cursor: "pointer",
-					}}
+					onClick={() => addTodo(input)}
+					className="bg-text text-bg rounded-full px-4 py-2.5 text-sm font-medium hover:text-text-muted transition-colors duration-150 ease-out"
 				>
 					Add
 				</button>

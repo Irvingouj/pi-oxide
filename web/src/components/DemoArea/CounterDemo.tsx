@@ -1,49 +1,24 @@
 import { useState } from "react";
+import { useUIStore } from "../../stores/uiStore.ts";
 
 export default function CounterDemo() {
 	const [counter, setCounter] = useState(0);
+	const addConsoleLine = useUIStore((state) => state.addConsoleLine);
 
 	return (
-		<div
-			style={{
-				background: "#16213e",
-				border: "1px solid #0f3460",
-				borderRadius: "8px",
-				padding: "16px",
-				marginBottom: "16px",
-			}}
-		>
-			<h3 style={{ color: "#533483", marginBottom: "8px", fontSize: "14px" }}>
-				Counter
-			</h3>
-			<div
-				style={{
-					fontSize: "48px",
-					fontWeight: "bold",
-					textAlign: "center",
-					color: "#e94560",
-					margin: "12px 0",
-				}}
-			>
+		<div className="bg-surface border border-border rounded-2xl shadow-sm p-5 mb-5 backdrop-blur-[22px]">
+			<h3 className="text-text-muted text-sm font-semibold mb-2">Counter</h3>
+			<div className="text-5xl font-bold text-center text-text my-3">
 				{counter}
 			</div>
 			<button
 				type="button"
 				onClick={() => {
-					setCounter((c) => c + 1);
-					console.log("Counter:", counter + 1);
+					const next = counter + 1;
+					setCounter(next);
+					addConsoleLine(`Counter: ${next}`);
 				}}
-				style={{
-					background: "#533483",
-					color: "white",
-					border: "none",
-					padding: "8px 24px",
-					borderRadius: "4px",
-					cursor: "pointer",
-					fontSize: "16px",
-					display: "block",
-					margin: "0 auto",
-				}}
+				className="bg-text text-bg rounded-full px-6 py-2.5 text-base font-medium block mx-auto hover:text-text-muted transition-colors duration-150 ease-out"
 			>
 				Click me
 			</button>

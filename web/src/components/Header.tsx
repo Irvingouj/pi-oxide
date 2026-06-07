@@ -1,43 +1,23 @@
-import { useConfig } from "../hooks/useConfig.ts";
+import { useConfigStore } from "../stores/configStore.ts";
 
 interface HeaderProps {
 	status: string;
 }
 
 export default function Header({ status }: HeaderProps) {
-	const config = useConfig();
+	const config = useConfigStore();
 
 	return (
-		<div
-			style={{
-				background: "#16213e",
-				padding: "8px 16px",
-				display: "flex",
-				alignItems: "center",
-				gap: "12px",
-				borderBottom: "1px solid #0f3460",
-				flexShrink: 0,
-			}}
-		>
-			<h1 style={{ fontSize: "16px", color: "#e94560", margin: 0 }}>
-				pi-oxide
-			</h1>
-			<span style={{ fontSize: "12px", color: "#888" }}>{status}</span>
+		<div className="bg-surface border-b border-border backdrop-blur-[22px] px-4 py-2 flex items-center gap-3 flex-shrink-0">
+			<h1 className="text-lg text-text font-semibold tracking-tight">pi-oxide</h1>
+			<span className="text-xs text-text-muted font-medium">{status}</span>
 			<input
 				id="api-key-input"
 				type="password"
 				placeholder="API Key (e.g. fpk_...)"
 				value={config.apiKey}
 				onChange={(e) => config.setApiKey(e.target.value)}
-				style={{
-					background: "#0f3460",
-					border: "1px solid #533483",
-					color: "#e0e0e0",
-					padding: "4px 8px",
-					borderRadius: "4px",
-					fontSize: "13px",
-					width: "280px",
-				}}
+				className="bg-surface-solid text-text border border-border rounded-xl px-3 py-2 text-sm outline-none focus:border-accent focus:ring-4 focus:ring-accent-soft transition-all duration-150 ease-out w-[280px]"
 			/>
 			<input
 				id="base-url-input"
@@ -45,15 +25,7 @@ export default function Header({ status }: HeaderProps) {
 				placeholder="Base URL (e.g. https://api.fireworks.ai/inference)"
 				value={config.baseUrl}
 				onChange={(e) => config.setBaseUrl(e.target.value)}
-				style={{
-					background: "#0f3460",
-					border: "1px solid #533483",
-					color: "#e0e0e0",
-					padding: "4px 8px",
-					borderRadius: "4px",
-					fontSize: "12px",
-					width: "200px",
-				}}
+				className="bg-surface-solid text-text border border-border rounded-xl px-3 py-2 text-sm outline-none focus:border-accent focus:ring-4 focus:ring-accent-soft transition-all duration-150 ease-out w-[200px]"
 			/>
 			<input
 				id="model-input"
@@ -61,15 +33,7 @@ export default function Header({ status }: HeaderProps) {
 				placeholder="Model (e.g. claude-sonnet-4-20250514)"
 				value={config.model}
 				onChange={(e) => config.setModel(e.target.value)}
-				style={{
-					background: "#0f3460",
-					border: "1px solid #533483",
-					color: "#e0e0e0",
-					padding: "4px 8px",
-					borderRadius: "4px",
-					fontSize: "12px",
-					width: "180px",
-				}}
+				className="bg-surface-solid text-text border border-border rounded-xl px-3 py-2 text-sm outline-none focus:border-accent focus:ring-4 focus:ring-accent-soft transition-all duration-150 ease-out w-[180px]"
 			/>
 		</div>
 	);

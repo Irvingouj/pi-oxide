@@ -37,13 +37,25 @@ fn context_projection_integrates_with_state_machine() {
     );
     let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
 
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools");
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall");
+    };
+    let prep = ToolCallPreparation {
+        tool_call_id: ToolCallId::new("call-1"),
+        transform: ToolCallTransform::None,
+        permission: ToolCallPermission::Allow,
+    };
+    let (_events, _actions, runtime, T, A, turn_number, _markers) = pre
+        .prepare_tool_calls(vec![prep], T, A, turn_number)
+        .into_parts();
+
+    let AgentRuntime::ExecutingTools(exec) = runtime else {
+        panic!("expected ExecutingTools");
     };
 
     // Submit a long tool result
     let long_result = "a".repeat(3000);
-    let (_events, _actions, runtime, T, A, turn_number, _markers) = waiting
+    let (_events, _actions, runtime, T, A, turn_number, _markers) = exec
         .on_tool_done(
             ToolCallId::new("call-1"),
             Ok(ToolResult::text(long_result)),
@@ -104,7 +116,6 @@ fn context_projection_integrates_with_state_machine() {
     );
 }
 
-
 #[test]
 fn context_projection_keep_full_bypass() {
     let options = dummy_options();
@@ -138,13 +149,25 @@ fn context_projection_keep_full_bypass() {
     );
     let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
 
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools");
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall");
+    };
+    let prep = ToolCallPreparation {
+        tool_call_id: ToolCallId::new("call-1"),
+        transform: ToolCallTransform::None,
+        permission: ToolCallPermission::Allow,
+    };
+    let (_events, _actions, runtime, T, A, turn_number, _markers) = pre
+        .prepare_tool_calls(vec![prep], T, A, turn_number)
+        .into_parts();
+
+    let AgentRuntime::ExecutingTools(exec) = runtime else {
+        panic!("expected ExecutingTools");
     };
 
     // edit uses KeepFull strategy — content should stay full
     let large_result = "x".repeat(300);
-    let (_events, _actions, runtime, T, A, turn_number, _markers) = waiting
+    let (_events, _actions, runtime, T, A, turn_number, _markers) = exec
         .on_tool_done(
             ToolCallId::new("call-1"),
             Ok(ToolResult::text(large_result)),
@@ -199,7 +222,6 @@ fn context_projection_keep_full_bypass() {
     );
 }
 
-
 #[test]
 fn projection_scan_projects_old_tools_across_multi_round_turn() {
     let runtime = AgentRuntime::new(dummy_options());
@@ -234,13 +256,25 @@ fn projection_scan_projects_old_tools_across_multi_round_turn() {
     );
     let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
 
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools");
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall");
+    };
+    let prep = ToolCallPreparation {
+        tool_call_id: ToolCallId::new("call-1"),
+        transform: ToolCallTransform::None,
+        permission: ToolCallPermission::Allow,
+    };
+    let (_events, _actions, runtime, T, A, turn_number, _markers) = pre
+        .prepare_tool_calls(vec![prep], T, A, turn_number)
+        .into_parts();
+
+    let AgentRuntime::ExecutingTools(exec) = runtime else {
+        panic!("expected ExecutingTools");
     };
 
     // Submit a large grep result (> max_chars=3000 for grep)
     let large_result = "x".repeat(5000);
-    let (events, _actions, runtime, T, A, turn_number, _markers) = waiting
+    let (events, _actions, runtime, T, A, turn_number, _markers) = exec
         .on_tool_done(
             ToolCallId::new("call-1"),
             Ok(ToolResult::text(large_result)),
@@ -307,5 +341,3 @@ fn projection_scan_projects_old_tools_across_multi_round_turn() {
 // ---------------------------------------------------------------------------
 // Tool call preparation tests
 // ---------------------------------------------------------------------------
-
-

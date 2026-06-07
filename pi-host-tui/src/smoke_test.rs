@@ -6,7 +6,7 @@ mod tests {
 
     use pi_core::{
         AgentMessage, AgentOptions, AgentRuntime, Artifacts, Model, ModelCapabilities, ModelCost,
-        ModelId, ModelName, ProviderName, TrimmedMessage,
+        ModelId, ModelName, ProviderName, ToolCall, TrimmedMessage,
     };
 
     use crate::extension::{BashExtension, BuiltinExtension, Extension, ExtensionContext};
@@ -184,56 +184,88 @@ mod tests {
             String,
             Box<dyn crate::extension::ToolEventStream>,
         )> = vec![];
-        for action in actions {
+
+        // Prepare all tool calls before executing (TUI smoke test bypasses transform/permission)
+        let mut calls_to_execute: Vec<ToolCall> = vec![];
+        for action in &actions {
             match action {
                 pi_core::AgentAction::ExecuteTools { calls }
                 | pi_core::AgentAction::PrepareToolCalls { calls } => {
-                    for call in calls {
-                        let ctx = ExtensionContext {
-                            cwd: Path::new("/tmp").to_path_buf(),
-                        };
-                        let outcome = if call.name.as_str() == "bash" {
-                            BashExtension::new().execute(&call, &ctx)
-                        } else {
-                            BuiltinExtension::new().execute(&call, &ctx)
-                        };
-                        match outcome {
-                            crate::extension::ExtensionOutcome::Complete(result) => {
-                                println!("Sync tool result: {:?}", result);
-                                let next = match runtime.take().unwrap() {
-                                    AgentRuntime::WaitingTools(waiting) => {
-                                        let transition = waiting.on_tool_done(
-                                            call.id.clone(),
-                                            result,
-                                            transcript,
-                                            artifacts,
-                                            turn_number,
-                                        );
-                                        Some(transition.into_parts())
-                                    }
-                                    other => {
-                                        runtime = Some(other);
-                                        continue;
-                                    }
-                                };
-                                let (_ev, _act, new_runtime, new_transcript, new_artifacts, tn, _m) =
-                                    next.unwrap();
-                                runtime = Some(new_runtime);
-                                turn_number = tn;
-                                transcript = new_transcript;
-                                artifacts = new_artifacts;
-                            }
-                            crate::extension::ExtensionOutcome::Running(stream) => {
-                                running_tasks.push((
-                                    call.id.clone(),
-                                    call.name.as_str().to_string(),
-                                    stream,
-                                ));
-                            }
-                        }
-                    }
+                    calls_to_execute.extend(calls.clone());
                 }
-                other => println!("other action: {:?}", other),
+                _ => {}
+            }
+        }
+
+        if !calls_to_execute.is_empty() {
+            let preps: Vec<pi_core::ToolCallPreparation> = calls_to_execute
+                .iter()
+                .map(|c| pi_core::ToolCallPreparation {
+                    tool_call_id: c.id.clone(),
+                    transform: pi_core::ToolCallTransform::None,
+                    permission: pi_core::ToolCallPermission::Allow,
+                })
+                .collect();
+
+            let rt = runtime.take().unwrap();
+            let (_ev, _act, new_runtime, new_t, new_a, new_tn, _m) = match rt {
+                AgentRuntime::PreToolCall(pre) => pre
+                    .prepare_tool_calls(preps, transcript, artifacts, turn_number)
+                    .into_parts(),
+                other => (
+                    vec![],
+                    vec![],
+                    other,
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    vec![],
+                ),
+            };
+            runtime = Some(new_runtime);
+            transcript = new_t;
+            artifacts = new_a;
+            turn_number = new_tn;
+        }
+
+        for call in calls_to_execute {
+            let ctx = ExtensionContext {
+                cwd: Path::new("/tmp").to_path_buf(),
+            };
+            let outcome = if call.name.as_str() == "bash" {
+                BashExtension::new().execute(&call, &ctx)
+            } else {
+                BuiltinExtension::new().execute(&call, &ctx)
+            };
+            match outcome {
+                crate::extension::ExtensionOutcome::Complete(result) => {
+                    println!("Sync tool result: {:?}", result);
+                    let next = match runtime.take().unwrap() {
+                        AgentRuntime::ExecutingTools(exec) => {
+                            let transition = exec.on_tool_done(
+                                call.id.clone(),
+                                result,
+                                transcript,
+                                artifacts,
+                                turn_number,
+                            );
+                            Some(transition.into_parts())
+                        }
+                        other => {
+                            runtime = Some(other);
+                            continue;
+                        }
+                    };
+                    let (_ev, _act, new_runtime, new_transcript, new_artifacts, tn, _m) =
+                        next.unwrap();
+                    runtime = Some(new_runtime);
+                    turn_number = tn;
+                    transcript = new_transcript;
+                    artifacts = new_artifacts;
+                }
+                crate::extension::ExtensionOutcome::Running(stream) => {
+                    running_tasks.push((call.id.clone(), call.name.as_str().to_string(), stream));
+                }
             }
         }
 
@@ -251,8 +283,8 @@ mod tests {
                         crate::extension::ToolEvent::Done(result) => {
                             println!("Tool done: {} {:?}", name, result);
                             let next = match runtime.take().unwrap() {
-                                AgentRuntime::WaitingTools(waiting) => {
-                                    let transition = waiting.on_tool_done(
+                                AgentRuntime::ExecutingTools(exec) => {
+                                    let transition = exec.on_tool_done(
                                         id.clone(),
                                         result,
                                         transcript,

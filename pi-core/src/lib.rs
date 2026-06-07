@@ -19,9 +19,9 @@ pub mod types;
 
 pub use agent::{Agent, AgentOptions, AgentState, Phase};
 pub use agent_runtime::{
-    AbortedAgent, AgentRuntime, CompactingAgent, ContinueTurnTransition, FinishLlmTransition,
-    FinishedAgent, IdleAgent, ReadyAgent, StartTurnTransition, StreamingAgent, ToolTransition,
-    Transition, UserInputDuringTools, WaitingToolsAgent,
+    AbortedAgent, AgentRuntime, CompactingAgent, ContinueTurnTransition, ExecutingToolsAgent,
+    FinishLlmTransition, FinishedAgent, IdleAgent, PreToolCallAgent, ReadyAgent,
+    StartTurnTransition, StreamingAgent, ToolTransition, Transition, UserInputDuringTools,
 };
 pub use context::{AgentContext, LlmContext};
 pub use context_projection::{

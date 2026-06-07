@@ -55,7 +55,6 @@ fn on_llm_done_with_tools_emits_prepare_tool_calls() {
     );
 }
 
-
 #[test]
 fn prepare_tool_calls_allowed_proceeds_to_execute_tools() {
     let runtime = AgentRuntime::new(dummy_options());
@@ -87,8 +86,8 @@ fn prepare_tool_calls_allowed_proceeds_to_execute_tools() {
     );
     let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
 
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools")
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall")
     };
 
     let prep = ToolCallPreparation {
@@ -97,7 +96,7 @@ fn prepare_tool_calls_allowed_proceeds_to_execute_tools() {
         permission: ToolCallPermission::Allow,
     };
 
-    let transition = waiting.prepare_tool_calls(vec![prep], T, A, turn_number);
+    let transition = pre.prepare_tool_calls(vec![prep], T, A, turn_number);
     let (events, actions, runtime, _T, _A, _turn_number, _markers) = transition.into_parts();
 
     assert!(
@@ -122,7 +121,6 @@ fn prepare_tool_calls_allowed_proceeds_to_execute_tools() {
         "allowed call should remain in pending"
     );
 }
-
 
 #[test]
 fn prepare_tool_calls_rewrite_args_applied() {
@@ -155,8 +153,8 @@ fn prepare_tool_calls_rewrite_args_applied() {
     );
     let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
 
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools")
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall")
     };
 
     let rewritten_args = ToolArguments::new(serde_json::json!({"path": "/foo"}));
@@ -168,7 +166,7 @@ fn prepare_tool_calls_rewrite_args_applied() {
         permission: ToolCallPermission::Allow,
     };
 
-    let transition = waiting.prepare_tool_calls(vec![prep], T, A, turn_number);
+    let transition = pre.prepare_tool_calls(vec![prep], T, A, turn_number);
     let (_events, actions, _runtime, _T, _A, _turn_number, _markers) = transition.into_parts();
 
     let execute_tools = actions
@@ -180,7 +178,6 @@ fn prepare_tool_calls_rewrite_args_applied() {
         .expect("should have ExecuteTools");
     assert_eq!(execute_tools[0].arguments, rewritten_args);
 }
-
 
 #[test]
 fn prepare_tool_calls_blocked_creates_error_result() {
@@ -213,8 +210,8 @@ fn prepare_tool_calls_blocked_creates_error_result() {
     );
     let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
 
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools")
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall")
     };
 
     let prep = ToolCallPreparation {
@@ -225,7 +222,7 @@ fn prepare_tool_calls_blocked_creates_error_result() {
         },
     };
 
-    let transition = waiting.prepare_tool_calls(vec![prep], T, A, turn_number);
+    let transition = pre.prepare_tool_calls(vec![prep], T, A, turn_number);
     let (events, actions, runtime, T, _A, _turn_number, _markers) = transition.into_parts();
 
     assert!(
@@ -272,7 +269,6 @@ fn prepare_tool_calls_blocked_creates_error_result() {
         .any(|m| matches!(m, TrimmedMessage::OriginalTool(_))));
 }
 
-
 #[test]
 fn prepare_tool_calls_mixed_batch_preserves_one_result_per_call() {
     let runtime = AgentRuntime::new(dummy_options());
@@ -307,8 +303,8 @@ fn prepare_tool_calls_mixed_batch_preserves_one_result_per_call() {
     );
     let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
 
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools")
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall")
     };
 
     let preps = vec![
@@ -326,7 +322,7 @@ fn prepare_tool_calls_mixed_batch_preserves_one_result_per_call() {
         },
     ];
 
-    let transition = waiting.prepare_tool_calls(preps, T, A, turn_number);
+    let transition = pre.prepare_tool_calls(preps, T, A, turn_number);
     let (events, actions, runtime, T, _A, _turn_number, _markers) = transition.into_parts();
 
     assert!(
@@ -336,8 +332,8 @@ fn prepare_tool_calls_mixed_batch_preserves_one_result_per_call() {
         "should emit ExecuteTools for allowed call"
     );
     assert!(
-        matches!(runtime, AgentRuntime::WaitingTools(_)),
-        "should remain WaitingTools when some allowed"
+        matches!(runtime, AgentRuntime::ExecutingTools(_)),
+        "should remain ExecutingTools when some allowed"
     );
 
     let tool_ends: Vec<_> = events
@@ -359,7 +355,6 @@ fn prepare_tool_calls_mixed_batch_preserves_one_result_per_call() {
         "blocked call should push one OriginalTool to T"
     );
 }
-
 
 #[test]
 fn prepare_tool_calls_all_blocked_finalizes_without_execution() {
@@ -395,8 +390,8 @@ fn prepare_tool_calls_all_blocked_finalizes_without_execution() {
     );
     let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
 
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools")
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall")
     };
 
     let preps = vec![
@@ -416,7 +411,7 @@ fn prepare_tool_calls_all_blocked_finalizes_without_execution() {
         },
     ];
 
-    let transition = waiting.prepare_tool_calls(preps, T, A, turn_number);
+    let transition = pre.prepare_tool_calls(preps, T, A, turn_number);
     let (events, actions, runtime, T, _A, _turn_number, _markers) = transition.into_parts();
 
     assert!(
@@ -459,7 +454,6 @@ fn prepare_tool_calls_all_blocked_finalizes_without_execution() {
     );
 }
 
-
 #[test]
 fn prepare_tool_calls_unknown_id_is_ignored() {
     let runtime = AgentRuntime::new(dummy_options());
@@ -491,8 +485,8 @@ fn prepare_tool_calls_unknown_id_is_ignored() {
     );
     let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
 
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools")
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall")
     };
 
     let preps = vec![
@@ -510,7 +504,7 @@ fn prepare_tool_calls_unknown_id_is_ignored() {
         },
     ];
 
-    let transition = waiting.prepare_tool_calls(preps, T, A, turn_number);
+    let transition = pre.prepare_tool_calls(preps, T, A, turn_number);
     let (_events, actions, _runtime, _T, _A, _turn_number, _markers) = transition.into_parts();
 
     assert!(
@@ -520,7 +514,6 @@ fn prepare_tool_calls_unknown_id_is_ignored() {
         "should still emit ExecuteTools for known call"
     );
 }
-
 
 #[test]
 fn prepare_tool_calls_permission_sees_transformed_args() {
@@ -553,8 +546,8 @@ fn prepare_tool_calls_permission_sees_transformed_args() {
     );
     let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
 
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools")
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall")
     };
 
     // Transform and then block — the blocked result should reference the transformed args
@@ -569,7 +562,7 @@ fn prepare_tool_calls_permission_sees_transformed_args() {
         },
     };
 
-    let transition = waiting.prepare_tool_calls(vec![prep], T, A, turn_number);
+    let transition = pre.prepare_tool_calls(vec![prep], T, A, turn_number);
     let (events, _actions, _runtime, _T, _A, _turn_number, _markers) = transition.into_parts();
 
     let tool_end = events
@@ -584,7 +577,6 @@ fn prepare_tool_calls_permission_sees_transformed_args() {
         "blocked result should be error"
     );
 }
-
 
 #[test]
 fn prepare_tool_calls_duplicate_id_is_blocked_once_without_start() {
@@ -617,8 +609,8 @@ fn prepare_tool_calls_duplicate_id_is_blocked_once_without_start() {
     );
     let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
 
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools")
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall")
     };
 
     let preps = vec![
@@ -634,7 +626,7 @@ fn prepare_tool_calls_duplicate_id_is_blocked_once_without_start() {
         },
     ];
 
-    let transition = waiting.prepare_tool_calls(preps, T, A, turn_number);
+    let transition = pre.prepare_tool_calls(preps, T, A, turn_number);
     let (events, actions, runtime, T, _A, _turn_number, _markers) = transition.into_parts();
 
     assert!(
@@ -669,4 +661,3 @@ fn prepare_tool_calls_duplicate_id_is_blocked_once_without_start() {
         "duplicate preparation should push one OriginalTool"
     );
 }
-

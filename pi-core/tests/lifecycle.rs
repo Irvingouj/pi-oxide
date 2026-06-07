@@ -9,7 +9,6 @@ fn agent_new_is_idle() {
     assert!(matches!(runtime, AgentRuntime::Idle(_)));
 }
 
-
 #[test]
 fn start_turn_returns_stream_action() {
     let runtime = AgentRuntime::new(dummy_options());
@@ -38,7 +37,6 @@ fn start_turn_returns_stream_action() {
     assert_eq!(actions.len(), 1);
     assert!(matches!(actions[0], AgentAction::StreamLlm { .. }));
 }
-
 
 #[test]
 fn on_llm_done_with_no_tools_finishes() {
@@ -74,7 +72,6 @@ fn on_llm_done_with_no_tools_finishes() {
     assert!(actions.iter().any(|a| matches!(a, AgentAction::Finished)));
 }
 
-
 #[test]
 fn reset_clears_state() {
     let runtime = AgentRuntime::new(dummy_options());
@@ -100,7 +97,6 @@ fn reset_clears_state() {
     assert!(matches!(runtime, AgentRuntime::Idle(_)));
 }
 
-
 #[test]
 fn serialization_roundtrip() {
     let runtime = AgentRuntime::new(dummy_options());
@@ -108,23 +104,12 @@ fn serialization_roundtrip() {
     let _deserialized: pi_core::AgentState = serde_json::from_str(&json).unwrap();
 }
 
-
 #[test]
 fn agent_runtime_delegation_exercise() {
     let mut runtime = AgentRuntime::new(dummy_options());
 
-    // Idle — exercise state, on_tool_started, on_tool_update
+    // Idle — exercise state
     assert!(matches!(runtime, AgentRuntime::Idle(_)));
-    assert!(runtime.on_tool_started(ToolCallId::new("x")).is_empty());
-    assert!(runtime
-        .on_tool_update(ToolExecutionUpdate {
-            tool_call_id: ToolCallId::new("x"),
-            stream: pi_core::ToolOutputStream::Stdout,
-            chunk: "test".into(),
-            sequence: 0,
-            timestamp: 0,
-        })
-        .is_empty());
 
     // Streaming
     let AgentRuntime::Idle(idle) = runtime else {
@@ -145,9 +130,8 @@ fn agent_runtime_delegation_exercise() {
     };
     runtime = t.state.into_runtime();
     assert!(matches!(runtime, AgentRuntime::Streaming(_)));
-    assert!(runtime.on_tool_started(ToolCallId::new("x")).is_empty());
 
-    // WaitingTools
+    // PreToolCall
     let AgentRuntime::Streaming(streaming) = runtime else {
         panic!("expected Streaming");
     };
@@ -160,21 +144,38 @@ fn agent_runtime_delegation_exercise() {
         &ContextProjectionBudget::default(),
     );
     let (_events, _actions, mut runtime, _T, _A, _turn_number, _markers) = transition.into_parts();
-    assert!(matches!(runtime, AgentRuntime::WaitingTools(_)));
+    assert!(matches!(runtime, AgentRuntime::PreToolCall(_)));
 
-    let events = runtime.on_tool_started(ToolCallId::new("call-1"));
+    // ExecutingTools — on_tool_started should emit ToolExecutionUpdate
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall");
+    };
+    let prep = ToolCallPreparation {
+        tool_call_id: ToolCallId::new("call-1"),
+        transform: ToolCallTransform::None,
+        permission: ToolCallPermission::Allow,
+    };
+    let transition = pre.prepare_tool_calls(vec![prep], vec![], Artifacts::new(), 0);
+    let (_events, _actions, mut runtime, _T, _A, _turn_number, _markers) = transition.into_parts();
+    assert!(matches!(runtime, AgentRuntime::ExecutingTools(_)));
+
+    let AgentRuntime::ExecutingTools(mut exec) = runtime else {
+        panic!("expected ExecutingTools");
+    };
+    let events = exec.on_tool_started(ToolCallId::new("call-1"));
     assert!(
         events
             .iter()
             .any(|e| matches!(e, AgentEvent::ToolExecutionUpdate { .. })),
         "on_tool_started for pending tool should emit ToolExecutionUpdate"
     );
+    runtime = exec.into_runtime();
 
     // ReadyToContinue — state_mut should work
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools");
+    let AgentRuntime::ExecutingTools(exec) = runtime else {
+        panic!("expected ExecutingTools");
     };
-    let result = waiting.on_tool_done(
+    let result = exec.on_tool_done(
         ToolCallId::new("call-1"),
         Ok(ToolResult::text("ok")),
         vec![],
@@ -243,7 +244,6 @@ fn agent_runtime_delegation_exercise() {
     assert!(matches!(runtime, AgentRuntime::Aborted(_)));
 }
 
-
 #[test]
 fn start_turn_tools_appear_in_stream_llm_context() {
     let runtime = AgentRuntime::new(dummy_options());
@@ -280,7 +280,6 @@ fn start_turn_tools_appear_in_stream_llm_context() {
     assert_eq!(context.tools.len(), 1);
     assert_eq!(context.tools[0].name, tool.name);
 }
-
 
 #[test]
 fn continue_turn_preserves_tools_from_start_turn() {
@@ -321,12 +320,26 @@ fn continue_turn_preserves_tools_from_start_turn() {
         &ContextProjectionBudget::default(),
     );
     let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
-    assert!(matches!(runtime, AgentRuntime::WaitingTools(_)));
+    assert!(matches!(runtime, AgentRuntime::PreToolCall(_)));
 
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools");
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall");
     };
-    let (events, _actions, runtime, T, A, turn_number, _markers) = waiting
+    let prep = ToolCallPreparation {
+        tool_call_id: ToolCallId::new("tc-1"),
+        transform: ToolCallTransform::None,
+        permission: ToolCallPermission::Allow,
+    };
+    let (events, _actions, runtime, T, A, turn_number, _markers) = pre
+        .prepare_tool_calls(vec![prep], T, A, turn_number)
+        .into_parts();
+    let _ = events;
+    assert!(matches!(runtime, AgentRuntime::ExecutingTools(_)));
+
+    let AgentRuntime::ExecutingTools(exec) = runtime else {
+        panic!("expected ExecutingTools");
+    };
+    let (events, _actions, runtime, T, A, turn_number, _markers) = exec
         .on_tool_done(
             ToolCallId::new("tc-1"),
             Ok(ToolResult::text("ok")),
@@ -353,7 +366,6 @@ fn continue_turn_preserves_tools_from_start_turn() {
     assert_eq!(context.tools.len(), 1);
     assert_eq!(context.tools[0].name, tool.name);
 }
-
 
 #[test]
 fn abort_clears_current_turn_tools() {
@@ -414,7 +426,6 @@ fn abort_clears_current_turn_tools() {
     assert!(context.tools.is_empty(), "abort should clear turn_tools");
 }
 
-
 #[test]
 fn reset_clears_current_turn_tools() {
     let runtime = AgentRuntime::new(dummy_options());
@@ -467,5 +478,3 @@ fn reset_clears_current_turn_tools() {
     };
     assert!(context.tools.is_empty(), "reset should clear turn_tools");
 }
-
-

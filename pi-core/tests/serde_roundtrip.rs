@@ -1,9 +1,9 @@
 //! JSON serde roundtrip tests for message and event types.
 
 use pi_core::{
-    AgentAction, AgentEvent, AgentMessage, CancelReason, Content, LlmContext, StopReason,
-    TextContent, ToolCall, ToolCallId, ToolName, ToolArguments, ToolResultMessage,
-    UserMessage, AssistantMessage,
+    AgentAction, AgentEvent, AgentMessage, AssistantMessage, CancelReason, Content, LlmContext,
+    StopReason, TextContent, ToolArguments, ToolCall, ToolCallId, ToolName, ToolResultMessage,
+    UserMessage,
 };
 
 #[test]

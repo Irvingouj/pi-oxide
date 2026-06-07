@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-06-06
+
+### Added
+
+- **Typestate split: `PreToolCall` and `ExecutingTools`** — `WaitingTools` is now two explicit phases. `PreToolCallAgent` handles tool preparation/approval; `ExecutingToolsAgent` handles execution and completion. This removes the `preparations_applied` boolean that caused a silent multi-turn hang.
+- `PreToolCall` and `ExecutingTools` variants added to `Phase` enum and `AgentRuntime`.
+- `PreToolCallAgent::prepare_tool_calls()` transitions to `ExecutingTools` (or `ReadyToContinue` if all tools are blocked).
+- `ExecutingToolsAgent::cancel_tool()` increments `turn_number` when all pending calls empty, matching `PreToolCallAgent::cancel_tool()` parity.
+- `multi_turn_tool_execution_prepares_tools_on_second_batch` test verifies the multi-turn hang is fixed.
+
+### Changed
+
+- `AgentRuntime` variants: `WaitingTools` replaced with `PreToolCall` and `ExecutingTools`.
+- `StreamingAgent::finish_llm()` now returns `FinishLlmTransition::PreToolCall` when tool calls are present.
+- `ToolTransition` gains `PreToolCall` and `ExecutingTools` variants.
+- `cancel_tool` and `submit_user_message` are available on both `PreToolCallAgent` and `ExecutingToolsAgent`.
+- All hosts (WASM, TUI) dispatch to the new typestate variants.
+- `pi-host-tui/src/app.rs` now calls `prepare_tool_calls` before emitting `ExecuteTools` directives.
+- Workspace version bumped to `0.3.0`.
+- `@pi-oxide/pi-host-web` SDK version bumped to `0.8.0`.
+- `pi-oxide-web` version bumped to `0.5.0`.
+
+### Fixed
+
+- Multi-turn hang: second batch of tool calls no longer inherits the old batch's "prepared" bit.
+- `cargo clippy --workspace -- -D warnings` is clean.
+- `cargo fmt --all -- --check` is clean.
+- All 115 tests pass across `pi-core`, `pi-host-tui`, and `pi-host-web`.
+- Biome check is clean on source files (warnings remain in test files only).
+
 ## [0.2.0] - 2026-05-29
 
 ### Added

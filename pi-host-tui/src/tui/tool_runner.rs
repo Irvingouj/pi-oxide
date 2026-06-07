@@ -35,7 +35,15 @@ impl App {
                         self.on_tool_result(terminal, call.id, result);
                     }
                     ExtensionOutcome::Running(stream) => {
-                        let _events = self.agent_mut().on_tool_started(call.id.clone());
+                        let runtime = self.agent.take().unwrap();
+                        let mut events = vec![];
+                        if let AgentRuntime::ExecutingTools(mut exec) = runtime {
+                            events = exec.on_tool_started(call.id.clone());
+                            self.agent = Some(exec.into_runtime());
+                        } else {
+                            self.agent = Some(runtime);
+                        }
+                        let _ = events;
                         self.running_tasks.push(crate::app::RunningTask {
                             tool_call_id: call.id.clone(),
                             stream,
@@ -148,17 +156,16 @@ impl App {
         let artifacts = std::mem::take(&mut self.artifacts);
         let (_events, actions, new_runtime, transcript, artifacts, turn_number, _markers) =
             match runtime {
-                AgentRuntime::WaitingTools(waiting) => {
+                AgentRuntime::ExecutingTools(exec) => {
                     debug!(tool_call_id = tool_call_id.as_str(), "on_tool_done (sync)");
-                    waiting
-                        .on_tool_done(
-                            tool_call_id,
-                            result,
-                            transcript,
-                            artifacts,
-                            self.turn_number,
-                        )
-                        .into_parts()
+                    exec.on_tool_done(
+                        tool_call_id,
+                        result,
+                        transcript,
+                        artifacts,
+                        self.turn_number,
+                    )
+                    .into_parts()
                 }
                 AgentRuntime::Compacting(compacting) => {
                     let (ev, act, state, transcript, artifacts, tn, m) = compacting
@@ -196,7 +203,15 @@ impl App {
             while let Some(event) = task.stream.try_recv() {
                 match event {
                     ToolEvent::Update(update) => {
-                        let _events = self.agent_mut().on_tool_update(update);
+                        let runtime = self.agent.take().unwrap();
+                        let mut events = vec![];
+                        if let AgentRuntime::ExecutingTools(mut exec) = runtime {
+                            events = exec.on_tool_update(update);
+                            self.agent = Some(exec.into_runtime());
+                        } else {
+                            self.agent = Some(runtime);
+                        }
+                        let _ = events;
                     }
                     ToolEvent::Done(result) => {
                         debug!(
@@ -262,10 +277,9 @@ impl App {
                 new_turn_number,
                 _markers,
             ) = match runtime {
-                AgentRuntime::WaitingTools(waiting) => {
+                AgentRuntime::ExecutingTools(exec) => {
                     debug!(tool_call_id = tool_call_id.as_str(), "on_tool_done (async)");
-                    waiting
-                        .on_tool_done(tool_call_id, result, transcript, artifacts, turn_number)
+                    exec.on_tool_done(tool_call_id, result, transcript, artifacts, turn_number)
                         .into_parts()
                 }
                 AgentRuntime::Compacting(compacting) => {
@@ -275,7 +289,7 @@ impl App {
                     (ev, act, state.into_runtime(), transcript, artifacts, tn, m)
                 }
                 other => {
-                    warn!("runtime not WaitingTools when async tool completed");
+                    warn!("runtime not ExecutingTools when async tool completed");
                     (
                         vec![],
                         vec![],

@@ -10,11 +10,13 @@ use ratatui::Frame;
 use pi_core::{
     AgentAction, AgentMessage, AgentOptions, AgentRuntime, ApiName, Artifacts,
     ContextProjectionBudget, ExecutionMode, Model, ModelId, ModelName, ProviderName, QueueMode,
-    SessionId, ThinkingLevel, ToolCallId, ToolDefinition, TrimmedMessage, WaitMode,
+    SessionId, ThinkingLevel, ToolCallId, ToolCallPermission, ToolCallPreparation,
+    ToolCallTransform, ToolDefinition, TrimmedMessage, WaitMode,
 };
 
 use crate::extension::{BashExtension, BuiltinExtension, Extension};
 use crate::host_state::{HostDirective, HostState};
+use crate::llm::LlmClient;
 #[allow(unused_imports)]
 use crate::llm::LlmProvider;
 use crate::session::FileSystemSessionBackend;
@@ -537,13 +539,26 @@ impl App {
                     )
                     .into_parts()
                 }
-                AgentRuntime::WaitingTools(mut waiting) => {
-                    let disposition = waiting.submit_user_message(AgentMessage::user(text));
+                AgentRuntime::PreToolCall(mut pre) => {
+                    let disposition = pre.submit_user_message(AgentMessage::user(text));
                     let (events, actions) = disposition.into_events_actions();
                     (
                         events,
                         actions,
-                        waiting.into_runtime(),
+                        pre.into_runtime(),
+                        transcript,
+                        artifacts,
+                        turn_number,
+                        vec![],
+                    )
+                }
+                AgentRuntime::ExecutingTools(mut exec) => {
+                    let disposition = exec.submit_user_message(AgentMessage::user(text));
+                    let (events, actions) = disposition.into_events_actions();
+                    (
+                        events,
+                        actions,
+                        exec.into_runtime(),
                         transcript,
                         artifacts,
                         turn_number,
@@ -727,10 +742,45 @@ impl App {
                     directives.push(HostDirective::Summarize { context });
                 }
                 AgentAction::PrepareToolCalls { calls } => {
-                    // TUI does not implement transform/permission hooks and maps
-                    // PrepareToolCalls directly to ExecuteTools as a pragmatic fallback.
-                    // This is acceptable since TUI is not a primary target for this feature.
-                    directives.push(HostDirective::ExecuteTools { calls });
+                    // TUI bypasses transform/permission hooks and auto-allows all calls.
+                    // We must call prepare_tool_calls to transition from PreToolCall to
+                    // ExecutingTools before executing tools.
+                    let runtime = self.agent.take().unwrap();
+                    if let AgentRuntime::PreToolCall(pre) = runtime {
+                        let preps = calls
+                            .iter()
+                            .map(|c| ToolCallPreparation {
+                                tool_call_id: c.id.clone(),
+                                transform: ToolCallTransform::None,
+                                permission: ToolCallPermission::Allow,
+                            })
+                            .collect();
+                        let transcript = std::mem::take(&mut self.transcript);
+                        let artifacts = std::mem::take(&mut self.artifacts);
+                        let (
+                            events,
+                            new_actions,
+                            runtime,
+                            transcript,
+                            artifacts,
+                            turn_number,
+                            _markers,
+                        ) = pre
+                            .prepare_tool_calls(preps, transcript, artifacts, self.turn_number)
+                            .into_parts();
+                        self.transcript = transcript;
+                        self.artifacts = artifacts;
+                        self.turn_number = turn_number;
+                        self.agent = Some(runtime);
+                        for action in new_actions {
+                            if let AgentAction::ExecuteTools { calls } = action {
+                                directives.push(HostDirective::ExecuteTools { calls });
+                            }
+                        }
+                        let _ = events;
+                    } else {
+                        self.agent = Some(runtime);
+                    }
                 }
                 AgentAction::ExecuteTools { calls } => {
                     directives.push(HostDirective::ExecuteTools { calls });

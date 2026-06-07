@@ -81,5 +81,3 @@ fn text_delta_is_incremental_not_accumulated() {
     let (_events, actions, _runtime, _T, _A, _turn_number, _markers) = transition.into_parts();
     assert!(actions.iter().any(|a| matches!(a, AgentAction::Finished)));
 }
-
-

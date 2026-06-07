@@ -31,7 +31,6 @@ fn compacting_agent_start_turn_emits_summarize_action() {
     }
 }
 
-
 #[test]
 fn accept_summary_applies_compaction_and_emits_compaction_applied_marker() {
     let runtime = AgentRuntime::new(dummy_options());
@@ -113,7 +112,6 @@ fn accept_summary_applies_compaction_and_emits_compaction_applied_marker() {
     );
 }
 
-
 #[test]
 fn compacting_agent_abort_transitions_to_aborted() {
     let runtime = AgentRuntime::new(dummy_options());
@@ -177,7 +175,6 @@ fn compacting_agent_abort_transitions_to_aborted() {
     assert!(matches!(runtime, AgentRuntime::Aborted(_)));
 }
 
-
 #[test]
 fn continue_turn_can_also_trigger_compacting() {
     let runtime = AgentRuntime::new(dummy_options());
@@ -210,10 +207,24 @@ fn continue_turn_can_also_trigger_compacting() {
     );
     let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
 
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools");
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall");
     };
-    let result = waiting.on_tool_done(
+    let prep = ToolCallPreparation {
+        tool_call_id: ToolCallId::new("call-1"),
+        transform: ToolCallTransform::None,
+        permission: ToolCallPermission::Allow,
+    };
+    let (events, _actions, runtime, T, A, turn_number, _markers) = pre
+        .prepare_tool_calls(vec![prep], T, A, turn_number)
+        .into_parts();
+    let _ = events;
+    assert!(matches!(runtime, AgentRuntime::ExecutingTools(_)));
+
+    let AgentRuntime::ExecutingTools(exec) = runtime else {
+        panic!("expected ExecutingTools");
+    };
+    let result = exec.on_tool_done(
         ToolCallId::new("call-1"),
         Ok(ToolResult::text("ok")),
         T,
@@ -244,5 +255,3 @@ fn continue_turn_can_also_trigger_compacting() {
         ContinueTurnTransition::Compacting(_) => {} // Possible if T is large enough
     }
 }
-
-

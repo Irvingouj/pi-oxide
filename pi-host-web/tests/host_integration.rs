@@ -16,7 +16,6 @@ fn estimate_tokens_returns_value() {
     assert_eq!(resp.data.unwrap().tokens, 3); // (11 + 3) / 4 = 3.5 -> 3
 }
 
-
 #[test]
 fn estimate_tokens_for_text_returns_value() {
     let resp = estimate_tokens_for_text_export("hello".to_string());
@@ -53,7 +52,6 @@ fn directive_stream_llm_has_projected_messages() {
     );
     destroy_host_agent(handle);
 }
-
 
 #[test]
 fn directive_execute_tools_after_llm() {
@@ -97,7 +95,6 @@ fn directive_execute_tools_after_llm() {
     destroy_host_agent(handle);
 }
 
-
 #[test]
 fn directive_finished_after_no_tools() {
     let resp = create_host_agent(dummy_options(), default_budget());
@@ -123,7 +120,6 @@ fn directive_finished_after_no_tools() {
     );
     destroy_host_agent(handle);
 }
-
 
 #[test]
 fn directive_persist_after_entry_append() {
@@ -157,7 +153,6 @@ fn directive_persist_after_entry_append() {
     destroy_host_agent(handle);
 }
 
-
 #[test]
 fn low_budget_turn_succeeds() {
     let budget = ContextProjectionBudget {
@@ -180,7 +175,6 @@ fn low_budget_turn_succeeds() {
     destroy_host_agent(handle);
 }
 
-
 #[test]
 fn directive_cancel_tools() {
     // CancelTools is not yet produced by the current AgentRuntime, so we
@@ -198,7 +192,6 @@ fn directive_cancel_tools() {
     );
 }
 
-
 #[test]
 fn directive_wait_for_input() {
     // WaitForInput is not yet produced by the current AgentRuntime in the
@@ -214,7 +207,6 @@ fn directive_wait_for_input() {
         "should convert WaitForInput action to directive"
     );
 }
-
 
 #[test]
 fn full_turn_directive_sequence() {
@@ -293,7 +285,6 @@ fn full_turn_directive_sequence() {
     destroy_host_agent(handle);
 }
 
-
 #[test]
 fn multi_turn_directive_sequence() {
     let resp = create_host_agent(dummy_options(), default_budget());
@@ -340,7 +331,6 @@ fn multi_turn_directive_sequence() {
     destroy_host_agent(handle);
 }
 
-
 #[test]
 fn turn_then_finish_with_low_budget() {
     let budget = ContextProjectionBudget {
@@ -378,7 +368,6 @@ fn turn_then_finish_with_low_budget() {
     destroy_host_agent(handle);
 }
 
-
 #[test]
 fn events_still_emitted_alongside_directives() {
     let resp = create_host_agent(dummy_options(), default_budget());
@@ -403,7 +392,6 @@ fn events_still_emitted_alongside_directives() {
         .any(|d| matches!(d, HostDirective::StreamLlm { .. })));
     destroy_host_agent(handle);
 }
-
 
 #[test]
 fn steering_during_stream_produces_directives() {
@@ -431,7 +419,6 @@ fn steering_during_stream_produces_directives() {
 // -----------------------------------------------------------------------
 // Phase 6 — DTO and SDK Update
 // -----------------------------------------------------------------------
-
 
 #[test]
 fn get_host_state_persist_data_roundtrip() {
@@ -468,7 +455,6 @@ fn get_host_state_persist_data_roundtrip() {
 // Phase 7 — Session Migration
 // -----------------------------------------------------------------------
 
-
 #[test]
 fn migrate_old_session_extracts_projection() {
     // Old format with projection_state is no longer recognized by new PersistData format.
@@ -483,7 +469,6 @@ fn migrate_old_session_extracts_projection() {
     let resp = restore_host_state_from_json(old_json.to_string());
     assert!(!resp.ok, "old format with projection_state should fail");
 }
-
 
 #[test]
 fn migrate_new_session_noop() {
@@ -511,7 +496,6 @@ fn migrate_new_session_noop() {
     );
     destroy_host_state(handle);
 }
-
 
 #[test]
 fn roundtrip_persist_data() {
@@ -557,7 +541,6 @@ fn roundtrip_persist_data() {
 // Phase 8 — Marker and artifact sync verification
 // -----------------------------------------------------------------------
 
-
 #[test]
 fn marker_processing_in_start_turn() {
     // Note: core's start_turn does not naturally produce NewArtifacts markers.
@@ -586,7 +569,6 @@ fn marker_processing_in_start_turn() {
 
     destroy_host_agent(handle);
 }
-
 
 #[test]
 fn marker_processing_in_host_llm_done() {
@@ -617,6 +599,11 @@ fn marker_processing_in_host_llm_done() {
         details: None,
         terminate: None,
     };
+    let prep_json =
+        r#"[{"tool_call_id":"tc-1","transform":{"type":"none"},"permission":{"type":"allow"}}]"#;
+    let resp = host_prepare_tool_calls(handle, prep_json.to_string());
+    assert!(resp.ok);
+
     let resp = host_tool_done(handle, ToolCallId("tc-1".to_string()), tool_result);
     assert!(resp.ok);
 
@@ -647,7 +634,6 @@ fn marker_processing_in_host_llm_done() {
 
     destroy_host_agent(handle);
 }
-
 
 #[test]
 fn restore_syncs_missing_only() {
@@ -724,7 +710,6 @@ fn restore_syncs_missing_only() {
     destroy_host_agent(handle);
 }
 
-
 #[test]
 fn compaction_marker_emission() {
     let budget = ContextProjectionBudget {
@@ -759,6 +744,11 @@ fn compaction_marker_emission() {
         details: None,
         terminate: None,
     };
+    let prep_json =
+        r#"[{"tool_call_id":"tc-1","transform":{"type":"none"},"permission":{"type":"allow"}}]"#;
+    let resp = host_prepare_tool_calls(handle, prep_json.to_string());
+    assert!(resp.ok);
+
     let resp = host_tool_done(handle, ToolCallId("tc-1".to_string()), tool_result);
     assert!(resp.ok);
 
@@ -825,7 +815,6 @@ fn compaction_marker_emission() {
     destroy_host_agent(handle);
 }
 
-
 #[test]
 fn marker_processing_in_host_tool_done() {
     // Create agent
@@ -854,6 +843,11 @@ fn marker_processing_in_host_tool_done() {
         details: None,
         terminate: None,
     };
+    let prep_json =
+        r#"[{"tool_call_id":"tc-1","transform":{"type":"none"},"permission":{"type":"allow"}}]"#;
+    let resp = host_prepare_tool_calls(handle, prep_json.to_string());
+    assert!(resp.ok);
+
     let resp = host_tool_done(handle, ToolCallId("tc-1".to_string()), tool_result);
     assert!(resp.ok);
 
@@ -873,6 +867,11 @@ fn marker_processing_in_host_tool_done() {
         details: None,
         terminate: None,
     };
+    let prep_json2 =
+        r#"[{"tool_call_id":"tc-2","transform":{"type":"none"},"permission":{"type":"allow"}}]"#;
+    let resp = host_prepare_tool_calls(handle, prep_json2.to_string());
+    assert!(resp.ok);
+
     let resp = host_tool_done(handle, ToolCallId("tc-2".to_string()), tool_result2);
     assert!(resp.ok);
     let output = resp.data.unwrap();
@@ -897,7 +896,6 @@ fn marker_processing_in_host_tool_done() {
 
     destroy_host_agent(handle);
 }
-
 
 #[test]
 fn marker_processing_in_host_continue_turn() {
@@ -927,6 +925,11 @@ fn marker_processing_in_host_continue_turn() {
         details: None,
         terminate: None,
     };
+    let prep_json =
+        r#"[{"tool_call_id":"tc-1","transform":{"type":"none"},"permission":{"type":"allow"}}]"#;
+    let resp = host_prepare_tool_calls(handle, prep_json.to_string());
+    assert!(resp.ok);
+
     let resp = host_tool_done(handle, ToolCallId("tc-1".to_string()), tool_result);
     assert!(resp.ok);
 
@@ -968,7 +971,6 @@ fn marker_processing_in_host_continue_turn() {
     destroy_host_agent(handle);
 }
 
-
 #[test]
 fn marker_processing_in_host_tool_cancelled() {
     // Create agent
@@ -997,6 +999,11 @@ fn marker_processing_in_host_tool_cancelled() {
         details: None,
         terminate: None,
     };
+    let prep_json1 =
+        r#"[{"tool_call_id":"tc-1","transform":{"type":"none"},"permission":{"type":"allow"}}]"#;
+    let resp = host_prepare_tool_calls(handle, prep_json1.to_string());
+    assert!(resp.ok);
+
     let resp = host_tool_done(handle, ToolCallId("tc-1".to_string()), tool_result);
     assert!(resp.ok);
 
@@ -1007,6 +1014,11 @@ fn marker_processing_in_host_tool_cancelled() {
         handle,
         LlmResult::Ok(make_assistant_with_tool("grep", "tc-2")),
     );
+    assert!(resp.ok);
+
+    let prep_json2 =
+        r#"[{"tool_call_id":"tc-2","transform":{"type":"none"},"permission":{"type":"allow"}}]"#;
+    let resp = host_prepare_tool_calls(handle, prep_json2.to_string());
     assert!(resp.ok);
 
     // Turn 2: host_tool_cancelled for tc-2 — this triggers projection of the old tool from turn 1
@@ -1034,4 +1046,3 @@ fn marker_processing_in_host_tool_cancelled() {
 
     destroy_host_agent(handle);
 }
-

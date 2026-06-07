@@ -73,7 +73,7 @@ impl<T> Transition<T> {
 /// Outcome of finishing an LLM stream.
 pub enum FinishLlmTransition {
     MoreStreaming(Transition<StreamingAgent>),
-    WaitingTools(Transition<WaitingToolsAgent>),
+    PreToolCall(Transition<PreToolCallAgent>),
     Ready(Transition<ReadyAgent>),
     Finished(Transition<FinishedAgent>),
     Aborted(Transition<AbortedAgent>),
@@ -96,7 +96,7 @@ impl FinishLlmTransition {
                     markers,
                 )
             }
-            FinishLlmTransition::WaitingTools(t) => {
+            FinishLlmTransition::PreToolCall(t) => {
                 let (events, actions, state, transcript, artifacts, turn_number, markers) =
                     t.into_parts();
                 (
@@ -154,7 +154,8 @@ impl FinishLlmTransition {
 
 /// Outcome of resolving a tool call.
 pub enum ToolTransition {
-    WaitingTools(Transition<WaitingToolsAgent>),
+    PreToolCall(Transition<PreToolCallAgent>),
+    ExecutingTools(Transition<ExecutingToolsAgent>),
     Ready(Transition<ReadyAgent>),
     Finished(Transition<FinishedAgent>),
 }
@@ -162,7 +163,20 @@ pub enum ToolTransition {
 impl ToolTransition {
     pub fn into_parts(self) -> TransitionParts {
         match self {
-            ToolTransition::WaitingTools(t) => {
+            ToolTransition::PreToolCall(t) => {
+                let (events, actions, state, transcript, artifacts, turn_number, markers) =
+                    t.into_parts();
+                (
+                    events,
+                    actions,
+                    state.into_runtime(),
+                    transcript,
+                    artifacts,
+                    turn_number,
+                    markers,
+                )
+            }
+            ToolTransition::ExecutingTools(t) => {
                 let (events, actions, state, transcript, artifacts, turn_number, markers) =
                     t.into_parts();
                 (
@@ -311,7 +325,8 @@ pub enum AgentRuntime {
     Idle(IdleAgent),
     Streaming(StreamingAgent),
     Compacting(CompactingAgent),
-    WaitingTools(WaitingToolsAgent),
+    PreToolCall(PreToolCallAgent),
+    ExecutingTools(ExecutingToolsAgent),
     ReadyToContinue(ReadyAgent),
     Finished(FinishedAgent),
     Aborted(AbortedAgent),
@@ -321,17 +336,13 @@ impl AgentRuntime {
     /// Wrap an existing agent. The agent must be in a valid phase.
     pub fn from_agent(agent: Agent) -> Self {
         match agent.phase {
-            Phase::Idle => {
-                if agent.state().pending_tool_calls.is_empty() {
-                    AgentRuntime::Idle(IdleAgent { agent })
-                } else {
-                    AgentRuntime::WaitingTools(WaitingToolsAgent { agent })
-                }
-            }
+            Phase::Idle => AgentRuntime::Idle(IdleAgent { agent }),
             Phase::Streaming => AgentRuntime::Streaming(StreamingAgent { agent }),
             Phase::Compacting => {
                 unreachable!("Compacting phase is only entered via typestate transitions")
             }
+            Phase::PreToolCall => AgentRuntime::PreToolCall(PreToolCallAgent { agent }),
+            Phase::ExecutingTools => AgentRuntime::ExecutingTools(ExecutingToolsAgent { agent }),
             Phase::WaitForInput => AgentRuntime::ReadyToContinue(ReadyAgent { agent }),
         }
     }
@@ -356,7 +367,8 @@ impl AgentRuntime {
             AgentRuntime::Idle(a) => &a.agent,
             AgentRuntime::Streaming(a) => &a.agent,
             AgentRuntime::Compacting(a) => &a.agent,
-            AgentRuntime::WaitingTools(a) => &a.agent,
+            AgentRuntime::PreToolCall(a) => &a.agent,
+            AgentRuntime::ExecutingTools(a) => &a.agent,
             AgentRuntime::ReadyToContinue(a) => &a.agent,
             AgentRuntime::Finished(a) => &a.agent,
             AgentRuntime::Aborted(a) => &a.agent,
@@ -368,7 +380,8 @@ impl AgentRuntime {
             AgentRuntime::Idle(a) => &mut a.agent,
             AgentRuntime::Streaming(a) => &mut a.agent,
             AgentRuntime::Compacting(a) => &mut a.agent,
-            AgentRuntime::WaitingTools(a) => &mut a.agent,
+            AgentRuntime::PreToolCall(a) => &mut a.agent,
+            AgentRuntime::ExecutingTools(a) => &mut a.agent,
             AgentRuntime::ReadyToContinue(a) => &mut a.agent,
             AgentRuntime::Finished(a) => &mut a.agent,
             AgentRuntime::Aborted(a) => &mut a.agent,
@@ -391,7 +404,8 @@ impl AgentRuntime {
             AgentRuntime::Idle(a) => a.agent,
             AgentRuntime::Streaming(a) => a.agent,
             AgentRuntime::Compacting(a) => a.agent,
-            AgentRuntime::WaitingTools(a) => a.agent,
+            AgentRuntime::PreToolCall(a) => a.agent,
+            AgentRuntime::ExecutingTools(a) => a.agent,
             AgentRuntime::ReadyToContinue(a) => a.agent,
             AgentRuntime::Finished(a) => a.agent,
             AgentRuntime::Aborted(a) => a.agent,
@@ -404,16 +418,6 @@ impl AgentRuntime {
         let mut agent = self.into_agent();
         agent.reset();
         Self::from_agent(agent)
-    }
-
-    /// Forward a tool execution update.
-    pub fn on_tool_update(&mut self, update: ToolExecutionUpdate) -> Vec<AgentEvent> {
-        self.as_agent_mut().on_tool_update(update)
-    }
-
-    /// Forward a tool started notification.
-    pub fn on_tool_started(&mut self, id: ToolCallId) -> Vec<AgentEvent> {
-        self.as_agent_mut().on_tool_started(id)
     }
 }
 
@@ -574,10 +578,10 @@ impl StreamingAgent {
             .iter()
             .any(|a| matches!(a, AgentAction::PrepareToolCalls { .. }))
         {
-            return FinishLlmTransition::WaitingTools(Transition {
+            return FinishLlmTransition::PreToolCall(Transition {
                 events,
                 actions,
-                state: WaitingToolsAgent { agent: self.agent },
+                state: PreToolCallAgent { agent: self.agent },
                 transcript,
                 artifacts,
                 turn_number,
@@ -635,71 +639,16 @@ impl StreamingAgent {
 }
 
 // ---------------------------------------------------------------------------
-// WaitingToolsAgent — deferred tools are in flight
+// PreToolCallAgent — tools proposed by LLM, awaiting host preparation
 // ---------------------------------------------------------------------------
 
-pub struct WaitingToolsAgent {
+pub struct PreToolCallAgent {
     pub(crate) agent: Agent,
 }
 
-impl WaitingToolsAgent {
+impl PreToolCallAgent {
     pub fn into_agent(self) -> Agent {
         self.agent
-    }
-
-    pub fn on_tool_done(
-        mut self,
-        id: ToolCallId,
-        result: Result<ToolResult, ToolError>,
-        transcript: Vec<TrimmedMessage>,
-        artifacts: Artifacts,
-        turn_number: u32,
-    ) -> ToolTransition {
-        let (events, actions, markers, transcript, artifacts) =
-            self.agent
-                .on_tool_done(id, result, transcript, artifacts, turn_number);
-
-        if actions.iter().any(|a| matches!(a, AgentAction::Finished)) {
-            return ToolTransition::Finished(Transition {
-                events,
-                actions,
-                state: FinishedAgent { agent: self.agent },
-                transcript,
-                artifacts,
-                turn_number,
-                markers,
-            });
-        }
-
-        if self.agent.state().pending_tool_calls.is_empty() {
-            return ToolTransition::Ready(Transition {
-                events,
-                actions,
-                state: ReadyAgent { agent: self.agent },
-                transcript,
-                artifacts,
-                turn_number: turn_number + 1,
-                markers,
-            });
-        }
-
-        ToolTransition::WaitingTools(Transition {
-            events,
-            actions,
-            state: WaitingToolsAgent { agent: self.agent },
-            transcript,
-            artifacts,
-            turn_number,
-            markers,
-        })
-    }
-
-    pub fn on_tool_update(&mut self, update: ToolExecutionUpdate) -> Vec<AgentEvent> {
-        self.agent.on_tool_update(update)
-    }
-
-    pub fn on_tool_started(&mut self, id: ToolCallId) -> Vec<AgentEvent> {
-        self.agent.on_tool_started(id)
     }
 
     pub fn cancel_tool(
@@ -733,15 +682,15 @@ impl WaitingToolsAgent {
                 state: ReadyAgent { agent: self.agent },
                 transcript,
                 artifacts,
-                turn_number,
+                turn_number: turn_number + 1,
                 markers,
             });
         }
 
-        ToolTransition::WaitingTools(Transition {
+        ToolTransition::PreToolCall(Transition {
             events,
             actions,
-            state: WaitingToolsAgent { agent: self.agent },
+            state: PreToolCallAgent { agent: self.agent },
             transcript,
             artifacts,
             turn_number,
@@ -795,10 +744,10 @@ impl WaitingToolsAgent {
             });
         }
 
-        ToolTransition::WaitingTools(Transition {
+        ToolTransition::ExecutingTools(Transition {
             events,
             actions,
-            state: WaitingToolsAgent { agent: self.agent },
+            state: ExecutingToolsAgent { agent: self.agent },
             transcript,
             artifacts,
             turn_number,
@@ -807,7 +756,150 @@ impl WaitingToolsAgent {
     }
 
     pub fn into_runtime(self) -> AgentRuntime {
-        AgentRuntime::WaitingTools(self)
+        AgentRuntime::PreToolCall(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ExecutingToolsAgent — tools approved, awaiting execution results
+// ---------------------------------------------------------------------------
+
+pub struct ExecutingToolsAgent {
+    pub(crate) agent: Agent,
+}
+
+impl ExecutingToolsAgent {
+    pub fn into_agent(self) -> Agent {
+        self.agent
+    }
+
+    pub fn on_tool_done(
+        mut self,
+        id: ToolCallId,
+        result: Result<ToolResult, ToolError>,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+    ) -> ToolTransition {
+        let (events, actions, markers, transcript, artifacts) =
+            self.agent
+                .on_tool_done(id, result, transcript, artifacts, turn_number);
+
+        if actions.iter().any(|a| matches!(a, AgentAction::Finished)) {
+            return ToolTransition::Finished(Transition {
+                events,
+                actions,
+                state: FinishedAgent { agent: self.agent },
+                transcript,
+                artifacts,
+                turn_number,
+                markers,
+            });
+        }
+
+        if self.agent.state().pending_tool_calls.is_empty() {
+            return ToolTransition::Ready(Transition {
+                events,
+                actions,
+                state: ReadyAgent { agent: self.agent },
+                transcript,
+                artifacts,
+                turn_number: turn_number + 1,
+                markers,
+            });
+        }
+
+        ToolTransition::ExecutingTools(Transition {
+            events,
+            actions,
+            state: ExecutingToolsAgent { agent: self.agent },
+            transcript,
+            artifacts,
+            turn_number,
+            markers,
+        })
+    }
+
+    pub fn on_tool_update(&mut self, update: ToolExecutionUpdate) -> Vec<AgentEvent> {
+        self.agent.on_tool_update(update)
+    }
+
+    pub fn on_tool_started(&mut self, id: ToolCallId) -> Vec<AgentEvent> {
+        self.agent.on_tool_started(id)
+    }
+
+    pub fn cancel_tool(
+        mut self,
+        id: ToolCallId,
+        reason: CancelReason,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+    ) -> ToolTransition {
+        let (events, actions, markers, transcript, artifacts) =
+            self.agent
+                .on_tool_cancelled(id, reason, transcript, artifacts, turn_number);
+
+        if actions.iter().any(|a| matches!(a, AgentAction::Finished)) {
+            return ToolTransition::Finished(Transition {
+                events,
+                actions,
+                state: FinishedAgent { agent: self.agent },
+                transcript,
+                artifacts,
+                turn_number,
+                markers,
+            });
+        }
+
+        if self.agent.state().pending_tool_calls.is_empty() {
+            return ToolTransition::Ready(Transition {
+                events,
+                actions,
+                state: ReadyAgent { agent: self.agent },
+                transcript,
+                artifacts,
+                turn_number: turn_number + 1,
+                markers,
+            });
+        }
+
+        ToolTransition::ExecutingTools(Transition {
+            events,
+            actions,
+            state: ExecutingToolsAgent { agent: self.agent },
+            transcript,
+            artifacts,
+            turn_number,
+            markers,
+        })
+    }
+
+    pub fn submit_user_message(&mut self, msg: AgentMessage) -> UserInputDuringTools {
+        self.agent.follow_up(msg);
+        UserInputDuringTools::QueuedFollowUp(vec![])
+    }
+
+    pub fn abort(
+        mut self,
+        transcript: Vec<TrimmedMessage>,
+        artifacts: Artifacts,
+        turn_number: u32,
+    ) -> Transition<AbortedAgent> {
+        let events = self.agent.abort();
+        Transition {
+            events,
+            actions: vec![],
+            state: AbortedAgent { agent: self.agent },
+            transcript,
+            artifacts,
+            turn_number,
+            markers: vec![],
+        }
+    }
+
+    pub fn into_runtime(self) -> AgentRuntime {
+        AgentRuntime::ExecutingTools(self)
     }
 }
 

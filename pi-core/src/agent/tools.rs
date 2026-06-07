@@ -336,10 +336,6 @@ impl Agent {
         Vec<TrimmedMessage>,
         Artifacts,
     ) {
-        if self.preparations_applied {
-            return (vec![], vec![], vec![], t, a);
-        }
-
         let mut events = Vec::new();
         let mut actions = Vec::new();
         let mut markers = Vec::new();
@@ -491,7 +487,7 @@ impl Agent {
             });
         }
 
-        self.preparations_applied = true;
+        self.phase = super::Phase::ExecutingTools;
         (events, actions, markers, t, a)
     }
 }

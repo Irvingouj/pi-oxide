@@ -154,7 +154,9 @@ pub fn extract_text_from_tool_result(original: &OriginalToolResult) -> String {
         match c {
             pi_core::Content::Text(t) => parts.push(t.text.clone()),
             pi_core::Content::Image(img) => parts.push(format!("[image: {}]", img.media_type)),
-            pi_core::Content::ToolCall(tc) => parts.push(format!("[tool_call: {}]", tc.name.as_str())),
+            pi_core::Content::ToolCall(tc) => {
+                parts.push(format!("[tool_call: {}]", tc.name.as_str()))
+            }
         }
     }
     parts.join("\n")

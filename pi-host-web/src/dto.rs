@@ -875,7 +875,7 @@ mod dto_tests {
             json.contains("stream_llm"),
             "StreamLlm should serialize with tag"
         );
-    
+
         let execute = HostDirective::ExecuteTools {
             calls: vec![ToolCall {
                 id: ToolCallId("tc-1".to_string()),
@@ -888,7 +888,7 @@ mod dto_tests {
             json.contains("execute_tools"),
             "ExecuteTools should serialize with tag"
         );
-    
+
         let cancel = HostDirective::CancelTools {
             tool_call_ids: vec![ToolCallId("tc-1".to_string())],
             reason: CancelReason::UserRequested,
@@ -898,21 +898,21 @@ mod dto_tests {
             json.contains("cancel_tools"),
             "CancelTools should serialize with tag"
         );
-    
+
         let persist = HostDirective::Persist;
         let json = serde_json::to_string(&persist).unwrap();
         assert!(
             json.contains("persist"),
             "Persist should serialize with tag"
         );
-    
+
         let finished = HostDirective::Finished;
         let json = serde_json::to_string(&finished).unwrap();
         assert!(
             json.contains("finished"),
             "Finished should serialize with tag"
         );
-    
+
         let wait = HostDirective::WaitForInput {
             mode: WaitMode::Any,
         };
@@ -982,15 +982,14 @@ mod dto_tests {
                 entry_ids: vec!["entry-1".to_string(), "entry-2".to_string()],
             },
         ];
-    
+
         let json = serde_json::to_string(&markers).unwrap();
         let back: Vec<ChangeMarkerDto> = serde_json::from_str(&json).unwrap();
-    
+
         assert_eq!(markers, back);
         assert!(matches!(back[0], ChangeMarkerDto::CompactionApplied));
         assert!(
             matches!(&back[1], ChangeMarkerDto::NewArtifacts { entry_ids } if entry_ids == &["entry-1", "entry-2"])
         );
     }
-
 }

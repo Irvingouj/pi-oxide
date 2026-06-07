@@ -139,18 +139,21 @@ pub fn start_turn(handle: u32, input: StartTurnInput) -> TurnResultResult {
             }
             Ok((events, actions, markers))
         }
-        AgentRuntime::WaitingTools(mut waiting) => {
-            let (events, actions) = waiting
-                .submit_user_message(core_prompt)
-                .into_events_actions();
-            host_agent.runtime = waiting.into_runtime();
+        AgentRuntime::PreToolCall(mut pre) => {
+            let (events, actions) = pre.submit_user_message(core_prompt).into_events_actions();
+            host_agent.runtime = pre.into_runtime();
+            Ok((events, actions, vec![]))
+        }
+        AgentRuntime::ExecutingTools(mut exec) => {
+            let (events, actions) = exec.submit_user_message(core_prompt).into_events_actions();
+            host_agent.runtime = exec.into_runtime();
             Ok((events, actions, vec![]))
         }
         other => {
             let actual = runtime_phase_name(&other);
             host_agent.runtime = other;
             Err(HostError::WrongPhase {
-                expected: "Idle, Finished, Aborted, or WaitingTools",
+                expected: "Idle, Finished, Aborted, PreToolCall, or ExecutingTools",
                 actual,
             })
         }
@@ -303,16 +306,15 @@ pub fn host_prepare_tool_calls(handle: u32, preparations_json: String) -> TurnRe
     };
 
     let result = match host_agent.runtime {
-        AgentRuntime::WaitingTools(waiting) => {
-            let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) =
-                waiting
-                    .prepare_tool_calls(
-                        core_preps,
-                        host_agent.transcript,
-                        host_agent.artifacts,
-                        host_agent.turn_number,
-                    )
-                    .into_parts();
+        AgentRuntime::PreToolCall(pre) => {
+            let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) = pre
+                .prepare_tool_calls(
+                    core_preps,
+                    host_agent.transcript,
+                    host_agent.artifacts,
+                    host_agent.turn_number,
+                )
+                .into_parts();
             host_agent.runtime = new_runtime;
             host_agent.transcript = transcript;
             host_agent.artifacts = artifacts;
@@ -330,7 +332,7 @@ pub fn host_prepare_tool_calls(handle: u32, preparations_json: String) -> TurnRe
             let actual = runtime_phase_name(&other);
             host_agent.runtime = other;
             Err(HostError::WrongPhase {
-                expected: "WaitingTools",
+                expected: "PreToolCall",
                 actual,
             })
         }
@@ -377,17 +379,16 @@ pub fn host_tool_done(handle: u32, id: ToolCallId, result: ToolResult) -> TurnRe
     };
 
     let result = match host_agent.runtime {
-        AgentRuntime::WaitingTools(waiting) => {
-            let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) =
-                waiting
-                    .on_tool_done(
-                        core_id,
-                        Ok(core_result),
-                        host_agent.transcript,
-                        host_agent.artifacts,
-                        host_agent.turn_number,
-                    )
-                    .into_parts();
+        AgentRuntime::ExecutingTools(exec) => {
+            let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) = exec
+                .on_tool_done(
+                    core_id,
+                    Ok(core_result),
+                    host_agent.transcript,
+                    host_agent.artifacts,
+                    host_agent.turn_number,
+                )
+                .into_parts();
             host_agent.runtime = new_runtime;
             host_agent.transcript = transcript;
             host_agent.artifacts = artifacts;
@@ -405,7 +406,7 @@ pub fn host_tool_done(handle: u32, id: ToolCallId, result: ToolResult) -> TurnRe
             let actual = runtime_phase_name(&other);
             host_agent.runtime = other;
             Err(HostError::WrongPhase {
-                expected: "WaitingTools",
+                expected: "ExecutingTools",
                 actual,
             })
         }
@@ -454,17 +455,16 @@ pub fn host_tool_failed(handle: u32, id: ToolCallId, error: ToolError) -> TurnRe
     };
 
     let result = match host_agent.runtime {
-        AgentRuntime::WaitingTools(waiting) => {
-            let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) =
-                waiting
-                    .on_tool_done(
-                        core_id,
-                        Err(core_error),
-                        host_agent.transcript,
-                        host_agent.artifacts,
-                        host_agent.turn_number,
-                    )
-                    .into_parts();
+        AgentRuntime::ExecutingTools(exec) => {
+            let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) = exec
+                .on_tool_done(
+                    core_id,
+                    Err(core_error),
+                    host_agent.transcript,
+                    host_agent.artifacts,
+                    host_agent.turn_number,
+                )
+                .into_parts();
             host_agent.runtime = new_runtime;
             host_agent.transcript = transcript;
             host_agent.artifacts = artifacts;
@@ -482,7 +482,7 @@ pub fn host_tool_failed(handle: u32, id: ToolCallId, error: ToolError) -> TurnRe
             let actual = runtime_phase_name(&other);
             host_agent.runtime = other;
             Err(HostError::WrongPhase {
-                expected: "WaitingTools",
+                expected: "ExecutingTools",
                 actual,
             })
         }
@@ -731,17 +731,39 @@ pub fn host_tool_cancelled(
     };
 
     let result = match host_agent.runtime {
-        AgentRuntime::WaitingTools(waiting) => {
-            let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) =
-                waiting
-                    .cancel_tool(
-                        id,
-                        core_reason,
-                        host_agent.transcript,
-                        host_agent.artifacts,
-                        host_agent.turn_number,
-                    )
-                    .into_parts();
+        AgentRuntime::PreToolCall(pre) => {
+            let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) = pre
+                .cancel_tool(
+                    id,
+                    core_reason.clone(),
+                    host_agent.transcript,
+                    host_agent.artifacts,
+                    host_agent.turn_number,
+                )
+                .into_parts();
+            host_agent.runtime = new_runtime;
+            host_agent.transcript = transcript;
+            host_agent.artifacts = artifacts;
+            host_agent.turn_number = turn_number;
+            for marker in &markers {
+                if let pi_core::ChangeMarker::NewArtifacts { entry_ids } = marker {
+                    host_agent
+                        .host_state
+                        .sync_artifacts_from_core(&host_agent.artifacts, entry_ids);
+                }
+            }
+            Ok((events, actions, markers))
+        }
+        AgentRuntime::ExecutingTools(exec) => {
+            let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) = exec
+                .cancel_tool(
+                    id,
+                    core_reason,
+                    host_agent.transcript,
+                    host_agent.artifacts,
+                    host_agent.turn_number,
+                )
+                .into_parts();
             host_agent.runtime = new_runtime;
             host_agent.transcript = transcript;
             host_agent.artifacts = artifacts;
@@ -759,7 +781,7 @@ pub fn host_tool_cancelled(
             let actual = runtime_phase_name(&other);
             host_agent.runtime = other;
             Err(HostError::WrongPhase {
-                expected: "WaitingTools",
+                expected: "PreToolCall or ExecutingTools",
                 actual,
             })
         }
@@ -810,8 +832,20 @@ pub fn host_abort(handle: u32) -> TurnResultResult {
             host_agent.turn_number = transition.turn_number;
             Ok((transition.events, transition.actions))
         }
-        AgentRuntime::WaitingTools(waiting) => {
-            let transition = waiting.abort(
+        AgentRuntime::PreToolCall(pre) => {
+            let transition = pre.abort(
+                host_agent.transcript,
+                host_agent.artifacts,
+                host_agent.turn_number,
+            );
+            host_agent.runtime = transition.state.into_runtime();
+            host_agent.transcript = transition.transcript;
+            host_agent.artifacts = transition.artifacts;
+            host_agent.turn_number = transition.turn_number;
+            Ok((transition.events, transition.actions))
+        }
+        AgentRuntime::ExecutingTools(exec) => {
+            let transition = exec.abort(
                 host_agent.transcript,
                 host_agent.artifacts,
                 host_agent.turn_number,
@@ -850,7 +884,7 @@ pub fn host_abort(handle: u32) -> TurnResultResult {
             let actual = runtime_phase_name(&other);
             host_agent.runtime = other;
             Err(HostError::WrongPhase {
-                expected: "Streaming, WaitingTools, ReadyToContinue, or Compacting",
+                expected: "Streaming, PreToolCall, ExecutingTools, ReadyToContinue, or Compacting",
                 actual,
             })
         }

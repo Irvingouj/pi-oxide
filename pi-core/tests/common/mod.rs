@@ -58,4 +58,3 @@ pub fn tool_call(id: &str, name: &str) -> ToolCall {
 pub fn empty() -> (Vec<TrimmedMessage>, Artifacts, u32) {
     (vec![], Artifacts::new(), 0)
 }
-

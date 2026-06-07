@@ -49,7 +49,6 @@ fn abort_during_streaming_clears_queues_and_emits_agent_end() {
     );
 }
 
-
 #[test]
 fn abort_from_waiting_tools_clears_pending_tools() {
     let runtime = AgentRuntime::new(dummy_options());
@@ -82,13 +81,13 @@ fn abort_from_waiting_tools_clears_pending_tools() {
         &ContextProjectionBudget::default(),
     );
     let (_events, _actions, mut runtime, T, A, turn_number, _markers) = transition.into_parts();
-    assert!(matches!(runtime, AgentRuntime::WaitingTools(_)));
+    assert!(matches!(runtime, AgentRuntime::PreToolCall(_)));
     assert_eq!(runtime.state().pending_tool_calls.len(), 1);
 
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools");
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall");
     };
-    let transition = waiting.abort(T, A, turn_number);
+    let transition = pre.abort(T, A, turn_number);
     runtime = transition.state.into_runtime();
 
     assert!(matches!(runtime, AgentRuntime::Aborted(_)));
@@ -104,7 +103,6 @@ fn abort_from_waiting_tools_clears_pending_tools() {
         "abort should emit AgentEnd"
     );
 }
-
 
 #[test]
 fn steer_in_idle_queues_message_and_emits_queue_update() {
@@ -122,7 +120,6 @@ fn steer_in_idle_queues_message_and_emits_queue_update() {
     runtime = idle.into_runtime();
     assert!(matches!(runtime, AgentRuntime::Idle(_)));
 }
-
 
 #[test]
 fn steer_in_ready_to_continue_is_drained_on_next_turn() {
@@ -146,7 +143,7 @@ fn steer_in_ready_to_continue_is_drained_on_next_turn() {
     let (_events, _actions, _state, T, A, turn_number, _markers) = t.into_parts();
 
     let streaming = _state;
-    // Finish LLM with a tool call so we land in WaitingTools
+    // Finish LLM with a tool call so we land in PreToolCall
     let transition = streaming.finish_llm(
         LlmResult::Ok(assistant_with_tool_calls(vec![tool_call(
             "tc-1",
@@ -158,13 +155,27 @@ fn steer_in_ready_to_continue_is_drained_on_next_turn() {
         &ContextProjectionBudget::default(),
     );
     let (_events, _actions, runtime, T, A, turn_number, _markers) = transition.into_parts();
-    assert!(matches!(runtime, AgentRuntime::WaitingTools(_)));
+    assert!(matches!(runtime, AgentRuntime::PreToolCall(_)));
 
-    // Complete the tool to reach ReadyToContinue
-    let AgentRuntime::WaitingTools(waiting) = runtime else {
-        panic!("expected WaitingTools");
+    // Prepare and complete the tool to reach ReadyToContinue
+    let AgentRuntime::PreToolCall(pre) = runtime else {
+        panic!("expected PreToolCall");
     };
-    let (events, _actions, runtime, T, A, turn_number, _markers) = waiting
+    let prep = ToolCallPreparation {
+        tool_call_id: ToolCallId::new("tc-1"),
+        transform: ToolCallTransform::None,
+        permission: ToolCallPermission::Allow,
+    };
+    let (events, _actions, runtime, T, A, turn_number, _markers) = pre
+        .prepare_tool_calls(vec![prep], T, A, turn_number)
+        .into_parts();
+    let _ = events;
+    assert!(matches!(runtime, AgentRuntime::ExecutingTools(_)));
+
+    let AgentRuntime::ExecutingTools(exec) = runtime else {
+        panic!("expected ExecutingTools");
+    };
+    let (events, _actions, runtime, T, A, turn_number, _markers) = exec
         .on_tool_done(
             ToolCallId::new("tc-1"),
             Ok(ToolResult::text("ok")),
@@ -209,5 +220,3 @@ fn steer_in_ready_to_continue_is_drained_on_next_turn() {
     // We can't check T directly here since it's consumed, but the runtime should be Finished
     assert!(matches!(runtime, AgentRuntime::Finished(_)));
 }
-
-

@@ -1,8 +1,8 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { z } from "zod";
-import { ToolRegistryBuilder } from "../sdk/internal/tools/registry.ts";
 import { artifactTools } from "../sdk/internal/tools/artifact.ts";
+import { ToolRegistryBuilder } from "../sdk/internal/tools/registry.ts";
 import { defineTools, tool } from "../sdk/tools.ts";
 
 describe("SDK Tool API", () => {

@@ -165,7 +165,7 @@ impl Agent {
             self.state.pending_tool_calls.push(tc.id.0.clone());
         }
 
-        self.phase = Phase::Idle;
+        self.phase = Phase::PreToolCall;
         debug!(
             tool_count = tool_calls.len(),
             "assistant requested tool execution"

@@ -1057,7 +1057,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pi-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1067,7 +1067,7 @@ dependencies = [
 
 [[package]]
 name = "pi-host-tui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "crossterm 0.29.0",
@@ -1087,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "pi-host-web"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "pi-llm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "pi-core",
  "serde",

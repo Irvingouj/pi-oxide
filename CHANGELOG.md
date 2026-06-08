@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.1] - 2026-06-07
+
+### Changed
+
+- `@pi-oxide/pi-host-web` SDK version bumped to `0.9.1`.
+- Rebuilt and republished WASM bindings from workspace `0.4.0`.
+
 ## [0.4.0] - 2026-06-07
 
 ### Fixed

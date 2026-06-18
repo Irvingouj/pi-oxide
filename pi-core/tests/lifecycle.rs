@@ -143,7 +143,7 @@ fn agent_runtime_delegation_exercise() {
         turn_number,
         &ContextProjectionBudget::default(),
     );
-    let (_events, _actions, mut runtime, _T, _A, _turn_number, _markers) = transition.into_parts();
+    let (_events, _actions, runtime, _T, _A, _turn_number, _markers) = transition.into_parts();
     assert!(matches!(runtime, AgentRuntime::PreToolCall(_)));
 
     // ExecutingTools — on_tool_started should emit ToolExecutionUpdate

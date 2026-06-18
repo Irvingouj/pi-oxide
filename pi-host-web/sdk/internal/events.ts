@@ -4,7 +4,11 @@
 // Artifact events from turn_end markers (new API: artifacts tracked via tool result details).
 // Usage accumulation from model responses.
 
-import type { Content, AgentEvent as RawAgentEvent, AgentMessage as WasmAgentMessage } from "../../pi_host_web.js";
+import type {
+	Content,
+	AgentEvent as RawAgentEvent,
+	AgentMessage as WasmAgentMessage,
+} from "../../pi_host_web.js";
 import type {
 	AgentArtifactRef,
 	AgentContentBlock,
@@ -36,7 +40,13 @@ export class EventMapper {
 			messages: [],
 			toolCalls: [],
 			artifacts: [],
-			usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },
+			usage: {
+				input: 0,
+				output: 0,
+				cache_read: 0,
+				cache_write: 0,
+				total_tokens: 0,
+			},
 			text: "",
 			currentMessage: null,
 			currentTool: null,
@@ -48,12 +58,21 @@ export class EventMapper {
 
 		switch (rawEvent.type) {
 			case "agent_start": {
-				events.push({ type: "status", payload: { state: "loading", message: "Agent starting..." } as AgentStatus });
+				events.push({
+					type: "status",
+					payload: {
+						state: "loading",
+						message: "Agent starting...",
+					} as AgentStatus,
+				});
 				break;
 			}
 
 			case "turn_start": {
-				events.push({ type: "status", payload: { state: "thinking", message: "Thinking..." } as AgentStatus });
+				events.push({
+					type: "status",
+					payload: { state: "thinking", message: "Thinking..." } as AgentStatus,
+				});
 				break;
 			}
 
@@ -62,7 +81,10 @@ export class EventMapper {
 				state.currentMessage = msg;
 				state.messages.push(msg);
 				events.push({ type: "messageStart", payload: msg });
-				events.push({ type: "status", payload: { state: "thinking" } as AgentStatus });
+				events.push({
+					type: "status",
+					payload: { state: "thinking" } as AgentStatus,
+				});
 				break;
 			}
 
@@ -72,7 +94,13 @@ export class EventMapper {
 					state.text += delta.text;
 					events.push({ type: "text", payload: delta.text });
 				} else if (delta.kind === "thinking_delta") {
-					events.push({ type: "status", payload: { state: "thinking", message: "Thinking..." } as AgentStatus });
+					events.push({
+						type: "status",
+						payload: {
+							state: "thinking",
+							message: "Thinking...",
+						} as AgentStatus,
+					});
 				}
 				break;
 			}
@@ -105,13 +133,18 @@ export class EventMapper {
 				events.push({ type: "toolStart", payload: tool });
 				events.push({
 					type: "status",
-					payload: { state: "running_tool", message: `Running ${rawEvent.tool_name}...` } as AgentStatus,
+					payload: {
+						state: "running_tool",
+						message: `Running ${rawEvent.tool_name}...`,
+					} as AgentStatus,
 				});
 				break;
 			}
 
 			case "tool_execution_update": {
-				const tool = state.toolCalls.find((t) => t.id === rawEvent.tool_call_id);
+				const tool = state.toolCalls.find(
+					(t) => t.id === rawEvent.tool_call_id,
+				);
 				if (tool) {
 					tool.output = (tool.output ?? "") + rawEvent.chunk;
 					events.push({ type: "toolUpdate", payload: tool });
@@ -147,7 +180,9 @@ export class EventMapper {
 			}
 
 			case "tool_execution_cancelled": {
-				const tool = state.toolCalls.find((t) => t.id === rawEvent.tool_call_id);
+				const tool = state.toolCalls.find(
+					(t) => t.id === rawEvent.tool_call_id,
+				);
 				if (tool) {
 					tool.status = "cancelled";
 					tool.endedAt = Date.now();
@@ -185,23 +220,37 @@ export class EventMapper {
 					tool.status = tr.is_error ? "failed" : "completed";
 					tool.endedAt = Date.now();
 					const resultText = tr.content
-						.filter((c): c is { type: "text"; text: string } => c.type === "text")
+						.filter(
+							(c): c is { type: "text"; text: string } => c.type === "text",
+						)
 						.map((c) => c.text)
 						.join("\n");
 					tool.output = resultText;
 				}
 
-				events.push({ type: "status", payload: { state: "completed" } as AgentStatus });
+				events.push({
+					type: "status",
+					payload: { state: "completed" } as AgentStatus,
+				});
 				break;
 			}
 
 			case "save_point": {
-				events.push({ type: "status", payload: { state: "saving", message: "Saving session..." } as AgentStatus });
+				events.push({
+					type: "status",
+					payload: {
+						state: "saving",
+						message: "Saving session...",
+					} as AgentStatus,
+				});
 				break;
 			}
 
 			case "settled": {
-				events.push({ type: "status", payload: { state: "completed" } as AgentStatus });
+				events.push({
+					type: "status",
+					payload: { state: "completed" } as AgentStatus,
+				});
 				break;
 			}
 
@@ -211,7 +260,10 @@ export class EventMapper {
 			}
 
 			case "agent_end": {
-				events.push({ type: "status", payload: { state: "idle" } as AgentStatus });
+				events.push({
+					type: "status",
+					payload: { state: "idle" } as AgentStatus,
+				});
 				break;
 			}
 		}
@@ -219,7 +271,10 @@ export class EventMapper {
 		return events;
 	}
 
-	buildRunResult(state: RunState, turnResult: { aborted: boolean }): AgentRunResult {
+	buildRunResult(
+		state: RunState,
+		turnResult: { aborted: boolean },
+	): AgentRunResult {
 		if (turnResult.aborted) {
 			return {
 				status: "aborted",
@@ -240,7 +295,10 @@ export class EventMapper {
 		};
 	}
 
-	processMarkers(markers: Array<{ type: string; entry_ids?: string[] }>, state: RunState): SemanticEvent[] {
+	processMarkers(
+		markers: Array<{ type: string; entry_ids?: string[] }>,
+		state: RunState,
+	): SemanticEvent[] {
 		const events: SemanticEvent[] = [];
 		for (const marker of markers) {
 			if (marker.type === "new_artifacts" && marker.entry_ids) {
@@ -260,7 +318,10 @@ export class EventMapper {
 			role: msg.role,
 			content: msg.content.map((c) => this.convertContent(c)),
 			timestamp: msg.timestamp ?? Date.now(),
-			tool_call_id: msg.role === "tool_result" ? (msg as unknown as { tool_call_id: string }).tool_call_id : undefined,
+			tool_call_id:
+				msg.role === "tool_result"
+					? (msg as unknown as { tool_call_id: string }).tool_call_id
+					: undefined,
 		};
 	}
 
@@ -278,8 +339,15 @@ export class EventMapper {
 
 	private convertContent(c: Content): AgentContentBlock {
 		if (c.type === "text") return { type: "text", text: c.text };
-		if (c.type === "tool_call") return { type: "tool_call", id: c.id, name: c.name, arguments: c.arguments };
-		if (c.type === "image") return { type: "image", mimeType: c.media_type, data: c.data };
+		if (c.type === "tool_call")
+			return {
+				type: "tool_call",
+				id: c.id,
+				name: c.name,
+				arguments: c.arguments,
+			};
+		if (c.type === "image")
+			return { type: "image", mimeType: c.media_type, data: c.data };
 		return { type: "text", text: "" };
 	}
 }

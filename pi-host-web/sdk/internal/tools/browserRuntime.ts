@@ -31,7 +31,9 @@ export interface BrowserConsoleEntry {
 	timestamp: number;
 }
 
-export type BrowserToolResult = { ok: true; data?: unknown } | { ok: false; error: { code: string; message: string } };
+export type BrowserToolResult =
+	| { ok: true; data?: unknown }
+	| { ok: false; error: { code: string; message: string } };
 
 // --- Runtime adapter ---
 

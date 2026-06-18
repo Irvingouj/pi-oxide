@@ -8,7 +8,10 @@ type AnyHandler = (payload: unknown) => void;
 export class EventEmitter {
 	private handlers: Partial<Record<AgentEventName, Set<AnyHandler>>> = {};
 
-	on<E extends AgentEventName>(event: E, handler: AgentEventHandler<E>): () => void {
+	on<E extends AgentEventName>(
+		event: E,
+		handler: AgentEventHandler<E>,
+	): () => void {
 		if (!this.handlers[event]) {
 			this.handlers[event] = new Set();
 		}
@@ -32,7 +35,10 @@ export class EventEmitter {
 		}
 	}
 
-	emit<E extends AgentEventName>(event: E, payload: Parameters<AgentEventHandler<E>>[0]): void {
+	emit<E extends AgentEventName>(
+		event: E,
+		payload: Parameters<AgentEventHandler<E>>[0],
+	): void {
 		const set = this.handlers[event];
 		if (!set) return;
 		for (const handler of set) {

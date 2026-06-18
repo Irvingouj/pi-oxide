@@ -28,9 +28,14 @@ export { openai, openaiCompatible } from "./internal/providers/openai.ts";
 export { artifactTools } from "./internal/tools/artifact.ts";
 export { browserTools } from "./internal/tools/browser.ts";
 export { defineModel } from "./model.ts";
-export { httpStore, indexedDbStore, localStorageStore, memoryStore } from "./stores.ts";
-export { defineTools, tool } from "./tools.ts";
+export {
+	httpStore,
+	indexedDbStore,
+	localStorageStore,
+	memoryStore,
+} from "./stores.ts";
 export type { ToolConfig, ToolInputSchema } from "./tools.ts";
+export { defineTools, tool } from "./tools.ts";
 export type {
 	AgentConfig,
 	AgentContentBlock,

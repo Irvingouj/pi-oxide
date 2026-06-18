@@ -1,6 +1,10 @@
 // WASM initialization and low-level helpers for the bindings layer.
 
-import { default as init, initSync, setLogLevel as setWasmLogLevel } from "../../pi_host_web.js";
+import {
+	default as init,
+	initSync,
+	setLogLevel as setWasmLogLevel,
+} from "../../pi_host_web.js";
 import { setGlobalLogLevel } from "../internal/logger.ts";
 import type { LogLevel } from "../types.ts";
 
@@ -11,7 +15,9 @@ export async function ensureInit() {
 	if (initialized) return;
 	if (typeof process !== "undefined" && process.versions?.node) {
 		const { readFileSync } = await import("node:fs");
-		const bytes = readFileSync(new URL("../../pi_host_web_bg.wasm", import.meta.url));
+		const bytes = readFileSync(
+			new URL("../../pi_host_web_bg.wasm", import.meta.url),
+		);
 		initSync({ module: bytes });
 	} else {
 		await init();
@@ -44,13 +50,19 @@ export function unwrap(result: {
 	error?: { code: string; message: string };
 }): unknown {
 	if (!result.ok) {
-		throw new HostError(result.error?.code ?? "unknown", result.error?.message ?? "Unknown error");
+		throw new HostError(
+			result.error?.code ?? "unknown",
+			result.error?.message ?? "Unknown error",
+		);
 	}
 	return result.data;
 }
 
 /** Build a successful tool result payload. */
-export function toolResult(text: string, opts: { terminate?: boolean; details?: Record<string, unknown> } = {}) {
+export function toolResult(
+	text: string,
+	opts: { terminate?: boolean; details?: Record<string, unknown> } = {},
+) {
 	const payload: {
 		content: Array<{ type: "text"; text: string }>;
 		terminate?: boolean;

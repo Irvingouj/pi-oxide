@@ -1,9 +1,19 @@
+import type {
+	LlmContext,
+	PersistData,
+	AgentEvent as RawAgentEvent,
+} from "../../pi_host_web.js";
 import { hostReset } from "../../pi_host_web.js";
-import type { PersistData, LlmContext, AgentEvent as RawAgentEvent } from "../../pi_host_web.js";
-import { createHostAgentInstance, HostAgent } from "../bindings/host-agent.ts";
+import {
+	createHostAgentInstance,
+	type HostAgent,
+} from "../bindings/host-agent.ts";
 import { unwrap } from "../bindings/init.ts";
 import { runTurnWithHostAgent } from "../bindings/turn-loop.ts";
 import type { AgentRunConfig, LlmStream } from "../bindings/types.ts";
+import { EventMapper } from "../internal/events.ts";
+import { getLogger } from "../internal/logger.ts";
+import { ToolRegistryBuilder } from "../internal/tools/registry.ts";
 import { SnapshotSerializer } from "../snapshot.ts";
 import type {
 	AgentConfig,
@@ -12,9 +22,6 @@ import type {
 	AgentRunResult,
 	AgentStatus,
 } from "../types.ts";
-import { EventMapper } from "../internal/events.ts";
-import { getLogger } from "../internal/logger.ts";
-import { ToolRegistryBuilder } from "../internal/tools/registry.ts";
 import {
 	buildArtifactStore,
 	buildUserMessage,
@@ -22,12 +29,20 @@ import {
 	mergeMetadata,
 	normalizeTools,
 } from "./config-builders.ts";
-import { defaultSummarizer, modelResponseToLlmStream, modelStreamToLlmStream } from "./model-adapter.ts";
+import {
+	defaultSummarizer,
+	modelResponseToLlmStream,
+	modelStreamToLlmStream,
+} from "./model-adapter.ts";
 
 export type { HostAgent } from "../bindings/host-agent.ts";
-export type { AgentRunConfig, LlmStream, TurnResult } from "../bindings/types.ts";
 export { createHostAgentInstance } from "../bindings/host-agent.ts";
 export { runTurnWithHostAgent } from "../bindings/turn-loop.ts";
+export type {
+	AgentRunConfig,
+	LlmStream,
+	TurnResult,
+} from "../bindings/types.ts";
 
 export async function createEngineAgent(
 	config: AgentConfig,
@@ -43,11 +58,15 @@ export async function createEngineAgent(
 		const snapshot = await config.store.loadSession(config.sessionId);
 		if (snapshot) {
 			const serializer = new SnapshotSerializer();
-			sessionState = serializer.deserialize(snapshot) as PersistData | undefined;
+			sessionState = serializer.deserialize(snapshot) as
+				| PersistData
+				| undefined;
 			if (sessionState) {
 				logger.info("Session snapshot loaded", { sessionId: config.sessionId });
 			} else {
-				logger.warn("Session snapshot version mismatch, starting fresh", { sessionId: config.sessionId });
+				logger.warn("Session snapshot version mismatch, starting fresh", {
+					sessionId: config.sessionId,
+				});
 			}
 		}
 	}
@@ -89,7 +108,10 @@ export async function runAgentTurn(
 	const llmProvider: AgentRunConfig["llm"] = {
 		call: async (context: LlmContext, s?: AbortSignal): Promise<LlmStream> => {
 			const effectiveSignal = s || signal;
-			callbacks.onStatus({ state: "calling_model", message: "Calling model..." });
+			callbacks.onStatus({
+				state: "calling_model",
+				message: "Calling model...",
+			});
 			logger.info("Calling model", { model: config.model.id ?? "custom" });
 
 			const modelRequest = {
@@ -178,12 +200,17 @@ export async function runAgentTurn(
 		}
 		return eventMapper.buildRunResult(runState, result);
 	} catch (e) {
-		logger.error("Turn failed", { error: e instanceof Error ? e.message : String(e) });
+		logger.error("Turn failed", {
+			error: e instanceof Error ? e.message : String(e),
+		});
 		throw e;
 	}
 }
 
-export async function steerAgent(hostAgent: HostAgent, input: string | AgentInput): Promise<void> {
+export async function steerAgent(
+	hostAgent: HostAgent,
+	input: string | AgentInput,
+): Promise<void> {
 	const text = typeof input === "string" ? input : input.text;
 	hostAgent.steer({
 		role: "user",

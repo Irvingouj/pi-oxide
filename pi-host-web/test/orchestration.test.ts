@@ -1,9 +1,17 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { z } from "zod";
-import { ensureInit, type AgentMessage as WasmAgentMessage } from "../sdk/index.ts";
+import {
+	ensureInit,
+	type AgentMessage as WasmAgentMessage,
+} from "../sdk/index.ts";
 import { defineModel } from "../sdk/model.ts";
-import { createEngineAgent, resetAgentState, runAgentTurn, steerAgent } from "../sdk/orchestration/agent-engine.ts";
+import {
+	createEngineAgent,
+	resetAgentState,
+	runAgentTurn,
+	steerAgent,
+} from "../sdk/orchestration/agent-engine.ts";
 import { SnapshotSerializer } from "../sdk/snapshot.ts";
 import { memoryStore } from "../sdk/stores.ts";
 import { defineTools, tool } from "../sdk/tools.ts";
@@ -16,7 +24,12 @@ function makeMockModel(responseText: string = "Hello") {
 		id: "mock-model",
 		contextWindow: 128000,
 		maxTokens: 4096,
-		capabilities: { vision: true, jsonMode: true, functionCalling: true, streaming: true },
+		capabilities: {
+			vision: true,
+			jsonMode: true,
+			functionCalling: true,
+			streaming: true,
+		},
 		generate: async () => ({
 			content: [{ type: "text" as const, text: responseText }],
 			stopReason: "end" as const,
@@ -32,7 +45,10 @@ function makeMockModel(responseText: string = "Hello") {
 }
 
 type MockResponse = {
-	content: Array<{ type: "text"; text: string } | { type: "tool_call"; id: string; name: string; arguments: unknown }>;
+	content: Array<
+		| { type: "text"; text: string }
+		| { type: "tool_call"; id: string; name: string; arguments: unknown }
+	>;
 	stopReason: "end" | "tool_call";
 };
 
@@ -42,7 +58,12 @@ function makeMockModelSequence(responses: MockResponse[]) {
 		id: "mock-model",
 		contextWindow: 128000,
 		maxTokens: 4096,
-		capabilities: { vision: true, jsonMode: true, functionCalling: true, streaming: true },
+		capabilities: {
+			vision: true,
+			jsonMode: true,
+			functionCalling: true,
+			streaming: true,
+		},
 		generate: async () => {
 			const response = responses[Math.min(callIndex++, responses.length - 1)];
 			return {
@@ -110,7 +131,12 @@ describe("Engine", () => {
 				id: "gpt-4o",
 				contextWindow: 128000,
 				maxTokens: 8192,
-				capabilities: { vision: true, jsonMode: true, functionCalling: true, streaming: true },
+				capabilities: {
+					vision: true,
+					jsonMode: true,
+					functionCalling: true,
+					streaming: true,
+				},
 				generate: async () => ({
 					content: [{ type: "text" as const, text: "ok" }],
 					stopReason: "end" as const,
@@ -151,10 +177,17 @@ describe("Engine", () => {
 			let threw = false;
 			let error: any;
 			try {
-				await runAgentTurn(hostAgent, config, "Hello", undefined, new AbortController().signal, {
-					onEvent: () => {},
-					onStatus: () => {},
-				});
+				await runAgentTurn(
+					hostAgent,
+					config,
+					"Hello",
+					undefined,
+					new AbortController().signal,
+					{
+						onEvent: () => {},
+						onStatus: () => {},
+					},
+				);
 			} catch (e) {
 				threw = true;
 				error = e;
@@ -184,14 +217,21 @@ describe("Engine", () => {
 			// by running a turn and checking messages
 			const messages: AgentMessage[] = [];
 
-			await runAgentTurn(hostAgent, config, "Hello", undefined, new AbortController().signal, {
-				onEvent: (e) => {
-					if (e.type === "messageStart" || e.type === "messageEnd") {
-						messages.push(e.payload as AgentMessage);
-					}
+			await runAgentTurn(
+				hostAgent,
+				config,
+				"Hello",
+				undefined,
+				new AbortController().signal,
+				{
+					onEvent: (e) => {
+						if (e.type === "messageStart" || e.type === "messageEnd") {
+							messages.push(e.payload as AgentMessage);
+						}
+					},
+					onStatus: () => {},
 				},
-				onStatus: () => {},
-			});
+			);
 
 			hostAgent.destroy();
 
@@ -227,10 +267,17 @@ describe("Engine", () => {
 			});
 
 			// Run a turn to trigger potential summarization
-			await runAgentTurn(hostAgent, config, "Hello", undefined, new AbortController().signal, {
-				onEvent: () => {},
-				onStatus: () => {},
-			});
+			await runAgentTurn(
+				hostAgent,
+				config,
+				"Hello",
+				undefined,
+				new AbortController().signal,
+				{
+					onEvent: () => {},
+					onStatus: () => {},
+				},
+			);
 
 			hostAgent.destroy();
 
@@ -240,7 +287,10 @@ describe("Engine", () => {
 				for (const msg of receivedMessages) {
 					assert.ok(msg.id, "SDK message should have id");
 					assert.ok(msg.role, "SDK message should have role");
-					assert.ok(Array.isArray(msg.content), "SDK message should have content array");
+					assert.ok(
+						Array.isArray(msg.content),
+						"SDK message should have content array",
+					);
 				}
 			}
 		});
@@ -259,10 +309,17 @@ describe("Engine", () => {
 			});
 
 			const statuses: any[] = [];
-			const result = await runAgentTurn(hostAgent, config, "Hello", undefined, new AbortController().signal, {
-				onEvent: () => {},
-				onStatus: (s) => statuses.push(s),
-			});
+			const result = await runAgentTurn(
+				hostAgent,
+				config,
+				"Hello",
+				undefined,
+				new AbortController().signal,
+				{
+					onEvent: () => {},
+					onStatus: (s) => statuses.push(s),
+				},
+			);
 
 			assert.ok(result);
 			hostAgent.destroy();
@@ -282,10 +339,17 @@ describe("Engine", () => {
 			const controller = new AbortController();
 			controller.abort("test abort");
 
-			const result = await runAgentTurn(hostAgent, config, "Hello", undefined, controller.signal, {
-				onEvent: () => {},
-				onStatus: () => {},
-			});
+			const result = await runAgentTurn(
+				hostAgent,
+				config,
+				"Hello",
+				undefined,
+				controller.signal,
+				{
+					onEvent: () => {},
+					onStatus: () => {},
+				},
+			);
 
 			hostAgent.destroy();
 
@@ -334,11 +398,15 @@ describe("Engine", () => {
 			let modelCalls = 0;
 			const responses: MockResponse[] = [
 				{
-					content: [{ type: "tool_call", id: "tc-1", name: "test_tool", arguments: {} }],
+					content: [
+						{ type: "tool_call", id: "tc-1", name: "test_tool", arguments: {} },
+					],
 					stopReason: "tool_call",
 				},
 				{
-					content: [{ type: "tool_call", id: "tc-2", name: "test_tool", arguments: {} }],
+					content: [
+						{ type: "tool_call", id: "tc-2", name: "test_tool", arguments: {} },
+					],
 					stopReason: "tool_call",
 				},
 				{ content: [{ type: "text", text: "done" }], stopReason: "end" },
@@ -347,9 +415,15 @@ describe("Engine", () => {
 				id: "mock-model",
 				contextWindow: 128000,
 				maxTokens: 4096,
-				capabilities: { vision: true, jsonMode: true, functionCalling: true, streaming: true },
+				capabilities: {
+					vision: true,
+					jsonMode: true,
+					functionCalling: true,
+					streaming: true,
+				},
 				generate: async () => {
-					const response = responses[Math.min(modelCalls++, responses.length - 1)];
+					const response =
+						responses[Math.min(modelCalls++, responses.length - 1)];
 					return response;
 				},
 			});
@@ -364,14 +438,24 @@ describe("Engine", () => {
 			});
 			const completedToolIds: string[] = [];
 
-			await runAgentTurn(hostAgent, config, "use tools twice", undefined, new AbortController().signal, {
-				onEvent: (event) => {
-					if (event.type === "toolEnd" && event.payload.status === "completed") {
-						completedToolIds.push(event.payload.id);
-					}
+			await runAgentTurn(
+				hostAgent,
+				config,
+				"use tools twice",
+				undefined,
+				new AbortController().signal,
+				{
+					onEvent: (event) => {
+						if (
+							event.type === "toolEnd" &&
+							event.payload.status === "completed"
+						) {
+							completedToolIds.push(event.payload.id);
+						}
+					},
+					onStatus: () => {},
 				},
-				onStatus: () => {},
-			});
+			);
 
 			hostAgent.destroy();
 			assert.deepEqual(completedToolIds, ["tc-1", "tc-2"]);
@@ -383,7 +467,14 @@ describe("Engine", () => {
 				sessionId: "prep-default-session",
 				model: makeMockModelSequence([
 					{
-						content: [{ type: "tool_call", id: "tc-1", name: "test_tool", arguments: {} }],
+						content: [
+							{
+								type: "tool_call",
+								id: "tc-1",
+								name: "test_tool",
+								arguments: {},
+							},
+						],
 						stopReason: "tool_call",
 					},
 					{ content: [{ type: "text", text: "done" }], stopReason: "end" },
@@ -397,25 +488,37 @@ describe("Engine", () => {
 			});
 
 			const toolEvents: Array<{ type: string; payload: any }> = [];
-			await runAgentTurn(hostAgent, config, "use tool", undefined, new AbortController().signal, {
-				onEvent: (e) => {
-					if (e.type === "toolStart" || e.type === "toolEnd") {
-						toolEvents.push({ type: e.type, payload: e.payload });
-					}
+			await runAgentTurn(
+				hostAgent,
+				config,
+				"use tool",
+				undefined,
+				new AbortController().signal,
+				{
+					onEvent: (e) => {
+						if (e.type === "toolStart" || e.type === "toolEnd") {
+							toolEvents.push({ type: e.type, payload: e.payload });
+						}
+					},
+					onStatus: () => {},
 				},
-				onStatus: () => {},
-			});
+			);
 
 			hostAgent.destroy();
 
 			assert.equal(
-				toolEvents.filter((e) => e.type === "toolStart" && e.payload.id === "tc-1").length,
+				toolEvents.filter(
+					(e) => e.type === "toolStart" && e.payload.id === "tc-1",
+				).length,
 				1,
 				"allowed call should emit exactly one toolStart",
 			);
 			assert.ok(
 				toolEvents.some(
-					(e) => e.type === "toolEnd" && e.payload.name === "test_tool" && e.payload.status === "completed",
+					(e) =>
+						e.type === "toolEnd" &&
+						e.payload.name === "test_tool" &&
+						e.payload.status === "completed",
 				),
 				"should execute tool with default allow policy",
 			);
@@ -426,7 +529,14 @@ describe("Engine", () => {
 				sessionId: "prep-block-session",
 				model: makeMockModelSequence([
 					{
-						content: [{ type: "tool_call", id: "tc-1", name: "test_tool", arguments: {} }],
+						content: [
+							{
+								type: "tool_call",
+								id: "tc-1",
+								name: "test_tool",
+								arguments: {},
+							},
+						],
 						stopReason: "tool_call",
 					},
 					{ content: [{ type: "text", text: "done" }], stopReason: "end" },
@@ -443,24 +553,38 @@ describe("Engine", () => {
 			});
 
 			const toolEvents: Array<{ type: string; payload: any }> = [];
-			await runAgentTurn(hostAgent, config, "use tool", undefined, new AbortController().signal, {
-				onEvent: (e) => {
-					if (e.type === "toolStart" || e.type === "toolEnd") {
-						toolEvents.push({ type: e.type, payload: e.payload });
-					}
+			await runAgentTurn(
+				hostAgent,
+				config,
+				"use tool",
+				undefined,
+				new AbortController().signal,
+				{
+					onEvent: (e) => {
+						if (e.type === "toolStart" || e.type === "toolEnd") {
+							toolEvents.push({ type: e.type, payload: e.payload });
+						}
+					},
+					onStatus: () => {},
 				},
-				onStatus: () => {},
-			});
+			);
 
 			hostAgent.destroy();
 
 			assert.equal(
-				toolEvents.filter((e) => e.type === "toolStart" && e.payload.id === "tc-1").length,
+				toolEvents.filter(
+					(e) => e.type === "toolStart" && e.payload.id === "tc-1",
+				).length,
 				0,
 				"blocked call should not emit toolStart",
 			);
 			assert.ok(
-				toolEvents.some((e) => e.type === "toolEnd" && e.payload.name === "test_tool" && e.payload.status === "failed"),
+				toolEvents.some(
+					(e) =>
+						e.type === "toolEnd" &&
+						e.payload.name === "test_tool" &&
+						e.payload.status === "failed",
+				),
 				"blocked tool should end as failed",
 			);
 		});
@@ -472,14 +596,24 @@ describe("Engine", () => {
 				sessionId: "prep-transform-session",
 				model: makeMockModelSequence([
 					{
-						content: [{ type: "tool_call", id: "tc-1", name: "test_tool", arguments: { original: true } }],
+						content: [
+							{
+								type: "tool_call",
+								id: "tc-1",
+								name: "test_tool",
+								arguments: { original: true },
+							},
+						],
 						stopReason: "tool_call",
 					},
 					{ content: [{ type: "text", text: "done" }], stopReason: "end" },
 				]),
 				tools: testTools,
 				prepareToolCalls: {
-					transform: () => ({ type: "rewrite_args", arguments: { rewritten: true } }),
+					transform: () => ({
+						type: "rewrite_args",
+						arguments: { rewritten: true },
+					}),
 					permission: (call: AgentToolCall) => {
 						permissionSeenArgs = call.arguments;
 						return { type: "allow" };
@@ -492,10 +626,17 @@ describe("Engine", () => {
 				onStatus: () => {},
 			});
 
-			await runAgentTurn(hostAgent, config, "use tool", undefined, new AbortController().signal, {
-				onEvent: () => {},
-				onStatus: () => {},
-			});
+			await runAgentTurn(
+				hostAgent,
+				config,
+				"use tool",
+				undefined,
+				new AbortController().signal,
+				{
+					onEvent: () => {},
+					onStatus: () => {},
+				},
+			);
 
 			hostAgent.destroy();
 
@@ -512,8 +653,18 @@ describe("Engine", () => {
 				model: makeMockModelSequence([
 					{
 						content: [
-							{ type: "tool_call", id: "tc-1", name: "test_tool", arguments: {} },
-							{ type: "tool_call", id: "tc-2", name: "test_tool", arguments: {} },
+							{
+								type: "tool_call",
+								id: "tc-1",
+								name: "test_tool",
+								arguments: {},
+							},
+							{
+								type: "tool_call",
+								id: "tc-2",
+								name: "test_tool",
+								arguments: {},
+							},
 						],
 						stopReason: "tool_call",
 					},
@@ -534,14 +685,21 @@ describe("Engine", () => {
 			});
 
 			const toolCalls: any[] = [];
-			await runAgentTurn(hostAgent, config, "use tools", undefined, new AbortController().signal, {
-				onEvent: (e) => {
-					if (e.type === "toolEnd") {
-						toolCalls.push(e.payload);
-					}
+			await runAgentTurn(
+				hostAgent,
+				config,
+				"use tools",
+				undefined,
+				new AbortController().signal,
+				{
+					onEvent: (e) => {
+						if (e.type === "toolEnd") {
+							toolCalls.push(e.payload);
+						}
+					},
+					onStatus: () => {},
 				},
-				onStatus: () => {},
-			});
+			);
 
 			hostAgent.destroy();
 

@@ -48,7 +48,11 @@ export class ConsoleLogger implements Logger {
 		return levelIndex(level) >= levelIndex(this.minLevel);
 	}
 
-	private log(level: LogLevel, message: string, context?: Record<string, unknown>): void {
+	private log(
+		level: LogLevel,
+		message: string,
+		context?: Record<string, unknown>,
+	): void {
 		if (!this.shouldLog(level)) return;
 
 		const prefix = `[${this.scope}]`;
@@ -127,7 +131,11 @@ export class CallbackLogger implements Logger {
 		this.scope = scope;
 	}
 
-	private emit(level: LogLevel, message: string, context?: Record<string, unknown>): void {
+	private emit(
+		level: LogLevel,
+		message: string,
+		context?: Record<string, unknown>,
+	): void {
 		this.callback({
 			level,
 			scope: this.scope,

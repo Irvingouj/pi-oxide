@@ -11,7 +11,10 @@ describe("SDK Tool API", () => {
 			const clickTool = tool({
 				description: "Click an element",
 				input: z.object({ selector: z.string() }),
-				run: ({ selector }: { selector: string }) => ({ clicked: true, selector }),
+				run: ({ selector }: { selector: string }) => ({
+					clicked: true,
+					selector,
+				}),
 			});
 
 			assert.equal(clickTool.description, "Click an element");
@@ -187,7 +190,11 @@ describe("SDK Tool API", () => {
 			const toolMap = builder.build([testTool]);
 			const handler = toolMap.detailed;
 
-			const result = await handler({ id: "1", name: "detailed", arguments: {} });
+			const result = await handler({
+				id: "1",
+				name: "detailed",
+				arguments: {},
+			});
 			assert.deepStrictEqual(result.details, {
 				strategy: "compact",
 				output: { result: "ok" },

@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 pub use pi_core::{
     AgentAction, AgentEvent, AgentMessage, AgentOptions, AgentRuntime, Artifacts, AssistantMessage,
     ChangeMarker, Content, ContentDelta, ContextProjectionBudget, ContinueTurnTransition, LlmChunk,
@@ -33,6 +35,7 @@ pub fn dummy_options() -> AgentOptions {
     }
 }
 
+#[allow(dead_code)]
 pub fn assistant_with_tool_calls(calls: Vec<ToolCall>) -> AssistantMessage {
     AssistantMessage {
         content: calls.into_iter().map(Content::ToolCall).collect(),
@@ -46,6 +49,7 @@ pub fn assistant_with_tool_calls(calls: Vec<ToolCall>) -> AssistantMessage {
     }
 }
 
+#[allow(dead_code)]
 pub fn tool_call(id: &str, name: &str) -> ToolCall {
     ToolCall {
         id: ToolCallId::new(id),

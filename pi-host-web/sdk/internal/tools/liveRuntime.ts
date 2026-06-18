@@ -24,7 +24,10 @@ const origConsole = {
 	info: console.info.bind(console),
 };
 
-function captureConsole(level: BrowserConsoleEntry["level"], args: unknown[]): void {
+function captureConsole(
+	level: BrowserConsoleEntry["level"],
+	args: unknown[],
+): void {
 	consoleEntries.push({ level, args: args.map(String), timestamp: Date.now() });
 }
 
@@ -48,14 +51,20 @@ console.info = (...a: unknown[]) => {
 
 // --- Element snapshot helper ---
 
-function snapshotElement(el: Element, selector: string): BrowserElementSnapshot {
+function snapshotElement(
+	el: Element,
+	selector: string,
+): BrowserElementSnapshot {
 	const text = (el.textContent || "").trim().slice(0, 500);
 	const attributes: Record<string, string> = {};
 	for (const a of Array.from(el.attributes)) {
 		attributes[a.name] = a.value;
 	}
 	const style = window.getComputedStyle(el);
-	const visible = style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+	const visible =
+		style.display !== "none" &&
+		style.visibility !== "hidden" &&
+		style.opacity !== "0";
 	return {
 		tag: el.tagName.toLowerCase(),
 		text,
@@ -129,8 +138,14 @@ export class LiveBrowserRuntime implements BrowserRuntime {
 				},
 			};
 		}
-		if (!(el instanceof HTMLInputElement) && !(el instanceof HTMLTextAreaElement)) {
-			this.logger.warn("type failed: not an input", { selector, tag: el.tagName });
+		if (
+			!(el instanceof HTMLInputElement) &&
+			!(el instanceof HTMLTextAreaElement)
+		) {
+			this.logger.warn("type failed: not an input", {
+				selector,
+				tag: el.tagName,
+			});
 			return {
 				ok: false,
 				error: {

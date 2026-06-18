@@ -1,241 +1,342 @@
-# Per-Turn System Prompt Plan
+# Per-Turn Instructions Plan
 
-This plan adds a runtime-neutral extension point for changing the system prompt
-per turn instead of treating it as session-wide immutable state.
+This plan adds dynamic turn-scoped instructions without turning the session
+system prompt into host-owned boilerplate.
 
-The goal is to support dynamic agent behavior while preserving `pi-oxide`'s
-cross-platform architecture: Rust core owns typed state transitions and context
-construction; hosts provide typed updates without core holding runtime
-callbacks.
+The design is intentionally narrower than a generic prompt-update system:
+
+- the agent keeps stable base/session instructions
+- each user turn may provide a full replacement effective instruction string
+- callers that want append/compose behavior read the current base instructions
+  and build the replacement string themselves
+
+This keeps Rust core deterministic and typed while giving SDK users the dynamic
+per-turn control they need.
 
 ## Problem
 
-`AgentOptions` currently initializes a session-level `system_prompt`. That is
-simple, but too rigid for an extensible agentic core.
+`AgentOptions.system_prompt` currently initializes a session-level prompt that is
+used for every LLM request. That is stable, but too rigid for workflows that need
+temporary mode changes:
 
-Real agents often need turn-specific instructions:
+- review mode for one request
+- planning mode for one request
+- execution mode for one request
+- browser/project-state-aware instructions
+- temporary safety or permission framing
 
-- tool- or workflow-specific mode switches
-- different prompt framing after compaction
-- browser state or project state injected as policy
-- model-specific prompt adaptation
-- temporary safety or permission instructions
-- task phase changes, such as planning, editing, reviewing, or summarizing
+We do not want users to recreate the agent session just to change instructions
+for one turn.
 
-This should not require rebuilding the agent session or mutating global session
-identity.
+## Design Choice
 
-## Core Model
+Use **replacement-only turn instructions**.
 
-Separate the base session prompt from the effective prompt used for an LLM
-request.
+Do not add core-level append semantics.
 
-```text
-base system prompt
-+ optional per-turn system prompt override or append
--> effective system prompt for this LLM context
-```
+Append sounds convenient, but it makes core responsible for prompt composition,
+separator policy, ordering, and later prompt-template behavior. The more
+idiomatic API is to expose the current base instructions and let the caller
+compose the full effective prompt when needed.
 
-The base prompt remains part of agent state. Per-turn prompt state should be
-ephemeral unless explicitly persisted by the host.
-
-## Proposed Rust Types
-
-Add a typed prompt update:
-
-```rust
-pub enum SystemPromptUpdate {
-    Keep,
-    Replace { system_prompt: String },
-    Append { text: String },
-}
-```
-
-For next-turn preparation, use:
-
-```rust
-pub struct NextTurnUpdate {
-    pub system_prompt: Option<SystemPromptUpdate>,
-    // future fields: model, thinking_level, tools, context_budget, projection_policy
-}
-```
-
-For the current turn start path, allow a prompt update in the turn request:
-
-```rust
-pub struct StartTurnInput {
-    pub prompt: AgentMessage,
-    pub tools: Vec<ToolDefinition>,
-    pub system_prompt: Option<SystemPromptUpdate>,
-}
-```
-
-If the existing API shape should stay stable, add a parallel method first:
-
-```rust
-start_turn_with_options(...)
-```
-
-and keep `start_turn(...)` as a convenience wrapper that uses
-`SystemPromptUpdate::Keep`.
-
-## Semantics
-
-`Keep`
-
-- Use the base session system prompt unchanged.
-
-`Replace`
-
-- Use the provided prompt as the effective prompt for this turn.
-- Does not mutate the base session prompt unless a later explicit persistent
-  update API is added.
-
-`Append`
-
-- Build the effective prompt by appending text to the base prompt.
-- Use a deterministic separator, for example:
-
-```text
-{base_system_prompt}
-
-{per_turn_append}
-```
-
-## State and Persistence
-
-First implementation should treat per-turn prompt updates as ephemeral.
-
-Do not persist per-turn prompt update in the session snapshot unless it is
-needed to resume an in-flight LLM request. For completed turns, the transcript
-and resulting messages are enough.
-
-If resumability requires exact replay of an in-flight context, persist the
-effective `LlmContext` or the pending `AgentAction::StreamLlm` rather than
-mutating the base prompt.
-
-## Context Construction
-
-Change context building from:
-
-```rust
-build_llm_context_from_trimmed(t, &self.state.system_prompt, &self.turn_tools)
-```
-
-to something that accepts an effective prompt:
-
-```rust
-build_llm_context_from_trimmed(t, effective_system_prompt, &self.turn_tools)
-```
-
-The effective prompt should be computed at the turn boundary and stored only for
-the active turn if needed.
-
-## Host API Shape
-
-WASM start-turn input should accept an optional system prompt update:
+Example SDK append built by the caller:
 
 ```ts
-type SystemPromptUpdate =
-  | { type: "keep" }
-  | { type: "replace"; system_prompt: string }
-  | { type: "append"; text: string };
+const base = agent.getInstructions();
 
-type StartTurnInput = {
-  prompt: AgentMessage;
-  tools: ToolDefinition[];
-  system_prompt?: SystemPromptUpdate;
-};
-```
+await agent.run("Review this patch", {
+  instructions: `${base}
 
-SDK-level API can expose this through run options:
-
-```ts
-agent.run("Review this file", {
-  systemPrompt: {
-    type: "append",
-    text: "For this turn, act as a strict code reviewer.",
-  },
+For this turn, act as a strict code reviewer.`,
 });
 ```
 
-Keep the naming distinct from session-level `instructions` in `AgentConfig`.
-Possible SDK names:
+Core receives only the final effective instruction string for that turn.
 
-- `turnInstructions`
-- `systemPrompt`
-- `systemPromptUpdate`
+## Core Model
 
-Prefer `turnInstructions` for user-facing API and map it to core
-`SystemPromptUpdate`.
+There are two instruction values:
 
-## Relationship to Prepare Next Turn
+```text
+base instructions
+optional active turn instructions
+```
 
-Per-turn system prompt can be added independently, but it should align with the
-future `PrepareNextTurn` extension point.
+Effective instructions are:
 
-Eventually hosts should be able to return:
+```text
+active turn instructions if present
+otherwise base instructions
+```
+
+The active turn instructions are ephemeral and scoped to the current user turn.
+They must remain active across tool loops in the same turn.
+
+For example:
+
+```text
+user run starts with turn instructions
+-> LLM call uses turn instructions
+-> assistant asks for tools
+-> host executes tools
+-> continue_turn LLM call still uses the same turn instructions
+-> turn settles
+-> active turn instructions are cleared
+```
+
+This is the key behavioral requirement. Per-turn does not mean “first LLM call
+only”; it means the whole agent turn, including post-tool continuation.
+
+## Rust Types
+
+Add a small domain type instead of passing raw strings deeper into core:
 
 ```rust
-NextTurnUpdate {
-    system_prompt: Some(SystemPromptUpdate::Append { text }),
-    ..
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Instructions(String);
+
+impl Instructions {
+    pub fn new(value: impl Into<String>) -> Result<Self, InstructionError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err(InstructionError::Empty);
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 ```
 
-That supports workflows where one turn's result determines the next turn's
-instructions.
+Add turn options:
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnOptions {
+    pub instructions: Option<Instructions>,
+}
+```
+
+`None` means inherit the base/session instructions.
+
+Add active turn state to `Agent`:
+
+```rust
+pub(crate) active_turn_instructions: Option<Instructions>,
+```
+
+`AgentOptions.system_prompt` can stay as the external constructor field for
+compatibility, but internally it should be parsed into `Instructions` when data
+crosses into Rust core. A later cleanup can rename the public field to
+`instructions`.
+
+## Core Semantics
+
+At `start_turn`:
+
+- accept `TurnOptions`
+- set `active_turn_instructions = options.instructions`
+- push the user message as today
+- build `LlmContext` from effective instructions
+
+At `continue_turn`:
+
+- do not accept new instructions
+- use the current effective instructions
+- this preserves the same turn-level instructions across tool loops
+
+When a turn reaches a terminal boundary:
+
+- `Finished`
+- `Aborted`
+- settled waiting for new user input after the assistant responds without
+  further tool work
+
+clear `active_turn_instructions`.
+
+This clearing should happen in core, not in SDK, so all hosts get the same
+behavior.
+
+## Effective Instruction Helper
+
+Add one helper on `Agent`:
+
+```rust
+fn effective_instructions(&self) -> &Instructions {
+    self.active_turn_instructions
+        .as_ref()
+        .unwrap_or(&self.state.system_prompt)
+}
+```
+
+Then context construction uses that value:
+
+```rust
+build_llm_context_from_trimmed(
+    t,
+    self.effective_instructions().as_str(),
+    &self.turn_tools,
+)
+```
+
+## Public Read API
+
+Expose the stable/base instructions so callers can compose a replacement.
+
+Rust core:
+
+```rust
+impl AgentRuntime {
+    pub fn instructions(&self) -> &Instructions;
+}
+```
+
+WASM host:
+
+```ts
+getHostAgentInstructions(handle: number): StringResult
+```
+
+SDK:
+
+```ts
+agent.getInstructions(): string
+```
+
+This returns the base/session instructions, not the ephemeral active turn
+replacement. That is the value users need for append-like composition.
+
+## WASM API Shape
+
+Extend `StartTurnInput`:
+
+```ts
+type StartTurnInput = {
+  prompt: AgentMessage;
+  tools: ToolDefinition[];
+  instructions?: string;
+};
+```
+
+Semantics:
+
+- omitted: inherit base instructions
+- string: use this full instruction string for the whole current turn
+
+Validate at the Rust DTO boundary:
+
+- reject empty or whitespace-only strings
+- preserve actionable error messages
+
+Do not add `{ type: "replace" }` unless we later need more modes. Optional
+string already means replacement.
+
+## SDK API Shape
+
+Add replacement-only run option:
+
+```ts
+export interface AgentRunOptions {
+  signal?: AbortSignal;
+  metadata?: Record<string, unknown>;
+  instructions?: string;
+}
+```
+
+Usage:
+
+```ts
+await agent.run("Review this file", {
+  instructions: "You are a strict code reviewer. Focus on bugs and regressions.",
+});
+```
+
+Append-like usage:
+
+```ts
+const base = agent.getInstructions();
+
+await agent.run("Review this file", {
+  instructions: `${base}
+
+For this turn, focus only on security issues.`,
+});
+```
+
+No separate `turnInstructions`, `systemPrompt`, or update enum in the SDK for
+the first implementation.
+
+## Persistence
+
+Base instructions remain persisted as part of host/agent state.
+
+Active turn instructions are ephemeral.
+
+Do not persist active turn instructions for completed turns.
+
+If we later need exact resume of an in-flight LLM request, persist the pending
+`LlmContext` or active action state, not a mutation to base instructions.
 
 ## Tests
 
-Add Rust core tests for:
+Core tests:
 
-- default behavior preserves session-level prompt
-- `Replace` uses only the per-turn prompt for LLM context
-- `Append` includes base prompt and appended prompt in deterministic order
-- per-turn prompt does not mutate base session prompt
-- continuation after a per-turn prompt returns to base prompt unless another
-  update is supplied
+- default turn uses base instructions
+- turn replacement uses replacement instructions
+- replacement does not mutate base instructions
+- post-tool `continue_turn` uses the same active replacement instructions
+- next user turn without replacement returns to base instructions
+- empty replacement instructions are rejected at the typed boundary
 
-Add WASM/host tests for:
+WASM tests:
 
-- start-turn input accepts no prompt update
-- start-turn input accepts replace update
-- start-turn input accepts append update
-- serialized DTO roundtrip preserves update type and content
+- `StartTurnInput` without `instructions` preserves current behavior
+- `StartTurnInput.instructions` reaches emitted `StreamLlm.context.system_prompt`
+- `hostContinueTurn` after tools keeps the same replacement instructions
+- `getHostAgentInstructions` returns base instructions
+- empty or whitespace-only instructions return a typed error
 
-Add SDK tests for:
+SDK tests:
 
-- `turnInstructions` reaches the model request
-- session-level `instructions` remain unchanged across runs
-- consecutive runs with different turn instructions produce different effective
-  prompts without recreating the agent
+- `agent.run(..., { instructions })` reaches `ModelRequest.instructions`
+- `agent.getInstructions()` returns config/restored base instructions
+- caller-composed append works by reading `getInstructions()`
+- consecutive runs can use different replacements without recreating the agent
+- a run without replacement after a replacement uses the base instructions
 
 ## Non-Goals
 
 Do not implement these in the first pass:
 
+- append mode in core
 - prompt template registry
+- persistent mutation of base instructions
 - provider-specific prompt formatting
 - automatic prompt selection by model
-- persistent mutation of base session prompt
 - arbitrary context transform callbacks
 - full `PrepareNextTurn` model/tool/budget update
 
 ## Implementation Order
 
-1. Add `SystemPromptUpdate` to `pi-core`.
-2. Add effective prompt computation helper.
-3. Thread optional prompt update through `start_turn`.
-4. Update context construction to use the effective prompt.
-5. Keep existing `start_turn` compatibility through a wrapper or default.
-6. Add WASM DTO support.
-7. Add SDK run option, preferably `turnInstructions`.
-8. Add tests at core, WASM host, and SDK layers.
+1. Add `Instructions` and `TurnOptions` to `pi-core`.
+2. Parse `AgentOptions.system_prompt` into `Instructions` at the Rust boundary.
+3. Add `active_turn_instructions` to `Agent`.
+4. Thread `TurnOptions` through typestate `start_turn`.
+5. Update context construction to use `effective_instructions()`.
+6. Clear active turn instructions at core turn terminal boundaries.
+7. Add `AgentRuntime::instructions()`.
+8. Extend WASM `StartTurnInput` with optional `instructions`.
+9. Add WASM `getHostAgentInstructions`.
+10. Add SDK `AgentRunOptions.instructions`.
+11. Add SDK `agent.getInstructions()`.
+12. Add core, WASM, and SDK tests.
 
 ## Success Criteria
 
-- Hosts can provide per-turn instructions without recreating the session.
-- Base session prompt remains stable unless explicitly changed.
-- The effective prompt used for each LLM request is deterministic and testable.
-- Core remains synchronous, typed, and runtime-free.
+- Callers can set dynamic per-turn instructions without recreating the agent.
+- Core owns the active turn scope, including post-tool continuation.
+- Base/session instructions remain stable and readable.
+- Append behavior is possible through caller-side composition.
+- The public API stays small: optional replacement string, no prompt-update enum.

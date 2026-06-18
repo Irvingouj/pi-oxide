@@ -10,7 +10,13 @@
 
 import type { ToolDefinition } from "../../../pi_host_web.js";
 import { isRecord } from "../../internal/util/types.ts";
-import type { AgentMessageShape, ContentBlock, LlmRequest, ProviderResult, TokenUsage } from "./types.ts";
+import type {
+	AgentMessageShape,
+	ContentBlock,
+	LlmRequest,
+	ProviderResult,
+	TokenUsage,
+} from "./types.ts";
 
 // --- Anthropic API types ---
 
@@ -73,7 +79,9 @@ interface AnthropicError {
  *
  * See: https://docs.anthropic.com/en/docs/build-with-claude/tool-use#handling-tool-use-and-tool-result-content-blocks
  */
-export function convertMessages(messages: AgentMessageShape[]): AnthropicMessage[] {
+export function convertMessages(
+	messages: AgentMessageShape[],
+): AnthropicMessage[] {
 	const result: AnthropicMessage[] = [];
 
 	let i = 0;
@@ -111,7 +119,10 @@ export function convertMessages(messages: AgentMessageShape[]): AnthropicMessage
 				// in one user message with an array of tool_result content blocks.
 				const toolResults: AnthropicContentBlock[] = [];
 				while (i < messages.length && messages[i].role === "tool_result") {
-					const tr = messages[i] as Extract<AgentMessageShape, { role: "tool_result" }>;
+					const tr = messages[i] as Extract<
+						AgentMessageShape,
+						{ role: "tool_result" }
+					>;
 					const text = extractText(tr.content);
 					toolResults.push({
 						type: "tool_result",
@@ -227,7 +238,10 @@ export interface AnthropicConfig {
 /**
  * Call the Anthropic Messages API and return a ProviderResult.
  */
-export async function callAnthropic(request: LlmRequest, config: AnthropicConfig): Promise<ProviderResult> {
+export async function callAnthropic(
+	request: LlmRequest,
+	config: AnthropicConfig,
+): Promise<ProviderResult> {
 	const log: string[] = [];
 	const providerName = "anthropic";
 
@@ -239,7 +253,9 @@ export async function callAnthropic(request: LlmRequest, config: AnthropicConfig
 		tools: convertTools(request.tools),
 	};
 
-	log.push(`anthropic_request: model=${config.model}, messages=${body.messages.length}, tools=${body.tools.length}`);
+	log.push(
+		`anthropic_request: model=${config.model}, messages=${body.messages.length}, tools=${body.tools.length}`,
+	);
 
 	let resp: Response;
 	try {
@@ -272,7 +288,8 @@ export async function callAnthropic(request: LlmRequest, config: AnthropicConfig
 			// ignore parse failure
 		}
 		const code = `http_${resp.status}`;
-		const message = errorBody?.error?.message ?? `HTTP ${resp.status}: ${resp.statusText}`;
+		const message =
+			errorBody?.error?.message ?? `HTTP ${resp.status}: ${resp.statusText}`;
 		log.push(`anthropic_error: ${code} - ${message}`);
 		return {
 			llmResult: {
@@ -284,9 +301,15 @@ export async function callAnthropic(request: LlmRequest, config: AnthropicConfig
 	}
 
 	const data = (await resp.json()) as AnthropicResponse;
-	log.push(`anthropic_response: stop_reason=${data.stop_reason}, content_blocks=${data.content.length}`);
+	log.push(
+		`anthropic_response: stop_reason=${data.stop_reason}, content_blocks=${data.content.length}`,
+	);
 
-	const { llmResult, chunks } = convertResponse(data, providerName, config.model);
+	const { llmResult, chunks } = convertResponse(
+		data,
+		providerName,
+		config.model,
+	);
 	return { llmResult, chunks, log };
 }
 
@@ -296,7 +319,12 @@ import { createAgentError } from "../../errors.ts";
 import { getLogger } from "../../internal/logger.ts";
 import type { AgentModel, ModelRequest, ModelResponse } from "../../types.ts";
 
-export function anthropic(config: { apiKey: string; model: string; baseUrl?: string; maxTokens?: number }): AgentModel {
+export function anthropic(config: {
+	apiKey: string;
+	model: string;
+	baseUrl?: string;
+	maxTokens?: number;
+}): AgentModel {
 	const logger = getLogger("anthropic");
 	const anthropicConfig: AnthropicConfig = {
 		apiKey: config.apiKey,
@@ -310,21 +338,32 @@ export function anthropic(config: { apiKey: string; model: string; baseUrl?: str
 		contextWindow: 200000,
 		maxTokens: config.maxTokens ?? 4096,
 		capabilities: {
-			vision: config.model.includes("vision") || config.model.startsWith("claude-3-5"),
+			vision:
+				config.model.includes("vision") ||
+				config.model.startsWith("claude-3-5"),
 			jsonMode: true,
 			functionCalling: true,
 			streaming: true,
 		},
 		async generate(request: ModelRequest): Promise<ModelResponse> {
-			logger.info("Anthropic generate", { model: config.model, messageCount: request.messages.length });
+			logger.info("Anthropic generate", {
+				model: config.model,
+				messageCount: request.messages.length,
+			});
 			const llmRequest = {
 				system_prompt: request.instructions,
 				messages: request.messages.map((msg): AgentMessageShape => {
 					const content = msg.content.map((c): ContentBlock => {
 						if (c.type === "text") return { type: "text", text: c.text };
 						if (c.type === "tool_call")
-							return { type: "tool_call", id: c.id, name: c.name, arguments: isRecord(c.arguments) ? c.arguments : {} };
-						if (c.type === "image") return { type: "image", media_type: c.mimeType, data: c.data };
+							return {
+								type: "tool_call",
+								id: c.id,
+								name: c.name,
+								arguments: isRecord(c.arguments) ? c.arguments : {},
+							};
+						if (c.type === "image")
+							return { type: "image", media_type: c.mimeType, data: c.data };
 						return { type: "text", text: "" };
 					});
 					const timestamp = msg.timestamp ?? Date.now();
@@ -341,14 +380,22 @@ export function anthropic(config: { apiKey: string; model: string; baseUrl?: str
 							stop_reason: "end_turn",
 							error_message: null,
 							timestamp,
-							usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },
+							usage: {
+								input: 0,
+								output: 0,
+								cache_read: 0,
+								cache_write: 0,
+								total_tokens: 0,
+							},
 						};
 					}
 					// tool_result
 					return {
 						role: "tool_result",
 						tool_call_id: msg.tool_call_id ?? "",
-						tool_name: msg.content.find((c) => c.type === "text")?.text?.slice(0, 50) ?? "unknown",
+						tool_name:
+							msg.content.find((c) => c.type === "text")?.text?.slice(0, 50) ??
+							"unknown",
 						content,
 						details: {},
 						is_error: false,
@@ -359,7 +406,9 @@ export function anthropic(config: { apiKey: string; model: string; baseUrl?: str
 					name: t.name,
 					label: t.name,
 					description: t.description,
-					parameters: isRecord(t.inputSchema) ? t.inputSchema : { type: "object", properties: {} },
+					parameters: isRecord(t.inputSchema)
+						? t.inputSchema
+						: { type: "object", properties: {} },
 					execution_mode: "parallel" as const,
 				})),
 			};
@@ -368,8 +417,15 @@ export function anthropic(config: { apiKey: string; model: string; baseUrl?: str
 				const result = await callAnthropic(llmRequest, anthropicConfig);
 
 				if ("Err" in result.llmResult) {
-					const err = (result.llmResult as { Err: { error: { code: string; message: string } } }).Err.error;
-					logger.warn("Anthropic API error", { code: err.code, message: err.message });
+					const err = (
+						result.llmResult as {
+							Err: { error: { code: string; message: string } };
+						}
+					).Err.error;
+					logger.warn("Anthropic API error", {
+						code: err.code,
+						message: err.message,
+					});
 					throw createAgentError(
 						err.code === "network_error"
 							? "model_unavailable"
@@ -384,18 +440,38 @@ export function anthropic(config: { apiKey: string; model: string; baseUrl?: str
 				}
 
 				const ok = (result.llmResult as { Ok: object }).Ok as {
-					content: Array<{ type: string; text?: string; id?: string; name?: string; arguments?: unknown }>;
+					content: Array<{
+						type: string;
+						text?: string;
+						id?: string;
+						name?: string;
+						arguments?: unknown;
+					}>;
 					stop_reason: string;
-					usage?: { input: number; output: number; cache_read: number; cache_write: number; total_tokens: number };
+					usage?: {
+						input: number;
+						output: number;
+						cache_read: number;
+						cache_write: number;
+						total_tokens: number;
+					};
 				};
 
-				logger.info("Anthropic response", { stopReason: ok.stop_reason, contentBlocks: ok.content.length });
+				logger.info("Anthropic response", {
+					stopReason: ok.stop_reason,
+					contentBlocks: ok.content.length,
+				});
 
 				return {
 					content: ok.content.map((b) => {
 						if (b.type === "text") return { type: "text", text: b.text ?? "" };
 						if (b.type === "tool_call")
-							return { type: "tool_call", id: b.id ?? "", name: b.name ?? "", arguments: b.arguments ?? {} };
+							return {
+								type: "tool_call",
+								id: b.id ?? "",
+								name: b.name ?? "",
+								arguments: b.arguments ?? {},
+							};
 						return { type: "text", text: "" };
 					}),
 					stopReason: ok.stop_reason === "tool_use" ? "tool_call" : "end",
@@ -405,11 +481,17 @@ export function anthropic(config: { apiKey: string; model: string; baseUrl?: str
 				};
 			} catch (e) {
 				if (e && typeof e === "object" && "code" in e) throw e;
-				logger.error("Anthropic request failed", { error: e instanceof Error ? e.message : String(e) });
-				throw createAgentError("model_unavailable", e instanceof Error ? e.message : String(e), {
-					cause: e,
-					recoverable: false,
+				logger.error("Anthropic request failed", {
+					error: e instanceof Error ? e.message : String(e),
 				});
+				throw createAgentError(
+					"model_unavailable",
+					e instanceof Error ? e.message : String(e),
+					{
+						cause: e,
+						recoverable: false,
+					},
+				);
 			}
 		},
 	};
@@ -419,7 +501,10 @@ export function anthropic(config: { apiKey: string; model: string; baseUrl?: str
 
 function extractText(content: ContentBlock[]): string {
 	return content
-		.filter((b): b is typeof b & { text: string } => b.type === "text" && b.text !== undefined)
+		.filter(
+			(b): b is typeof b & { text: string } =>
+				b.type === "text" && b.text !== undefined,
+		)
 		.map((b) => b.text)
 		.join("\n");
 }

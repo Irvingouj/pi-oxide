@@ -12,7 +12,11 @@ export async function processStepMarkers(
 		if (marker.type === "new_artifacts") {
 			for (const artifactId of marker.entry_ids ?? []) {
 				const content = hostReadArtifact(hostAgent.handle, artifactId);
-				await config.artifactStore?.save(hostAgent.sessionId ?? "default", artifactId, content);
+				await config.artifactStore?.save(
+					hostAgent.sessionId ?? "default",
+					artifactId,
+					content,
+				);
 			}
 		}
 	}

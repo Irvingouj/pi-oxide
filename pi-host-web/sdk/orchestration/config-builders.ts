@@ -1,4 +1,10 @@
-import type { Content, ContextProjectionBudget, Model, AgentMessage as WasmAgentMessage } from "../../pi_host_web.js";
+import type {
+	Content,
+	ContextProjectionBudget,
+	Model,
+	AgentMessage as WasmAgentMessage,
+} from "../../pi_host_web.js";
+import type { ArtifactStore } from "../bindings/types.ts";
 import { createAgentError } from "../errors.ts";
 import type {
 	AgentArtifact,
@@ -9,15 +15,18 @@ import type {
 	AgentTools,
 	ArtifactSearchResult,
 } from "../types.ts";
-import type { ArtifactStore } from "../bindings/types.ts";
 
-export function normalizeTools(tools: AgentTools | AgentTools[] | undefined): AgentTools[] {
+export function normalizeTools(
+	tools: AgentTools | AgentTools[] | undefined,
+): AgentTools[] {
 	if (!tools) return [];
 	if (Array.isArray(tools)) return tools;
 	return [tools];
 }
 
-export function buildContextBudget(context?: import("../types.ts").AgentContextPolicy): ContextProjectionBudget {
+export function buildContextBudget(
+	context?: import("../types.ts").AgentContextPolicy,
+): ContextProjectionBudget {
 	return {
 		max_tool_result_chars: context?.toolResultLimit ?? 50000,
 		max_context_tokens: context?.maxTokens ?? 100000,
@@ -45,10 +54,15 @@ export function buildModelOptions(model: AgentModel): Model {
 	};
 }
 
-export function buildArtifactStore(config: AgentConfig): ArtifactStore | undefined {
+export function buildArtifactStore(
+	config: AgentConfig,
+): ArtifactStore | undefined {
 	if (config.artifacts?.mode === "external" && config.store) {
 		const store = config.store;
-		if (typeof store.saveArtifact !== "function" || typeof store.loadArtifact !== "function") {
+		if (
+			typeof store.saveArtifact !== "function" ||
+			typeof store.loadArtifact !== "function"
+		) {
 			throw createAgentError(
 				"store_artifact_unsupported",
 				"Store does not support artifact operations but external artifact mode is configured",
@@ -66,19 +80,22 @@ export function buildArtifactStore(config: AgentConfig): ArtifactStore | undefin
 			load: (sessionId: string, artifactId: string) =>
 				store
 					.loadArtifact?.(sessionId, artifactId)
-					.then((a: AgentArtifact | null) => (a && typeof a.content === "string" ? a.content : null)) ??
-				Promise.resolve(null),
+					.then((a: AgentArtifact | null) =>
+						a && typeof a.content === "string" ? a.content : null,
+					) ?? Promise.resolve(null),
 			search: (sessionId: string, query: string) => {
 				if (typeof store.searchArtifacts !== "function") {
 					return Promise.resolve([]);
 				}
-				return store.searchArtifacts?.(sessionId, { text: query }).then((results: ArtifactSearchResult[]) =>
-					results.map((r: ArtifactSearchResult) => ({
-						id: r.artifact.id,
-						snippet: r.snippet ?? "",
-						match_count: r.matchCount ?? 0,
-					})),
-				);
+				return store
+					.searchArtifacts?.(sessionId, { text: query })
+					.then((results: ArtifactSearchResult[]) =>
+						results.map((r: ArtifactSearchResult) => ({
+							id: r.artifact.id,
+							snippet: r.snippet ?? "",
+							match_count: r.matchCount ?? 0,
+						})),
+					);
 			},
 		};
 	}
@@ -100,14 +117,19 @@ export function buildUserMessage(input: string | AgentInput): WasmAgentMessage {
 
 	if (typeof input === "object" && input.attachments) {
 		for (const attachment of input.attachments) {
-			if (attachment.type === "image" || attachment.mimeType?.startsWith("image/")) {
+			if (
+				attachment.type === "image" ||
+				attachment.mimeType?.startsWith("image/")
+			) {
 				content.push({
 					type: "image",
 					media_type: attachment.mimeType ?? "image/png",
 					data:
 						typeof attachment.content === "string"
 							? attachment.content
-							: btoa(String.fromCharCode(...new Uint8Array(attachment.content))),
+							: btoa(
+									String.fromCharCode(...new Uint8Array(attachment.content)),
+								),
 				});
 			}
 		}
@@ -120,18 +142,30 @@ export function buildUserMessage(input: string | AgentInput): WasmAgentMessage {
 	};
 }
 
-export function convertWasmMessagesToAgentMessages(messages: WasmAgentMessage[]): AgentMessage[] {
+export function convertWasmMessagesToAgentMessages(
+	messages: WasmAgentMessage[],
+): AgentMessage[] {
 	return messages.map((msg) => ({
 		id: stableMessageId(msg),
 		role: msg.role,
 		content: msg.content.map((c) => {
 			if (c.type === "text") return { type: "text" as const, text: c.text };
-			if (c.type === "tool_call") return { type: "tool_call" as const, id: c.id, name: c.name, arguments: c.arguments };
-			if (c.type === "image") return { type: "image" as const, mimeType: c.media_type, data: c.data };
+			if (c.type === "tool_call")
+				return {
+					type: "tool_call" as const,
+					id: c.id,
+					name: c.name,
+					arguments: c.arguments,
+				};
+			if (c.type === "image")
+				return { type: "image" as const, mimeType: c.media_type, data: c.data };
 			return { type: "text" as const, text: "" };
 		}),
 		timestamp: Date.now(),
-		tool_call_id: msg.role === "tool_result" ? (msg as unknown as { tool_call_id: string }).tool_call_id : undefined,
+		tool_call_id:
+			msg.role === "tool_result"
+				? (msg as unknown as { tool_call_id: string }).tool_call_id
+				: undefined,
 	}));
 }
 

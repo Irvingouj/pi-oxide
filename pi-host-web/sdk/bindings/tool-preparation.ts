@@ -1,4 +1,8 @@
-import type { ToolCall, ToolCallPreparation, ToolError } from "../../pi_host_web.js";
+import type {
+	ToolCall,
+	ToolCallPreparation,
+	ToolError,
+} from "../../pi_host_web.js";
 import type { Logger } from "../types.ts";
 import { HostError } from "./init.ts";
 import type { AgentRunConfig } from "./types.ts";
@@ -9,7 +13,10 @@ function safeHook<T>(fn: () => T | Promise<T>): Promise<Result<T>> {
 	try {
 		return Promise.resolve(fn()).then(
 			(value) => ({ ok: true, value }),
-			(error) => ({ ok: false, error: error instanceof Error ? error : new Error(String(error)) }),
+			(error) => ({
+				ok: false,
+				error: error instanceof Error ? error : new Error(String(error)),
+			}),
 		);
 	} catch (error) {
 		return Promise.resolve({
@@ -19,7 +26,10 @@ function safeHook<T>(fn: () => T | Promise<T>): Promise<Result<T>> {
 	}
 }
 
-function matchResult<T, U>(result: Result<T>, arms: { ok: (value: T) => U; err: (error: Error) => U }): U {
+function matchResult<T, U>(
+	result: Result<T>,
+	arms: { ok: (value: T) => U; err: (error: Error) => U },
+): U {
 	return result.ok ? arms.ok(result.value) : arms.err(result.error);
 }
 
@@ -61,10 +71,16 @@ export async function buildToolCallPreparations(
 		}
 
 		const result = await safeHook(async () => {
-			const rawTransform = await (hooks?.transform?.(call) ?? { type: "none" as const });
+			const rawTransform = await (hooks?.transform?.(call) ?? {
+				type: "none" as const,
+			});
 			const transformedCall =
-				rawTransform.type === "rewrite_args" ? { ...call, arguments: rawTransform.arguments } : call;
-			const rawPermission = await (hooks?.permission?.(transformedCall) ?? { type: "allow" as const });
+				rawTransform.type === "rewrite_args"
+					? { ...call, arguments: rawTransform.arguments }
+					: call;
+			const rawPermission = await (hooks?.permission?.(transformedCall) ?? {
+				type: "allow" as const,
+			});
 			return { rawTransform, rawPermission };
 		});
 
@@ -79,7 +95,10 @@ export async function buildToolCallPreparations(
 			err: (error) => {
 				hadError = true;
 				errorMessage = error.message;
-				logger.error("Hook error", { toolCallId: call.id, error: error.message });
+				logger.error("Hook error", {
+					toolCallId: call.id,
+					error: error.message,
+				});
 				items.push(blocked(call.id));
 			},
 		});

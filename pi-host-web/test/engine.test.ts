@@ -1,8 +1,21 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import type { AgentConfig, Content, LlmContext, ToolCall, ToolResult } from "../pi_host_web.js";
-import { hostLlmDone, hostPrepareToolCalls, startTurn } from "../pi_host_web.js";
-import { createHostAgentInstance, runTurnWithHostAgent } from "../sdk/bindings/index.ts";
+import type {
+	AgentConfig,
+	Content,
+	LlmContext,
+	ToolCall,
+	ToolResult,
+} from "../pi_host_web.js";
+import {
+	hostLlmDone,
+	hostPrepareToolCalls,
+	startTurn,
+} from "../pi_host_web.js";
+import {
+	createHostAgentInstance,
+	runTurnWithHostAgent,
+} from "../sdk/bindings/index.ts";
 import type { AgentRunConfig, LlmStream } from "../sdk/bindings/types.ts";
 import { ensureInit } from "../sdk/init.ts";
 import { destroyEngineAgent } from "../sdk/orchestration/agent-engine.ts";
@@ -20,7 +33,10 @@ function makeMockModel(returnResult: MockModelResponse | MockModelResponse[]) {
 	let callIndex = 0;
 
 	return {
-		call: async (_context: LlmContext, _signal?: AbortSignal): Promise<LlmStream> => {
+		call: async (
+			_context: LlmContext,
+			_signal?: AbortSignal,
+		): Promise<LlmStream> => {
 			const response = responses[Math.min(callIndex++, responses.length - 1)];
 			const content: Content[] = [];
 			if (response.text) {
@@ -28,7 +44,12 @@ function makeMockModel(returnResult: MockModelResponse | MockModelResponse[]) {
 			}
 			if (response.toolCalls) {
 				for (const tc of response.toolCalls) {
-					content.push({ type: "tool_call", id: tc.id, name: tc.name, arguments: tc.arguments });
+					content.push({
+						type: "tool_call",
+						id: tc.id,
+						name: tc.name,
+						arguments: tc.arguments,
+					});
 				}
 			}
 			return {
@@ -43,7 +64,13 @@ function makeMockModel(returnResult: MockModelResponse | MockModelResponse[]) {
 							stop_reason: response.stopReason ?? "end_turn",
 							error_message: undefined,
 							timestamp: Date.now(),
-							usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },
+							usage: {
+								input: 0,
+								output: 0,
+								cache_read: 0,
+								cache_write: 0,
+								total_tokens: 0,
+							},
 						};
 					},
 				},
@@ -56,7 +83,13 @@ function makeMockModel(returnResult: MockModelResponse | MockModelResponse[]) {
 						stop_reason: response.stopReason ?? "end_turn",
 						error_message: undefined,
 						timestamp: Date.now(),
-						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },
+						usage: {
+							input: 0,
+							output: 0,
+							cache_read: 0,
+							cache_write: 0,
+							total_tokens: 0,
+						},
 					},
 				}),
 			};
@@ -65,7 +98,9 @@ function makeMockModel(returnResult: MockModelResponse | MockModelResponse[]) {
 	};
 }
 
-function makeUserMessage(text: string): import("../pi_host_web.js").AgentMessage {
+function makeUserMessage(
+	text: string,
+): import("../pi_host_web.js").AgentMessage {
 	return {
 		role: "user",
 		content: [{ type: "text", text }],
@@ -73,7 +108,9 @@ function makeUserMessage(text: string): import("../pi_host_web.js").AgentMessage
 	};
 }
 
-function makeToolConfig(overrides: Partial<AgentRunConfig> = {}): AgentRunConfig {
+function makeToolConfig(
+	overrides: Partial<AgentRunConfig> = {},
+): AgentRunConfig {
 	return {
 		llm: makeMockModel({ text: "Hello" }),
 		tools: {
@@ -101,7 +138,10 @@ function makeAgentConfig(): AgentConfig {
 		instructions: "test",
 		model: {
 			id: "test-model",
-			generate: async () => ({ content: [{ type: "text", text: "hi" }], stopReason: "end" }),
+			generate: async () => ({
+				content: [{ type: "text", text: "hi" }],
+				stopReason: "end",
+			}),
 		},
 	};
 }
@@ -112,22 +152,33 @@ describe("runTurnWithHostAgent", () => {
 		const events: unknown[] = [];
 		const config = makeToolConfig({
 			llm: makeMockModel([
-				{ toolCalls: [{ id: "tc-1", name: "test_tool", arguments: {} }], stopReason: "tool_use" },
+				{
+					toolCalls: [{ id: "tc-1", name: "test_tool", arguments: {} }],
+					stopReason: "tool_use",
+				},
 				{ text: "done", stopReason: "end_turn" },
 			]),
 			onEvent: (ev) => events.push(ev),
 		});
 
-		const result = await runTurnWithHostAgent(hostAgent, makeUserMessage("use tool"), config);
+		const result = await runTurnWithHostAgent(
+			hostAgent,
+			makeUserMessage("use tool"),
+			config,
+		);
 
 		assert.equal(result.aborted, false);
 		assert.equal(
-			events.filter((e) => e.type === "tool_execution_start" && e.tool_call_id === "tc-1").length,
+			events.filter(
+				(e) => e.type === "tool_execution_start" && e.tool_call_id === "tc-1",
+			).length,
 			1,
 			"allowed call should emit exactly one tool_execution_start",
 		);
 		assert.ok(
-			events.some((e) => e.type === "tool_execution_end" && e.tool_call_id === "tc-1"),
+			events.some(
+				(e) => e.type === "tool_execution_end" && e.tool_call_id === "tc-1",
+			),
 			"should emit tool_execution_end",
 		);
 		destroyEngineAgent(hostAgent);
@@ -138,7 +189,10 @@ describe("runTurnWithHostAgent", () => {
 		const events: unknown[] = [];
 		const config = makeToolConfig({
 			llm: makeMockModel([
-				{ toolCalls: [{ id: "tc-1", name: "test_tool", arguments: {} }], stopReason: "tool_use" },
+				{
+					toolCalls: [{ id: "tc-1", name: "test_tool", arguments: {} }],
+					stopReason: "tool_use",
+				},
 				{ text: "done", stopReason: "end_turn" },
 			]),
 			onEvent: (ev) => events.push(ev),
@@ -147,17 +201,28 @@ describe("runTurnWithHostAgent", () => {
 			},
 		});
 
-		const result = await runTurnWithHostAgent(hostAgent, makeUserMessage("use tool"), config);
+		const result = await runTurnWithHostAgent(
+			hostAgent,
+			makeUserMessage("use tool"),
+			config,
+		);
 
 		assert.equal(result.aborted, false);
 		assert.equal(
-			events.filter((e) => e.type === "tool_execution_start" && e.tool_call_id === "tc-1").length,
+			events.filter(
+				(e) => e.type === "tool_execution_start" && e.tool_call_id === "tc-1",
+			).length,
 			0,
 			"blocked calls should not emit tool_execution_start",
 		);
 		// Blocked calls should produce a tool_execution_end with is_error
 		assert.ok(
-			events.some((e) => e.type === "tool_execution_end" && e.tool_call_id === "tc-1" && e.is_error === true),
+			events.some(
+				(e) =>
+					e.type === "tool_execution_end" &&
+					e.tool_call_id === "tc-1" &&
+					e.is_error === true,
+			),
 			"should emit tool_execution_end with is_error for blocked calls",
 		);
 		destroyEngineAgent(hostAgent);
@@ -175,14 +240,22 @@ describe("runTurnWithHostAgent", () => {
 
 		const llmDone = hostLlmDone(hostAgent.handle, {
 			Ok: {
-				content: [{ type: "tool_call", id: "tc-1", name: "test_tool", arguments: {} }],
+				content: [
+					{ type: "tool_call", id: "tc-1", name: "test_tool", arguments: {} },
+				],
 				api: "test",
 				provider: "test",
 				model: "test",
 				stop_reason: "tool_use",
 				error_message: undefined,
 				timestamp: Date.now(),
-				usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },
+				usage: {
+					input: 0,
+					output: 0,
+					cache_read: 0,
+					cache_write: 0,
+					total_tokens: 0,
+				},
 			},
 		});
 		assert.equal(llmDone.ok, true);
@@ -190,20 +263,35 @@ describe("runTurnWithHostAgent", () => {
 		const prepared = hostPrepareToolCalls(
 			hostAgent.handle,
 			JSON.stringify([
-				{ tool_call_id: "tc-1", transform: { type: "none" }, permission: { type: "allow" } },
-				{ tool_call_id: "tc-1", transform: { type: "none" }, permission: { type: "allow" } },
+				{
+					tool_call_id: "tc-1",
+					transform: { type: "none" },
+					permission: { type: "allow" },
+				},
+				{
+					tool_call_id: "tc-1",
+					transform: { type: "none" },
+					permission: { type: "allow" },
+				},
 			]),
 		);
 		assert.equal(prepared.ok, true);
 
 		const events = prepared.data?.events ?? [];
 		assert.equal(
-			events.filter((e) => e.type === "tool_execution_start" && e.tool_call_id === "tc-1").length,
+			events.filter(
+				(e) => e.type === "tool_execution_start" && e.tool_call_id === "tc-1",
+			).length,
 			0,
 			"duplicate preparation should not emit tool_execution_start",
 		);
 		assert.equal(
-			events.filter((e) => e.type === "tool_execution_end" && e.tool_call_id === "tc-1" && e.is_error).length,
+			events.filter(
+				(e) =>
+					e.type === "tool_execution_end" &&
+					e.tool_call_id === "tc-1" &&
+					e.is_error,
+			).length,
 			1,
 			"duplicate preparation should emit one error result",
 		);
@@ -223,12 +311,20 @@ describe("runTurnWithHostAgent", () => {
 
 		const config = makeToolConfig({
 			llm: makeMockModel([
-				{ toolCalls: [{ id: "tc-1", name: "test_tool", arguments: { original: true } }], stopReason: "tool_use" },
+				{
+					toolCalls: [
+						{ id: "tc-1", name: "test_tool", arguments: { original: true } },
+					],
+					stopReason: "tool_use",
+				},
 				{ text: "done", stopReason: "end_turn" },
 			]),
 			onEvent: (ev) => events.push(ev),
 			prepareToolCalls: {
-				transform: () => ({ type: "rewrite_args", arguments: { rewritten: true } }),
+				transform: () => ({
+					type: "rewrite_args",
+					arguments: { rewritten: true },
+				}),
 				permission: (call: ToolCall) => {
 					permissionSeenArgs = call.arguments;
 					return { type: "allow" };
@@ -236,10 +332,18 @@ describe("runTurnWithHostAgent", () => {
 			},
 		});
 
-		const result = await runTurnWithHostAgent(hostAgent, makeUserMessage("use tool"), config);
+		const result = await runTurnWithHostAgent(
+			hostAgent,
+			makeUserMessage("use tool"),
+			config,
+		);
 
 		assert.equal(result.aborted, false);
-		assert.deepStrictEqual(permissionSeenArgs, { rewritten: true }, "permission hook should see transformed arguments");
+		assert.deepStrictEqual(
+			permissionSeenArgs,
+			{ rewritten: true },
+			"permission hook should see transformed arguments",
+		);
 		destroyEngineAgent(hostAgent);
 	});
 
@@ -274,12 +378,21 @@ describe("runTurnWithHostAgent", () => {
 			},
 		});
 
-		const result = await runTurnWithHostAgent(hostAgent, makeUserMessage("use tools"), config);
+		const result = await runTurnWithHostAgent(
+			hostAgent,
+			makeUserMessage("use tools"),
+			config,
+		);
 
 		assert.equal(result.aborted, false);
 		assert.deepStrictEqual(toolRuns, ["tc-1"], "only allowed call should run");
 		assert.ok(
-			events.some((e) => e.type === "tool_execution_end" && e.tool_call_id === "tc-2" && e.is_error === true),
+			events.some(
+				(e) =>
+					e.type === "tool_execution_end" &&
+					e.tool_call_id === "tc-2" &&
+					e.is_error === true,
+			),
 			"blocked call should produce error tool_execution_end",
 		);
 		destroyEngineAgent(hostAgent);
@@ -292,7 +405,10 @@ describe("runTurnWithHostAgent", () => {
 
 		const config = makeToolConfig({
 			llm: makeMockModel([
-				{ toolCalls: [{ id: "tc-1", name: "test_tool", arguments: {} }], stopReason: "tool_use" },
+				{
+					toolCalls: [{ id: "tc-1", name: "test_tool", arguments: {} }],
+					stopReason: "tool_use",
+				},
 				{ text: "done", stopReason: "end_turn" },
 			]),
 			onEvent: (ev) => events.push(ev),
@@ -307,12 +423,25 @@ describe("runTurnWithHostAgent", () => {
 			},
 		});
 
-		const result = await runTurnWithHostAgent(hostAgent, makeUserMessage("use tool"), config);
+		const result = await runTurnWithHostAgent(
+			hostAgent,
+			makeUserMessage("use tool"),
+			config,
+		);
 
 		assert.equal(result.aborted, false);
-		assert.equal(toolRan, false, "tool handler should not run when all blocked");
+		assert.equal(
+			toolRan,
+			false,
+			"tool handler should not run when all blocked",
+		);
 		assert.ok(
-			events.some((e) => e.type === "tool_execution_end" && e.tool_call_id === "tc-1" && e.is_error === true),
+			events.some(
+				(e) =>
+					e.type === "tool_execution_end" &&
+					e.tool_call_id === "tc-1" &&
+					e.is_error === true,
+			),
 			"blocked call should still produce tool_execution_end",
 		);
 		destroyEngineAgent(hostAgent);
@@ -349,20 +478,38 @@ describe("runTurnWithHostAgent", () => {
 			},
 		});
 
-		const result = await runTurnWithHostAgent(hostAgent, makeUserMessage("use tools"), config);
+		const result = await runTurnWithHostAgent(
+			hostAgent,
+			makeUserMessage("use tools"),
+			config,
+		);
 
 		assert.equal(result.aborted, false);
 		// tc-1 should be blocked due to hook error
 		assert.ok(
-			events.some((e) => e.type === "tool_execution_end" && e.tool_call_id === "tc-1" && e.is_error === true),
+			events.some(
+				(e) =>
+					e.type === "tool_execution_end" &&
+					e.tool_call_id === "tc-1" &&
+					e.is_error === true,
+			),
 			"hook error should block tc-1",
 		);
 		// tc-2 should also be blocked (all remaining calls blocked after hook error)
 		assert.ok(
-			events.some((e) => e.type === "tool_execution_end" && e.tool_call_id === "tc-2" && e.is_error === true),
+			events.some(
+				(e) =>
+					e.type === "tool_execution_end" &&
+					e.tool_call_id === "tc-2" &&
+					e.is_error === true,
+			),
 			"tc-2 should also be blocked after hook error",
 		);
-		assert.deepStrictEqual(toolRuns, [], "no tools should run after hook error");
+		assert.deepStrictEqual(
+			toolRuns,
+			[],
+			"no tools should run after hook error",
+		);
 		destroyEngineAgent(hostAgent);
 	});
 });

@@ -1,7 +1,19 @@
-import type { Content, LlmChunk, LlmResult, AgentMessage as WasmAgentMessage } from "../../pi_host_web.js";
-import type { AgentContentBlock, AgentModel, ModelEvent, ModelRequest, ModelResponse, TokenUsage } from "../types.ts";
-import { convertWasmMessagesToAgentMessages } from "./config-builders.ts";
+import type {
+	Content,
+	LlmChunk,
+	LlmResult,
+	AgentMessage as WasmAgentMessage,
+} from "../../pi_host_web.js";
 import type { LlmStream } from "../bindings/types.ts";
+import type {
+	AgentContentBlock,
+	AgentModel,
+	ModelEvent,
+	ModelRequest,
+	ModelResponse,
+	TokenUsage,
+} from "../types.ts";
+import { convertWasmMessagesToAgentMessages } from "./config-builders.ts";
 
 function stringifyToolArguments(argumentsValue: unknown): string {
 	if (typeof argumentsValue === "string") {
@@ -18,7 +30,9 @@ function parseToolArguments(argumentsText: string): unknown {
 	}
 }
 
-export function toWasmStopReason(reason: ModelResponse["stopReason"]): "end_turn" | "tool_use" | "max_tokens" | "error" {
+export function toWasmStopReason(
+	reason: ModelResponse["stopReason"],
+): "end_turn" | "tool_use" | "max_tokens" | "error" {
 	switch (reason) {
 		case "tool_call":
 			return "tool_use";
@@ -37,7 +51,10 @@ export function modelStreamToLlmStream(
 	runState: { usage?: TokenUsage },
 ): LlmStream {
 	let textAccumulator = "";
-	const toolCalls = new Map<string, { id: string; name: string; arguments: string }>();
+	const toolCalls = new Map<
+		string,
+		{ id: string; name: string; arguments: string }
+	>();
 	let stopReason: "end" | "tool_call" | "length" | "error" = "end";
 	let modelId: string | undefined;
 	let usage: TokenUsage | undefined;
@@ -66,9 +83,16 @@ export function modelStreamToLlmStream(
 							break;
 						}
 						case "tool_call_delta": {
-							const delta = event.payload as { id: string; name: string; arguments?: unknown; delta?: unknown };
+							const delta = event.payload as {
+								id: string;
+								name: string;
+								arguments?: unknown;
+								delta?: unknown;
+							};
 							const existing = toolCalls.get(delta.id);
-							const argumentFragment = stringifyToolArguments(delta.arguments ?? delta.delta ?? "");
+							const argumentFragment = stringifyToolArguments(
+								delta.arguments ?? delta.delta ?? "",
+							);
 							toolCalls.set(delta.id, {
 								id: delta.id,
 								name: delta.name || existing?.name || "",
@@ -115,7 +139,10 @@ export function modelStreamToLlmStream(
 				Err: {
 					error: {
 						code: "stream_error",
-						message: streamError instanceof Error ? streamError.message : String(streamError),
+						message:
+							streamError instanceof Error
+								? streamError.message
+								: String(streamError),
 					},
 					aborted: false,
 				},
@@ -142,7 +169,10 @@ export function modelStreamToLlmStream(
 				provider: "sdk",
 				model: modelId ?? "sdk-model",
 				stop_reason: toWasmStopReason(stopReason),
-				error_message: toWasmStopReason(stopReason) === "error" ? "Model returned an error stop reason" : undefined,
+				error_message:
+					toWasmStopReason(stopReason) === "error"
+						? "Model returned an error stop reason"
+						: undefined,
 				timestamp: Date.now(),
 				usage: {
 					input: usage?.input ?? 0,
@@ -158,7 +188,10 @@ export function modelStreamToLlmStream(
 	return { chunks, result };
 }
 
-export function modelResponseToLlmStream(response: ModelResponse, signal: AbortSignal): LlmStream {
+export function modelResponseToLlmStream(
+	response: ModelResponse,
+	signal: AbortSignal,
+): LlmStream {
 	const chunks: AsyncIterable<LlmChunk> = {
 		[Symbol.asyncIterator]: async function* () {
 			if (signal.aborted) return;
@@ -201,14 +234,23 @@ export function modelResponseToLlmStream(response: ModelResponse, signal: AbortS
 		Ok: {
 			content: response.content.map((c: AgentContentBlock) => {
 				if (c.type === "text") return { type: "text", text: c.text };
-				if (c.type === "tool_call") return { type: "tool_call", id: c.id, name: c.name, arguments: c.arguments };
+				if (c.type === "tool_call")
+					return {
+						type: "tool_call",
+						id: c.id,
+						name: c.name,
+						arguments: c.arguments,
+					};
 				return { type: "text", text: "" };
 			}),
 			api: "sdk",
 			provider: "sdk",
 			model: response.model ?? "sdk-model",
 			stop_reason: toWasmStopReason(response.stopReason),
-			error_message: response.stopReason === "error" ? "Model returned an error stop reason" : undefined,
+			error_message:
+				response.stopReason === "error"
+					? "Model returned an error stop reason"
+					: undefined,
 			timestamp: Date.now(),
 			usage: {
 				input: response.usage?.input ?? 0,

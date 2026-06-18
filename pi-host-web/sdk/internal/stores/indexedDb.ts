@@ -14,7 +14,10 @@ export function indexedDbStore(): AgentStore {
 			return { version: 1, data } as AgentSnapshot;
 		},
 
-		async saveSession(sessionId: string, snapshot: AgentSnapshot): Promise<void> {
+		async saveSession(
+			sessionId: string,
+			snapshot: AgentSnapshot,
+		): Promise<void> {
 			await backend.save(sessionId, snapshot.data as unknown as PersistData);
 		},
 

@@ -1,6 +1,11 @@
 import assert from "node:assert";
 import { describe, it, mock } from "node:test";
-import { anthropic, defineModel, openai, openaiCompatible } from "../sdk/index.ts";
+import {
+	anthropic,
+	defineModel,
+	openai,
+	openaiCompatible,
+} from "../sdk/index.ts";
 import type { AgentMessage, ModelRequest } from "../sdk/types.ts";
 
 describe("Provider factories", () => {
@@ -45,7 +50,10 @@ describe("Provider factories", () => {
 
 	describe("TM-7: anthropic()", () => {
 		it("returns AgentModel with correct metadata", () => {
-			const model = anthropic({ apiKey: "test-key", model: "claude-3-5-sonnet" });
+			const model = anthropic({
+				apiKey: "test-key",
+				model: "claude-3-5-sonnet",
+			});
 
 			assert.equal(model.id, "claude-3-5-sonnet");
 			assert.equal(model.contextWindow, 200000);
@@ -132,7 +140,9 @@ describe("Provider factories", () => {
 			assert.equal(result.content[0].type, "tool_call");
 			assert.equal((result.content[0] as any).id, "tc1");
 			assert.equal((result.content[0] as any).name, "browser_click");
-			assert.deepStrictEqual((result.content[0] as any).arguments, { selector: "#btn" });
+			assert.deepStrictEqual((result.content[0] as any).arguments, {
+				selector: "#btn",
+			});
 			assert.equal(result.stopReason, "tool_call");
 
 			// Verify usage
@@ -176,7 +186,12 @@ describe("Provider factories", () => {
 						{ type: "tool_call", id: "tc1", name: "tool", arguments: {} },
 					],
 				},
-				{ id: "3", role: "tool_result", content: [{ type: "text", text: "result" }], tool_call_id: "tc1" },
+				{
+					id: "3",
+					role: "tool_result",
+					content: [{ type: "text", text: "result" }],
+					tool_call_id: "tc1",
+				},
 			];
 
 			await model.generate({

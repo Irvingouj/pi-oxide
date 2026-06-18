@@ -44,7 +44,9 @@ export interface AgentConfig {
 		) =>
 			| { type: "none" }
 			| { type: "rewrite_args"; arguments: unknown }
-			| Promise<{ type: "none" } | { type: "rewrite_args"; arguments: unknown }>;
+			| Promise<
+					{ type: "none" } | { type: "rewrite_args"; arguments: unknown }
+			  >;
 		permission?: (
 			call: AgentToolCall,
 		) =>
@@ -96,29 +98,30 @@ export type AgentEventName =
 	| "error"
 	| "debug";
 
-export type AgentEventHandler<E extends AgentEventName> = E extends "messageStart"
-	? (message: AgentMessage) => void
-	: E extends "text"
-		? (delta: string) => void
-		: E extends "messageEnd"
-			? (message: AgentMessage) => void
-			: E extends "toolStart"
-				? (tool: AgentToolRun) => void
-				: E extends "toolUpdate"
+export type AgentEventHandler<E extends AgentEventName> =
+	E extends "messageStart"
+		? (message: AgentMessage) => void
+		: E extends "text"
+			? (delta: string) => void
+			: E extends "messageEnd"
+				? (message: AgentMessage) => void
+				: E extends "toolStart"
 					? (tool: AgentToolRun) => void
-					: E extends "toolEnd"
+					: E extends "toolUpdate"
 						? (tool: AgentToolRun) => void
-						: E extends "artifact"
-							? (artifact: AgentArtifactRef) => void
-							: E extends "status"
-								? (status: AgentStatus) => void
-								: E extends "done"
-									? (result: AgentRunResult) => void
-									: E extends "error"
-										? (error: AgentError) => void
-										: E extends "debug"
-											? (event: unknown) => void
-											: never;
+						: E extends "toolEnd"
+							? (tool: AgentToolRun) => void
+							: E extends "artifact"
+								? (artifact: AgentArtifactRef) => void
+								: E extends "status"
+									? (status: AgentStatus) => void
+									: E extends "done"
+										? (result: AgentRunResult) => void
+										: E extends "error"
+											? (error: AgentError) => void
+											: E extends "debug"
+												? (event: unknown) => void
+												: never;
 
 export interface AgentMessage {
 	id: string;
@@ -177,7 +180,10 @@ export interface AgentModel {
 		streaming?: boolean;
 	};
 	generate(request: ModelRequest): Promise<ModelResponse>;
-	generateStream?(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent>;
+	generateStream?(
+		request: ModelRequest,
+		signal?: AbortSignal,
+	): AsyncIterable<ModelEvent>;
 	summarize?(messages: AgentMessage[], signal?: AbortSignal): Promise<string>;
 }
 
@@ -204,7 +210,9 @@ export interface ModelEvent {
 
 export interface AgentTools {
 	definitions: AgentToolDefinition[];
-	getHandler(name: string): ((input: unknown) => Promise<unknown> | unknown) | null;
+	getHandler(
+		name: string,
+	): ((input: unknown) => Promise<unknown> | unknown) | null;
 }
 
 export interface AgentToolDefinition {
@@ -219,8 +227,14 @@ export interface AgentStore {
 	loadSession(sessionId: string): Promise<AgentSnapshot | null>;
 	saveSession(sessionId: string, snapshot: AgentSnapshot): Promise<void>;
 	saveArtifact?(sessionId: string, artifact: AgentArtifact): Promise<void>;
-	loadArtifact?(sessionId: string, artifactId: string): Promise<AgentArtifact | null>;
-	searchArtifacts?(sessionId: string, query: ArtifactSearchQuery): Promise<ArtifactSearchResult[]>;
+	loadArtifact?(
+		sessionId: string,
+		artifactId: string,
+	): Promise<AgentArtifact | null>;
+	searchArtifacts?(
+		sessionId: string,
+		query: ArtifactSearchQuery,
+	): Promise<ArtifactSearchResult[]>;
 }
 
 export interface AgentSnapshot {
@@ -240,7 +254,11 @@ export interface AgentSummarizer {
 
 export interface AgentTelemetry {
 	onEvent?(event: { type: string; payload: unknown }): void;
-	onMetric?(name: string, value: number, metadata?: Record<string, unknown>): void;
+	onMetric?(
+		name: string,
+		value: number,
+		metadata?: Record<string, unknown>,
+	): void;
 }
 
 export interface AgentError {

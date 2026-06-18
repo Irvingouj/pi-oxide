@@ -10,7 +10,9 @@ export function artifactTools(): AgentTools {
 		description: t.description,
 		inputSchema: t.parameters,
 		run: () => {
-			throw new Error("artifactTools handlers are wired at build time by ToolRegistryBuilder");
+			throw new Error(
+				"artifactTools handlers are wired at build time by ToolRegistryBuilder",
+			);
 		},
 	}));
 

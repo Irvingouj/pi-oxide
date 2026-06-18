@@ -7,7 +7,12 @@
 import { createAgentError } from "../../errors.ts";
 import { getLogger } from "../../internal/logger.ts";
 import { isRecord } from "../../internal/util/types.ts";
-import type { AgentContentBlock, AgentModel, ModelRequest, ModelResponse } from "../../types.ts";
+import type {
+	AgentContentBlock,
+	AgentModel,
+	ModelRequest,
+	ModelResponse,
+} from "../../types.ts";
 
 export function openaiCompatible(config: {
 	apiKey: string;
@@ -21,31 +26,46 @@ export function openaiCompatible(config: {
 		contextWindow: 128000,
 		maxTokens: config.maxTokens ?? 4096,
 		capabilities: {
-			vision: config.model.includes("vision") || config.model.includes("gpt-4o"),
+			vision:
+				config.model.includes("vision") || config.model.includes("gpt-4o"),
 			jsonMode: true,
 			functionCalling: true,
 			streaming: true,
 		},
 		async generate(request: ModelRequest): Promise<ModelResponse> {
-			logger.info("OpenAI generate", { model: config.model, messageCount: request.messages.length });
+			logger.info("OpenAI generate", {
+				model: config.model,
+				messageCount: request.messages.length,
+			});
 			// Convert AgentMessage[] -> OpenAI Chat Completions message format
 			const messages = request.messages.map((msg) => {
 				switch (msg.role) {
 					case "user": {
 						const text = msg.content
-							.filter((c): c is { type: "text"; text: string } => c.type === "text")
+							.filter(
+								(c): c is { type: "text"; text: string } => c.type === "text",
+							)
 							.map((c) => c.text)
 							.join("\n");
 						return { role: "user" as const, content: text };
 					}
 					case "assistant": {
 						const textBlocks = msg.content
-							.filter((c): c is { type: "text"; text: string } => c.type === "text")
+							.filter(
+								(c): c is { type: "text"; text: string } => c.type === "text",
+							)
 							.map((c) => c.text)
 							.join("");
 						const toolCalls = msg.content
 							.filter(
-								(c): c is { type: "tool_call"; id: string; name: string; arguments: unknown } => c.type === "tool_call",
+								(
+									c,
+								): c is {
+									type: "tool_call";
+									id: string;
+									name: string;
+									arguments: unknown;
+								} => c.type === "tool_call",
 							)
 							.map((c) => ({
 								id: c.id,
@@ -63,7 +83,9 @@ export function openaiCompatible(config: {
 					}
 					case "tool_result": {
 						const text = msg.content
-							.filter((c): c is { type: "text"; text: string } => c.type === "text")
+							.filter(
+								(c): c is { type: "text"; text: string } => c.type === "text",
+							)
 							.map((c) => c.text)
 							.join("\n");
 						return {
@@ -84,7 +106,9 @@ export function openaiCompatible(config: {
 				function: {
 					name: t.name,
 					description: t.description,
-					parameters: isRecord(t.inputSchema) ? t.inputSchema : { type: "object", properties: {} },
+					parameters: isRecord(t.inputSchema)
+						? t.inputSchema
+						: { type: "object", properties: {} },
 				},
 			}));
 
@@ -96,22 +120,29 @@ export function openaiCompatible(config: {
 			};
 
 			try {
-				const resp = await fetch(`${config.baseUrl.replace(/\/+$/, "")}/v1/chat/completions`, {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						Authorization: `Bearer ${config.apiKey}`,
+				const resp = await fetch(
+					`${config.baseUrl.replace(/\/+$/, "")}/v1/chat/completions`,
+					{
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							Authorization: `Bearer ${config.apiKey}`,
+						},
+						body: JSON.stringify(body),
+						signal: request.signal,
 					},
-					body: JSON.stringify(body),
-					signal: request.signal,
-				});
+				);
 
 				if (!resp.ok) {
 					const status = resp.status;
 					const text = await resp.text();
 					logger.warn("OpenAI API error", { status, body: text.slice(0, 500) });
 					throw createAgentError(
-						status === 401 ? "model_auth_failed" : status === 429 ? "model_rate_limited" : "model_unavailable",
+						status === 401
+							? "model_auth_failed"
+							: status === 429
+								? "model_rate_limited"
+								: "model_unavailable",
 						`HTTP ${status}: ${text}`,
 						{ recoverable: status === 429 },
 					);
@@ -121,7 +152,10 @@ export function openaiCompatible(config: {
 				const choice = data.choices?.[0];
 				const message = choice?.message;
 
-				logger.info("OpenAI response", { finishReason: choice?.finish_reason, model: data.model });
+				logger.info("OpenAI response", {
+					finishReason: choice?.finish_reason,
+					model: data.model,
+				});
 
 				// Parse content and tool_calls from OpenAI response
 				const content: AgentContentBlock[] = [];
@@ -173,18 +207,28 @@ export function openaiCompatible(config: {
 				};
 			} catch (e) {
 				if (e && typeof e === "object" && "code" in e) throw e;
-				logger.error("OpenAI request failed", { error: e instanceof Error ? e.message : String(e) });
-				throw createAgentError("model_unavailable", e instanceof Error ? e.message : String(e), {
-					cause: e,
-					recoverable: false,
+				logger.error("OpenAI request failed", {
+					error: e instanceof Error ? e.message : String(e),
 				});
+				throw createAgentError(
+					"model_unavailable",
+					e instanceof Error ? e.message : String(e),
+					{
+						cause: e,
+						recoverable: false,
+					},
+				);
 			}
 		},
 	};
 }
 
 // openai() passes baseUrl WITHOUT /v1; openaiCompatible() appends /v1/chat/completions
-export function openai(config: { apiKey: string; model: string; maxTokens?: number }): AgentModel {
+export function openai(config: {
+	apiKey: string;
+	model: string;
+	maxTokens?: number;
+}): AgentModel {
 	return openaiCompatible({
 		apiKey: config.apiKey,
 		baseUrl: "https://api.openai.com",

@@ -1,11 +1,17 @@
 // Public Agent class — the primary SDK surface.
 // Thin facade over the internal engine. No WASM imports here.
 
+import type { HostAgent } from "./bindings/host-agent.ts";
 import { createAgentError } from "./errors.ts";
 import { EventEmitter } from "./events.ts";
-import type { HostAgent } from "./bindings/host-agent.ts";
-import { createEngineAgent, destroyEngineAgent, resetAgentState, runAgentTurn, steerAgent } from "./orchestration/agent-engine.ts";
 import { getLogger } from "./internal/logger.ts";
+import {
+	createEngineAgent,
+	destroyEngineAgent,
+	resetAgentState,
+	runAgentTurn,
+	steerAgent,
+} from "./orchestration/agent-engine.ts";
 import type {
 	AgentConfig,
 	AgentError,
@@ -35,17 +41,27 @@ export class Agent {
 		this.logger = config.logger ?? getLogger("agent");
 	}
 
-	on<E extends AgentEventName>(event: E, handler: AgentEventHandler<E>): Unsubscribe {
+	on<E extends AgentEventName>(
+		event: E,
+		handler: AgentEventHandler<E>,
+	): Unsubscribe {
 		if (this.disposed) {
 			return () => {};
 		}
 		return this.emitter.on(event, handler);
 	}
 
-	async run(input: string | AgentInput, options?: AgentRunOptions): Promise<AgentRunResult> {
+	async run(
+		input: string | AgentInput,
+		options?: AgentRunOptions,
+	): Promise<AgentRunResult> {
 		if (this.disposed) {
 			this.logger.warn("Run called on disposed agent");
-			const error = createAgentError("agent_disposed", "Agent has been disposed", { recoverable: false });
+			const error = createAgentError(
+				"agent_disposed",
+				"Agent has been disposed",
+				{ recoverable: false },
+			);
 			const result: AgentRunResult = {
 				status: "failed",
 				text: "",
@@ -61,7 +77,11 @@ export class Agent {
 
 		if (this.currentRun) {
 			this.logger.warn("Run called while agent is busy");
-			const error = createAgentError("agent_busy", "Agent is already running a turn", { recoverable: true });
+			const error = createAgentError(
+				"agent_busy",
+				"Agent is already running a turn",
+				{ recoverable: true },
+			);
 			const result: AgentRunResult = {
 				status: "failed",
 				text: "",
@@ -104,11 +124,17 @@ export class Agent {
 			return result;
 		} catch (e) {
 			// Safety net: convert any unexpected throw to a failed result
-			this.logger.error("Run failed", { error: e instanceof Error ? e.message : String(e) });
-			const error = createAgentError("internal_error", e instanceof Error ? e.message : String(e), {
-				cause: e,
-				recoverable: false,
+			this.logger.error("Run failed", {
+				error: e instanceof Error ? e.message : String(e),
 			});
+			const error = createAgentError(
+				"internal_error",
+				e instanceof Error ? e.message : String(e),
+				{
+					cause: e,
+					recoverable: false,
+				},
+			);
 			const failedResult: AgentRunResult = {
 				status: "failed",
 				text: "",
@@ -134,7 +160,8 @@ export class Agent {
 		// Lazy initialization on first run
 		if (!this.engineAgent) {
 			this.engineAgent = await createEngineAgent(this.config, {
-				onEvent: (event) => this.emitter.emit(event.type as AgentEventName, event.payload),
+				onEvent: (event) =>
+					this.emitter.emit(event.type as AgentEventName, event.payload),
 				onStatus: (status) => {
 					this.status = status;
 					this.emitter.emit("status", status);
@@ -143,13 +170,21 @@ export class Agent {
 		}
 
 		try {
-			return await runAgentTurn(this.engineAgent, this.config, input, options, signal, {
-				onEvent: (event) => this.emitter.emit(event.type as AgentEventName, event.payload),
-				onStatus: (status) => {
-					this.status = status;
-					this.emitter.emit("status", status);
+			return await runAgentTurn(
+				this.engineAgent,
+				this.config,
+				input,
+				options,
+				signal,
+				{
+					onEvent: (event) =>
+						this.emitter.emit(event.type as AgentEventName, event.payload),
+					onStatus: (status) => {
+						this.status = status;
+						this.emitter.emit("status", status);
+					},
 				},
-			});
+			);
 		} catch (e) {
 			const isAbort =
 				signal.aborted ||
@@ -171,13 +206,19 @@ export class Agent {
 			}
 
 			const code =
-				e instanceof Error && "code" in e && typeof (e as { code: unknown }).code === "string"
+				e instanceof Error &&
+				"code" in e &&
+				typeof (e as { code: unknown }).code === "string"
 					? ((e as { code: string }).code as AgentError["code"])
 					: "internal_error";
-			const error = createAgentError(code, e instanceof Error ? e.message : String(e), {
-				cause: e,
-				recoverable: false,
-			});
+			const error = createAgentError(
+				code,
+				e instanceof Error ? e.message : String(e),
+				{
+					cause: e,
+					recoverable: false,
+				},
+			);
 			const failedResult: AgentRunResult = {
 				status: "failed",
 				text: "",
@@ -200,11 +241,17 @@ export class Agent {
 	async steer(input: string | AgentInput): Promise<void> {
 		if (this.disposed) {
 			this.logger.warn("Steer called on disposed agent");
-			throw createAgentError("agent_disposed", "Agent has been disposed", { recoverable: false });
+			throw createAgentError("agent_disposed", "Agent has been disposed", {
+				recoverable: false,
+			});
 		}
 		if (!this.engineAgent) {
 			this.logger.warn("Steer called on uninitialized agent");
-			throw createAgentError("agent_not_initialized", "Agent has not been run yet", { recoverable: true });
+			throw createAgentError(
+				"agent_not_initialized",
+				"Agent has not been run yet",
+				{ recoverable: true },
+			);
 		}
 		this.logger.info("Steering agent", { sessionId: this.config.sessionId });
 		return steerAgent(this.engineAgent, input);
@@ -213,7 +260,9 @@ export class Agent {
 	async reset(): Promise<void> {
 		if (this.disposed) {
 			this.logger.warn("Reset called on disposed agent");
-			throw createAgentError("agent_disposed", "Agent has been disposed", { recoverable: false });
+			throw createAgentError("agent_disposed", "Agent has been disposed", {
+				recoverable: false,
+			});
 		}
 		this.logger.info("Resetting agent", { sessionId: this.config.sessionId });
 		if (this.engineAgent) {

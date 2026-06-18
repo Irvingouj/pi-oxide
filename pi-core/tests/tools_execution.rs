@@ -113,7 +113,7 @@ fn turn_end_after_tools_reports_assistant_and_tool_results() {
         transform: ToolCallTransform::None,
         permission: ToolCallPermission::Allow,
     };
-    let (events, actions, runtime, T, A, turn_number, _markers) = pre
+    let (_events, _actions, runtime, T, A, turn_number, _markers) = pre
         .prepare_tool_calls(vec![prep], T, A, turn_number)
         .into_parts();
 

@@ -8,11 +8,19 @@
  * Host-owned — no browser APIs in pi-core.
  */
 
-import type { ToolCall, ToolDefinition, ToolResult } from "../../../pi_host_web.js";
+import type {
+	ToolCall,
+	ToolDefinition,
+	ToolResult,
+} from "../../../pi_host_web.js";
 import { getLogger } from "../../internal/logger.ts";
 import { getBoolean, getNumber, getString } from "../../internal/util/types.ts";
 import type { AgentToolDefinition, AgentTools } from "../../types.ts";
-import type { BrowserConsoleEntry, BrowserElementSnapshot, BrowserRuntime } from "./browserRuntime.ts";
+import type {
+	BrowserConsoleEntry,
+	BrowserElementSnapshot,
+	BrowserRuntime,
+} from "./browserRuntime.ts";
 import { LiveBrowserRuntime } from "./liveRuntime.ts";
 
 // ========================================================================
@@ -46,7 +54,8 @@ const browserQuerySelectorSchema: Record<string, unknown> = {
 		},
 		all: {
 			type: "boolean",
-			description: "If true, return all matching elements. Default: false (first match only).",
+			description:
+				"If true, return all matching elements. Default: false (first match only).",
 		},
 	},
 	required: ["selector"],
@@ -86,7 +95,8 @@ const browserConsoleSchema: Record<string, unknown> = {
 	properties: {
 		level: {
 			type: "string",
-			description: "Filter by level: 'log', 'warn', 'error', 'info'. Omit for all.",
+			description:
+				"Filter by level: 'log', 'warn', 'error', 'info'. Omit for all.",
 		},
 		limit: {
 			type: "number",
@@ -103,7 +113,8 @@ const browserConsoleSchema: Record<string, unknown> = {
 const BROWSER_GET_PAGE: ToolDefinition = {
 	name: "browser_get_page",
 	label: "Get Page",
-	description: "Get the current page state: URL, title, ready state, and focused element summary.",
+	description:
+		"Get the current page state: URL, title, ready state, and focused element summary.",
 	parameters: browserGetPageSchema,
 	execution_mode: "parallel",
 };
@@ -148,7 +159,8 @@ const BROWSER_CONSOLE: ToolDefinition = {
 	name: "browser_console",
 	label: "Console",
 	description:
-		"Read captured console logs, warnings, and errors from the page. " + "Optionally filter by level and limit count.",
+		"Read captured console logs, warnings, and errors from the page. " +
+		"Optionally filter by level and limit count.",
 	parameters: browserConsoleSchema,
 	execution_mode: "parallel",
 };
@@ -203,17 +215,26 @@ export function wrapToolHandler(
 	};
 }
 
-function truncateText(text: string, max: number): { text: string; truncated: boolean } {
+function truncateText(
+	text: string,
+	max: number,
+): { text: string; truncated: boolean } {
 	if (text.length <= max) return { text, truncated: false };
 	return { text: `${text.slice(0, max)}...`, truncated: true };
 }
 
-function makeDetails(toolName: string, text: string, truncatedByTool: boolean = false): Record<string, unknown> {
+function makeDetails(
+	toolName: string,
+	text: string,
+	truncatedByTool: boolean = false,
+): Record<string, unknown> {
 	return {
 		content_kind: "generic_text",
 		strategy: {
 			type: "dynamic",
-			script: DEFAULT_SCRIPTS[toolName] || `#{ action: "project", text: head(text, 2000) }`,
+			script:
+				DEFAULT_SCRIPTS[toolName] ||
+				`#{ action: "project", text: head(text, 2000) }`,
 		},
 		original_chars: Array.from(text).length,
 		truncated_by_tool: truncatedByTool,
@@ -232,7 +253,11 @@ function formatElement(el: BrowserElementSnapshot): object {
 	};
 }
 
-function formatConsoleEntries(entries: BrowserConsoleEntry[], level?: string, limit?: number): object {
+function formatConsoleEntries(
+	entries: BrowserConsoleEntry[],
+	level?: string,
+	limit?: number,
+): object {
 	let filtered = entries;
 	if (level) {
 		filtered = filtered.filter((e) => e.level === level);
@@ -266,7 +291,10 @@ function tryTool<T>(fn: () => T, toolName: string): ToolResult {
  *
  * Returns a ToolResult suitable for hostToolDone.
  */
-export function executeBrowserTool(call: ToolCall, runtime: BrowserRuntime): ToolResult {
+export function executeBrowserTool(
+	call: ToolCall,
+	runtime: BrowserRuntime,
+): ToolResult {
 	const logger = getLogger("browser");
 	logger.info("Executing browser tool", { toolName: call.name });
 	switch (call.name) {
@@ -277,7 +305,9 @@ export function executeBrowserTool(call: ToolCall, runtime: BrowserRuntime): Too
 					url: page.url,
 					title: page.title,
 					readyState: page.readyState,
-					focusedElement: page.focusedElement ? formatElement(page.focusedElement) : null,
+					focusedElement: page.focusedElement
+						? formatElement(page.focusedElement)
+						: null,
 				},
 				null,
 				2,
@@ -293,7 +323,10 @@ export function executeBrowserTool(call: ToolCall, runtime: BrowserRuntime): Too
 			if (typeof source !== "string" || source.length === 0) {
 				throw new Error("source must be a non-empty string");
 			}
-			return tryTool(() => ({ ok: true, result: runtime.evalJs(source) }), "browser_eval_js");
+			return tryTool(
+				() => ({ ok: true, result: runtime.evalJs(source) }),
+				"browser_eval_js",
+			);
 		}
 
 		case "browser_query_selector": {
@@ -380,7 +413,10 @@ export function browserTools(runtime?: BrowserRuntime): AgentTools {
 	logger.info("Browser tools initialized");
 
 	// Build handlers map: each handler returns a ToolResult (preserves details)
-	const handlers: Record<string, (call: ToolCall) => ToolResult | Promise<ToolResult>> = {};
+	const handlers: Record<
+		string,
+		(call: ToolCall) => ToolResult | Promise<ToolResult>
+	> = {};
 	for (const def of BROWSER_TOOLS) {
 		handlers[def.name] = (call: ToolCall) => executeBrowserTool(call, rt);
 	}

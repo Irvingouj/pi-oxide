@@ -1,9 +1,21 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { z } from "zod";
-import { Agent, defineModel, defineTools, memoryStore, tool } from "../sdk/index.ts";
+import {
+	Agent,
+	defineModel,
+	defineTools,
+	memoryStore,
+	tool,
+} from "../sdk/index.ts";
 import { ensureInit } from "../sdk/init.ts";
-import type { AgentConfig, AgentError, AgentRunResult, AgentStatus } from "../sdk/types.ts";
+import type {
+	AgentConfig,
+	AgentError,
+	AgentRunResult,
+	AgentStatus,
+	ModelRequest,
+} from "../sdk/types.ts";
 
 // Initialize WASM once for all tests that need it
 await ensureInit();
@@ -478,6 +490,226 @@ describe("Agent class", () => {
 			assert.equal(result.text, "handled failure");
 			assert.deepEqual(toolStatuses, ["failed"]);
 			assert.equal(result.toolCalls[0]?.status, "failed");
+		});
+	});
+
+	// ---- Test helpers for persistence tests ----
+
+	function makeRecordingModel(responseText: string = "Hello") {
+		let capturedRequest: ModelRequest | null = null;
+		const model = defineModel({
+			id: "recording-model",
+			generate: async (request) => {
+				capturedRequest = request;
+				return {
+					content: [{ type: "text" as const, text: responseText }],
+					stopReason: "end" as const,
+					usage: {
+						input: 10,
+						output: 5,
+						cache_read: 0,
+						cache_write: 0,
+						total_tokens: 15,
+					},
+				};
+			},
+		});
+		return { model, getCapturedRequest: () => capturedRequest };
+	}
+
+	describe("TM-44: Persistence on abort and error", () => {
+		const SESSION_ID = "persist-abort-test";
+
+		it("retains completed turn state after a subsequent run is aborted", async () => {
+			const store = memoryStore();
+
+			// Turn 1: complete normally
+			const agent1 = new Agent({
+				sessionId: SESSION_ID,
+				model: makeMockModel("First response"),
+				store,
+			});
+			const r1 = await agent1.run("first task");
+			assert.equal(r1.status, "completed");
+			agent1.dispose();
+
+			// Turn 2: abort mid-run
+			const agent2 = new Agent({
+				sessionId: SESSION_ID,
+				model: makeSlowModel(500),
+				store,
+			});
+			const runPromise = agent2.run("second task");
+			// Wait briefly then stop
+			await new Promise((r) => setTimeout(r, 50));
+			agent2.stop();
+			const r2 = await runPromise;
+			assert.equal(r2.status, "aborted");
+			agent2.dispose();
+
+			// Turn 3: should restore turn 1's state
+			const { model: recModel, getCapturedRequest } =
+				makeRecordingModel("Third response");
+			const agent3 = new Agent({
+				sessionId: SESSION_ID,
+				model: recModel,
+				store,
+			});
+			const r3 = await agent3.run("third task");
+			assert.equal(r3.status, "completed");
+			agent3.dispose();
+
+			// Verify turn 1's messages are in the model request
+			const captured = getCapturedRequest();
+			assert.ok(captured, "Model should have been called");
+			const userMsgs = captured!.messages.filter((m) => m.role === "user");
+			const assistantMsgs = captured!.messages.filter(
+				(m) => m.role === "assistant",
+			);
+			assert.ok(
+				userMsgs.some((m) =>
+					m.content.some((b) => b.type === "text" && b.text === "first task"),
+				),
+				"Should include turn 1 user message",
+			);
+			assert.ok(
+				assistantMsgs.some((m) =>
+					m.content.some(
+						(b) => b.type === "text" && b.text === "First response",
+					),
+				),
+				"Should include turn 1 assistant response",
+			);
+		});
+
+		it("aborted first run persists user message for context", async () => {
+			const store = memoryStore();
+			const freshId = "persist-fresh-abort";
+
+			// Turn 1: abort (no prior state)
+			const agent1 = new Agent({
+				sessionId: freshId,
+				model: makeSlowModel(500),
+				store,
+			});
+			const runPromise = agent1.run("only task");
+			await new Promise((r) => setTimeout(r, 50));
+			agent1.stop();
+			const r1 = await runPromise;
+			assert.equal(r1.status, "aborted");
+			agent1.dispose();
+
+			// Turn 2: should have the aborted turn's user message
+			const { model: recModel, getCapturedRequest } =
+				makeRecordingModel("Response");
+			const agent2 = new Agent({
+				sessionId: freshId,
+				model: recModel,
+				store,
+			});
+			const r2 = await agent2.run("new task");
+			assert.equal(r2.status, "completed");
+			agent2.dispose();
+
+			const captured = getCapturedRequest();
+			assert.ok(captured, "Model should have been called");
+			const userMsgs = captured!.messages.filter((m) => m.role === "user");
+			assert.ok(
+				userMsgs.some((m) =>
+					m.content.some((b) => b.type === "text" && b.text === "only task"),
+				),
+				"Should include the aborted turn's user message",
+			);
+			assert.ok(
+				userMsgs.some((m) =>
+					m.content.some((b) => b.type === "text" && b.text === "new task"),
+				),
+				"Should also include the current user message",
+			);
+		});
+
+		it("retains completed turn state after model error in subsequent run", async () => {
+			const store = memoryStore();
+			const errId = "persist-model-error";
+
+			// Turn 1: complete normally
+			const agent1 = new Agent({
+				sessionId: errId,
+				model: makeMockModel("First response"),
+				store,
+			});
+			const r1 = await agent1.run("first task");
+			assert.equal(r1.status, "completed");
+			agent1.dispose();
+
+			// Turn 2: model throws
+			const agent2 = new Agent({
+				sessionId: errId,
+				model: makeFailingModel("model exploded"),
+				store,
+			});
+			const r2 = await agent2.run("second task");
+			assert.equal(r2.status, "failed");
+			agent2.dispose();
+
+			// Turn 3: should restore turn 1's state
+			const { model: recModel, getCapturedRequest } =
+				makeRecordingModel("Third response");
+			const agent3 = new Agent({
+				sessionId: errId,
+				model: recModel,
+				store,
+			});
+			const r3 = await agent3.run("third task");
+			assert.equal(r3.status, "completed");
+			agent3.dispose();
+
+			const captured = getCapturedRequest();
+			assert.ok(captured, "Model should have been called");
+			const userMsgs = captured!.messages.filter((m) => m.role === "user");
+			assert.ok(
+				userMsgs.some((m) =>
+					m.content.some((b) => b.type === "text" && b.text === "first task"),
+				),
+				"Should include turn 1 user message after model error",
+			);
+		});
+
+		it("persists user message after model error on first turn", async () => {
+			const store = memoryStore();
+			const errId = "persist-first-error";
+
+			// Turn 1: model throws immediately (no prior state)
+			const agent1 = new Agent({
+				sessionId: errId,
+				model: makeFailingModel("model exploded"),
+				store,
+			});
+			const r1 = await agent1.run("first task");
+			assert.equal(r1.status, "failed");
+			agent1.dispose();
+
+			// Turn 2: should have the failed turn's user message in context
+			const { model: recModel, getCapturedRequest } =
+				makeRecordingModel("Response");
+			const agent2 = new Agent({
+				sessionId: errId,
+				model: recModel,
+				store,
+			});
+			const r2 = await agent2.run("second task");
+			assert.equal(r2.status, "completed");
+			agent2.dispose();
+
+			const captured = getCapturedRequest();
+			assert.ok(captured, "Model should have been called");
+			const userMsgs = captured!.messages.filter((m) => m.role === "user");
+			assert.ok(
+				userMsgs.some((m) =>
+					m.content.some((b) => b.type === "text" && b.text === "first task"),
+				),
+				"Should include turn 1 user message even though model failed",
+			);
 		});
 	});
 });

@@ -1,4 +1,10 @@
 /** @deprecated Import from `../orchestration/agent-engine.ts` instead. */
+
+export type {
+	AgentRunConfig,
+	LlmStream,
+	TurnResult,
+} from "../bindings/types.ts";
 export {
 	createEngineAgent,
 	createHostAgentInstance,
@@ -9,4 +15,3 @@ export {
 	runTurnWithHostAgent,
 	steerAgent,
 } from "../orchestration/agent-engine.ts";
-export type { AgentRunConfig, LlmStream, TurnResult } from "../bindings/types.ts";

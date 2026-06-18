@@ -24,7 +24,10 @@ export function memoryStore(): AgentStore {
 			return sessions.get(sessionId) ?? null;
 		},
 
-		async saveSession(sessionId: string, snapshot: AgentSnapshot): Promise<void> {
+		async saveSession(
+			sessionId: string,
+			snapshot: AgentSnapshot,
+		): Promise<void> {
 			sessions.set(sessionId, snapshot);
 		},
 	};
@@ -41,8 +44,14 @@ export function localStorageStore(): AgentStore {
 			return JSON.parse(raw) as AgentSnapshot;
 		},
 
-		async saveSession(sessionId: string, snapshot: AgentSnapshot): Promise<void> {
-			localStorage.setItem(`pi-oxide-session-${sessionId}`, JSON.stringify(snapshot));
+		async saveSession(
+			sessionId: string,
+			snapshot: AgentSnapshot,
+		): Promise<void> {
+			localStorage.setItem(
+				`pi-oxide-session-${sessionId}`,
+				JSON.stringify(snapshot),
+			);
 		},
 	};
 }
@@ -61,7 +70,10 @@ export function httpStore(config: { baseUrl: string }): AgentStore {
 			return resp.json() as Promise<AgentSnapshot>;
 		},
 
-		async saveSession(sessionId: string, snapshot: AgentSnapshot): Promise<void> {
+		async saveSession(
+			sessionId: string,
+			snapshot: AgentSnapshot,
+		): Promise<void> {
 			await fetch(`${baseUrl}/sessions/${sessionId}`, {
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },

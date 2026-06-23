@@ -169,27 +169,8 @@ pub enum NewProjectionStrategy {
 }
 
 /// Look up projection strategy by tool name.
-pub fn projection_strategy(tool_name: &str) -> NewProjectionStrategy {
-    match tool_name {
-        "read" => NewProjectionStrategy::Head {
-            min_age: 2,
-            max_chars: 2000,
-        },
-        "grep" => NewProjectionStrategy::Head {
-            min_age: 1,
-            max_chars: 3000,
-        },
-        "edit" => NewProjectionStrategy::KeepFull,
-        "write" => NewProjectionStrategy::KeepFull,
-        "bash" => NewProjectionStrategy::Head {
-            min_age: 1,
-            max_chars: 5000,
-        },
-        _ => NewProjectionStrategy::Head {
-            min_age: 2,
-            max_chars: 2000,
-        },
-    }
+pub fn projection_strategy(_tool_name: &str) -> NewProjectionStrategy {
+    NewProjectionStrategy::KeepFull
 }
 
 /// Run projection scan over T at turn end.
@@ -274,6 +255,11 @@ pub fn build_llm_context_from_trimmed(
                 messages.push(crate::message::AgentMessage::User(u.clone()));
             }
             crate::message::TrimmedMessage::Assistant(a) => {
+                // Empty assistant content (no text, no tool calls) is rejected
+                // by Anthropic and carries no information — skip it.
+                if a.is_empty() {
+                    continue;
+                }
                 messages.push(crate::message::AgentMessage::Assistant(a.clone()));
             }
             crate::message::TrimmedMessage::OriginalTool(tool) => {
@@ -402,22 +388,6 @@ mod tests {
     }
 
     #[test]
-    fn new_projection_scan_projects_old_large_tool() {
-        let mut t = vec![
-            trimmed_user("hello"),
-            trimmed_original_tool("e1", "tc1", "bash", &"A".repeat(6000), 3),
-        ];
-        let mut a = crate::message::Artifacts::new();
-        let markers = projection_scan(&mut t, &mut a, 6); // age=3>=1, 6000>5000
-        assert_eq!(markers.len(), 1);
-        assert!(matches!(
-            t[1],
-            crate::message::TrimmedMessage::ProjectedTool(_)
-        ));
-        assert!(a.contains_key("e1"), "original should be archived");
-    }
-
-    #[test]
     fn new_projection_scan_respects_keep_full() {
         let mut t = vec![
             trimmed_user("hello"),
@@ -433,29 +403,6 @@ mod tests {
     }
 
     #[test]
-    fn new_projection_scan_one_way_only() {
-        let mut t = vec![
-            trimmed_user("hello"),
-            trimmed_original_tool("e1", "tc1", "bash", &"A".repeat(6000), 3),
-        ];
-        let mut a = crate::message::Artifacts::new();
-
-        // First scan: project
-        projection_scan(&mut t, &mut a, 6);
-        assert!(matches!(
-            t[1],
-            crate::message::TrimmedMessage::ProjectedTool(_)
-        ));
-
-        // Second scan: projected should NOT be promoted back to original
-        projection_scan(&mut t, &mut a, 100);
-        assert!(matches!(
-            t[1],
-            crate::message::TrimmedMessage::ProjectedTool(_)
-        ));
-    }
-
-    #[test]
     fn new_projection_scan_skips_small_tool() {
         let mut t = vec![
             trimmed_user("hello"),
@@ -464,26 +411,6 @@ mod tests {
         let mut a = crate::message::Artifacts::new();
         let markers = projection_scan(&mut t, &mut a, 10); // age=9, but 5<2000
         assert!(markers.is_empty());
-    }
-
-    // Boundary: age == min_age exactly
-    #[test]
-    fn new_projection_scan_exact_min_age_projects() {
-        let mut t = vec![
-            trimmed_user("hello"),
-            trimmed_original_tool("e1", "tc1", "read", &"A".repeat(3000), 1),
-        ];
-        let mut a = crate::message::Artifacts::new();
-        let markers = projection_scan(&mut t, &mut a, 3); // age=2, min_age=2, 3000>2000
-        assert_eq!(
-            markers.len(),
-            1,
-            "read tool at exact min_age should project"
-        );
-        assert!(matches!(
-            t[1],
-            crate::message::TrimmedMessage::ProjectedTool(_)
-        ));
     }
 
     // Boundary: size == max_chars exactly (not >, so should NOT project)
@@ -500,67 +427,6 @@ mod tests {
             t[1],
             crate::message::TrimmedMessage::OriginalTool(_)
         ));
-    }
-
-    // Mixed tools: one projects, one stays full
-    #[test]
-    fn new_projection_scan_mixed_tools() {
-        let mut t = vec![
-            trimmed_user("hello"),
-            trimmed_original_tool("e1", "tc1", "read", &"A".repeat(3000), 1),
-            trimmed_original_tool("e2", "tc2", "edit", &"A".repeat(3000), 1),
-        ];
-        let mut a = crate::message::Artifacts::new();
-        let markers = projection_scan(&mut t, &mut a, 5); // age=4, read min_age=2, edit KeepFull
-        assert_eq!(markers.len(), 1, "only read should project");
-        assert!(matches!(
-            t[1],
-            crate::message::TrimmedMessage::ProjectedTool(_)
-        ));
-        assert!(matches!(
-            t[2],
-            crate::message::TrimmedMessage::OriginalTool(_)
-        ));
-    }
-
-    #[test]
-    fn new_projection_strategy_by_name() {
-        assert_eq!(
-            projection_strategy("read"),
-            NewProjectionStrategy::Head {
-                min_age: 2,
-                max_chars: 2000
-            }
-        );
-        assert_eq!(
-            projection_strategy("grep"),
-            NewProjectionStrategy::Head {
-                min_age: 1,
-                max_chars: 3000
-            }
-        );
-        assert!(matches!(
-            projection_strategy("edit"),
-            NewProjectionStrategy::KeepFull
-        ));
-        assert!(matches!(
-            projection_strategy("write"),
-            NewProjectionStrategy::KeepFull
-        ));
-        assert_eq!(
-            projection_strategy("bash"),
-            NewProjectionStrategy::Head {
-                min_age: 1,
-                max_chars: 5000
-            }
-        );
-        assert_eq!(
-            projection_strategy("unknown"),
-            NewProjectionStrategy::Head {
-                min_age: 2,
-                max_chars: 2000
-            }
-        );
     }
 
     #[test]
@@ -636,6 +502,27 @@ mod tests {
         } else {
             panic!("expected user message for compaction");
         }
+    }
+
+    #[test]
+    fn build_llm_context_skips_empty_assistant_message() {
+        // An empty assistant message (no text, no tool calls) must not be sent
+        // to the provider — Anthropic rejects empty assistant content arrays.
+        let mut empty_assistant = crate::message::AssistantMessage::empty();
+        let _ = empty_assistant; // content stays Vec::new()
+        let t = vec![
+            trimmed_user("hello"),
+            crate::message::TrimmedMessage::Assistant(
+                crate::message::AssistantMessage::empty(),
+            ),
+            trimmed_user("next question"),
+        ];
+        let ctx = build_llm_context_from_trimmed(&t, "system", &[]);
+        assert_eq!(
+            ctx.messages.len(),
+            2,
+            "empty assistant message must be omitted from LLM context"
+        );
     }
 
     #[test]

@@ -89,12 +89,23 @@ export function convertMessages(
 		const msg = messages[i];
 
 		switch (msg.role) {
-			case "user": {
-				const text = extractText(msg.content);
-				result.push({ role: "user", content: text });
+		case "user": {
+			// Merge consecutive user messages into one. Strict
+			// Anthropic-compatible endpoints reject adjacent same-role
+			// messages ("roles must alternate"). This arises when the core
+			// drops an empty assistant message between two user turns.
+			const texts: string[] = [extractText(msg.content)];
+			while (
+				i + 1 < messages.length &&
+				messages[i + 1]?.role === "user"
+			) {
 				i++;
-				break;
+				texts.push(extractText(messages[i]!.content));
 			}
+			result.push({ role: "user", content: texts.join("\n") });
+			i++;
+			break;
+		}
 			case "assistant": {
 				const blocks: AnthropicContentBlock[] = [];
 				for (const block of msg.content) {

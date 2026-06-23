@@ -31,7 +31,7 @@ export function buildContextBudget(
 		max_tool_result_chars: context?.toolResultLimit ?? 50000,
 		max_context_tokens: context?.maxTokens ?? 100000,
 		microcompact_after_turns: 5,
-		compaction_threshold: 0.75,
+		compaction_threshold: 0.95,
 	};
 }
 

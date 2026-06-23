@@ -56,6 +56,16 @@ impl AssistantMessage {
             usage: TokenUsage::default(),
         }
     }
+
+    /// True when the message carries no content the provider can consume:
+    /// no text (other than blank), no tool calls, no images. Anthropic rejects
+    /// such messages with a 400, so they must never enter the transcript (T).
+    pub fn is_empty(&self) -> bool {
+        self.content.iter().all(|c| match c {
+            Content::Text(t) => t.text.trim().is_empty(),
+            _ => false,
+        })
+    }
 }
 
 /// A message carrying the result of a tool execution back to the LLM.

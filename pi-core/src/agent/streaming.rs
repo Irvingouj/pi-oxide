@@ -103,8 +103,13 @@ impl Agent {
         let assistant_msg = result.finalize_message();
         let msg = AgentMessage::Assistant(assistant_msg.clone());
 
-        // Push finalized assistant message to T
-        t.push(TrimmedMessage::Assistant(assistant_msg.clone()));
+        // Push finalized assistant message to T — but never an empty one.
+        // An empty assistant message (no text, no tool calls) is rejected by
+        // the provider next turn; the error/abort path below surfaces it via
+        // events instead of polluting the transcript.
+        if !assistant_msg.is_empty() {
+            t.push(TrimmedMessage::Assistant(assistant_msg.clone()));
+        }
         self.streaming_assistant = None;
 
         events.push(AgentEvent::MessageEnd {

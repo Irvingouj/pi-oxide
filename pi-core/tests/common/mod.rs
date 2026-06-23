@@ -3,9 +3,9 @@
 pub use pi_core::{
     AgentAction, AgentEvent, AgentMessage, AgentOptions, AgentRuntime, Artifacts, AssistantMessage,
     ChangeMarker, Content, ContentDelta, ContextProjectionBudget, ContinueTurnTransition, LlmChunk,
-    LlmResult, Model, StartTurnTransition, StopReason, TextContent, ToolArguments, ToolCall,
-    ToolCallId, ToolCallPermission, ToolCallPreparation, ToolCallTransform, ToolDefinition,
-    ToolExecutionUpdate, ToolName, ToolResult, TrimmedMessage,
+    LlmError, LlmResult, Model, StartTurnTransition, StopReason, TextContent, ToolArguments,
+    ToolCall, ToolCallId, ToolCallPermission, ToolCallPreparation, ToolCallTransform,
+    ToolDefinition, ToolExecutionUpdate, ToolName, ToolResult, TrimmedMessage,
 };
 
 pub fn dummy_model() -> Model {

@@ -66,6 +66,9 @@ fn trimmed_to_agent_messages(messages: &[TrimmedMessage]) -> Vec<AgentMessage> {
                 result.push(AgentMessage::User(u.clone()));
             }
             TrimmedMessage::Assistant(a) => {
+                if a.is_empty() {
+                    continue;
+                }
                 result.push(AgentMessage::Assistant(a.clone()));
             }
             TrimmedMessage::OriginalTool(tool) => {
@@ -527,6 +530,34 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert!(matches!(msgs[0], AgentMessage::User(_)));
         assert!(matches!(msgs[1], AgentMessage::Assistant(_)));
+    }
+
+    #[test]
+    fn build_summary_messages_skips_empty_assistant() {
+        // A restored legacy transcript may contain an empty assistant message.
+        // The summarization LLM context must omit it, or the summarization
+        // request can hit the same "empty assistant content" 400 as the main
+        // turn path. Mirrors the guard in build_llm_context_from_trimmed.
+        let t = vec![
+            TrimmedMessage::User(crate::message::UserMessage::new_text("hello")),
+            TrimmedMessage::Assistant(AssistantMessage::empty()),
+            TrimmedMessage::User(crate::message::UserMessage::new_text("again")),
+        ];
+
+        let plan = CompactionPlan {
+            cut_index: 3,
+            messages_to_summarize: t,
+            tokens_to_free: 10,
+        };
+
+        let msgs = build_summary_messages(&plan);
+        assert_eq!(
+            msgs.len(),
+            2,
+            "empty assistant must be omitted from summarization context"
+        );
+        assert!(matches!(msgs[0], AgentMessage::User(_)));
+        assert!(matches!(msgs[1], AgentMessage::User(_)));
     }
 
     #[test]

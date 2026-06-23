@@ -6,6 +6,8 @@ import {
 	openai,
 	openaiCompatible,
 } from "../sdk/index.ts";
+import { convertMessages } from "../sdk/internal/providers/anthropic.ts";
+import type { AgentMessageShape } from "../sdk/internal/providers/types.ts";
 import type { AgentMessage, ModelRequest } from "../sdk/types.ts";
 
 describe("Provider factories", () => {
@@ -67,6 +69,36 @@ describe("Provider factories", () => {
 			assert.equal(typeof model.generate, "function");
 		});
 	});
+
+describe("convertMessages", () => {
+	it("merges consecutive user messages into one", () => {
+		// Strict Anthropic-compatible endpoints (Bedrock, DeepSeek) reject
+		// consecutive same-role messages: "roles must alternate". When the
+		// core drops an empty assistant message, T can contain two adjacent
+		// user messages — they must be merged into one at the wire layer.
+		const messages: AgentMessageShape[] = [
+			{ role: "user", content: [{ type: "text", text: "first" }], timestamp: 1 },
+			{ role: "user", content: [{ type: "text", text: "second" }], timestamp: 2 },
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "reply" }],
+				api: "sdk",
+				provider: "sdk",
+				model: "m",
+				stop_reason: "end_turn",
+				error_message: null,
+				timestamp: 3,
+				usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },
+			},
+		];
+		const result = convertMessages(messages);
+		assert.equal(result.length, 2, "consecutive users must merge");
+		assert.equal(result[0].role, "user");
+		// Merged content preserves both texts.
+		assert.equal(result[0].content, "first\nsecond");
+		assert.equal(result[1].role, "assistant");
+	});
+});
 
 	describe("TM-8: openaiCompatible()", () => {
 		it("returns AgentModel with correct metadata", () => {

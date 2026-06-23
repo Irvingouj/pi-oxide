@@ -339,25 +339,42 @@ impl LlmStream {
 fn convert_messages(messages: &[pi_core::AgentMessage]) -> Vec<serde_json::Value> {
     let mut result = Vec::new();
 
-    for msg in messages {
+    let user_text = |content: &[pi_core::Content]| {
+        content
+            .iter()
+            .filter_map(|c| match c {
+                pi_core::Content::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let mut i = 0;
+    while i < messages.len() {
+        let msg = &messages[i];
         match msg {
             pi_core::AgentMessage::User(user_msg) => {
-                let text = user_msg
-                    .content
-                    .iter()
-                    .filter_map(|c| match c {
-                        pi_core::Content::Text(t) => Some(t.text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                if !text.is_empty() {
+                // Merge consecutive user messages into one — strict
+                // Anthropic-compatible endpoints reject adjacent same-role
+                // messages ("roles must alternate").
+                let mut texts = vec![user_text(&user_msg.content)];
+                while i + 1 < messages.len()
+                    && matches!(messages[i + 1], pi_core::AgentMessage::User(_))
+                {
+                    i += 1;
+                    if let pi_core::AgentMessage::User(u) = &messages[i] {
+                        texts.push(user_text(&u.content));
+                    }
+                }
+                let joined = texts.into_iter().filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n");
+                if !joined.is_empty() {
                     result.push(serde_json::json!({
                         "role": "user",
-                        "content": text,
+                        "content": joined,
                     }));
                 }
+                i += 1;
             }
             pi_core::AgentMessage::Assistant(asst_msg) => {
                 let blocks: Vec<serde_json::Value> = asst_msg
@@ -380,31 +397,41 @@ fn convert_messages(messages: &[pi_core::AgentMessage]) -> Vec<serde_json::Value
                     })
                     .collect();
 
-                result.push(serde_json::json!({
-                    "role": "assistant",
-                    "content": blocks,
-                }));
+                // Skip empty assistant content — Anthropic rejects it.
+                if !blocks.is_empty() {
+                    result.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": blocks,
+                    }));
+                }
+                i += 1;
             }
             pi_core::AgentMessage::ToolResult(tr_msg) => {
-                let text = tr_msg
-                    .content
-                    .iter()
-                    .filter_map(|c| match c {
-                        pi_core::Content::Text(t) => Some(t.text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
+                // Coalesce consecutive tool_results into one user message.
+                let mut blocks = vec![serde_json::json!({
+                    "type": "tool_result",
+                    "tool_use_id": tr_msg.tool_call_id.as_str(),
+                    "content": user_text(&tr_msg.content),
+                    "is_error": tr_msg.is_error,
+                })];
+                while i + 1 < messages.len()
+                    && matches!(messages[i + 1], pi_core::AgentMessage::ToolResult(_))
+                {
+                    i += 1;
+                    if let pi_core::AgentMessage::ToolResult(tr) = &messages[i] {
+                        blocks.push(serde_json::json!({
+                            "type": "tool_result",
+                            "tool_use_id": tr.tool_call_id.as_str(),
+                            "content": user_text(&tr.content),
+                            "is_error": tr.is_error,
+                        }));
+                    }
+                }
                 result.push(serde_json::json!({
                     "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": tr_msg.tool_call_id.as_str(),
-                        "content": text,
-                        "is_error": tr_msg.is_error,
-                    }],
+                    "content": blocks,
                 }));
+                i += 1;
             }
         }
     }
@@ -520,5 +547,62 @@ mod tests {
         let converted = convert_messages(&msgs);
         assert_eq!(converted.len(), 1);
         assert_eq!(converted[0]["role"], "assistant");
+    }
+
+    #[test]
+    fn test_convert_skips_empty_assistant_message() {
+        // An empty assistant message (blank text only) must not be emitted —
+        // Anthropic rejects empty assistant content arrays.
+        let msgs = vec![
+            pi_core::AgentMessage::user("hello"),
+            pi_core::AgentMessage::Assistant(pi_core::AssistantMessage::empty()),
+            pi_core::AgentMessage::user("again"),
+        ];
+        let converted = convert_messages(&msgs);
+        assert_eq!(converted.len(), 2, "empty assistant must be omitted");
+        assert_eq!(converted[0]["role"], "user");
+        assert_eq!(converted[1]["role"], "user");
+    }
+
+    #[test]
+    fn test_convert_merges_consecutive_user_messages() {
+        // Strict Anthropic-compatible endpoints reject adjacent same-role
+        // messages ("roles must alternate"). Two consecutive user messages
+        // must merge into one.
+        let msgs = vec![
+            pi_core::AgentMessage::user("first"),
+            pi_core::AgentMessage::user("second"),
+            pi_core::AgentMessage::assistant_text("reply"),
+        ];
+        let converted = convert_messages(&msgs);
+        assert_eq!(converted.len(), 2, "consecutive users must merge");
+        assert_eq!(converted[0]["role"], "user");
+        assert_eq!(converted[0]["content"], "first\nsecond");
+        assert_eq!(converted[1]["role"], "assistant");
+    }
+
+    #[test]
+    fn test_convert_merges_consecutive_tool_results() {
+        // Parallel tool_results must land in one user message, same as the
+        // other wire layers.
+        let mk = |id: &str, text: &str| {
+            pi_core::AgentMessage::ToolResult(pi_core::message::ToolResultMessage {
+                role: "tool_result".to_string(),
+                tool_call_id: pi_core::ToolCallId::new(id),
+                tool_name: pi_core::ToolName::new("t"),
+                content: vec![pi_core::Content::Text(pi_core::message::TextContent {
+                    text: text.to_string(),
+                })],
+                details: None,
+                is_error: false,
+                timestamp: 0,
+            })
+        };
+        let msgs = vec![mk("c1", "r1"), mk("c2", "r2")];
+        let converted = convert_messages(&msgs);
+        assert_eq!(converted.len(), 1, "tool_results must coalesce");
+        assert_eq!(converted[0]["role"], "user");
+        let blocks = converted[0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
     }
 }

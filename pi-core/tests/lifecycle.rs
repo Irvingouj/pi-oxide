@@ -73,6 +73,152 @@ fn on_llm_done_with_no_tools_finishes() {
 }
 
 #[test]
+fn on_llm_done_empty_assistant_does_not_persist_to_t() {
+    // Reproduces the Browsergent failure: a model turn that returns no content
+    // (LlmResult::done() -> AssistantMessage::empty()) must not be pushed into
+    // T. If it is, the empty assistant message is replayed next turn and
+    // Anthropic rejects it (400 invalid_request_error). T must keep only the
+    // user message; the turn still finishes.
+    let runtime = AgentRuntime::new(dummy_options());
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let (t, a, tn) = empty();
+    let t = idle.start_turn(
+        AgentMessage::user("hello"),
+        vec![],
+        t,
+        a,
+        tn,
+        &ContextProjectionBudget::default(),
+        "",
+    );
+    let StartTurnTransition::Streaming(t) = t else {
+        panic!("expected Streaming");
+    };
+    let (_events, _actions, _state, T, A, turn_number, _markers) = t.into_parts();
+
+    let transition = _state.finish_llm(
+        LlmResult::done(),
+        T,
+        A,
+        turn_number,
+        &ContextProjectionBudget::default(),
+    );
+    let (_events, actions, _runtime, T, _A, _turn_number, _markers) = transition.into_parts();
+
+    assert!(
+        actions.iter().any(|a| matches!(a, AgentAction::Finished)),
+        "turn should still finish"
+    );
+    assert_eq!(
+        T.len(),
+        1,
+        "empty assistant message must not be pushed to T"
+    );
+}
+
+#[test]
+fn on_llm_done_error_does_not_persist_empty_assistant_to_t() {
+    // An errored LLM turn produces an empty AssistantMessage (stop_reason=Error).
+    // It must not be pushed into T — the error is surfaced via events. T keeps
+    // only the user message, so the next turn's request body stays valid.
+    let runtime = AgentRuntime::new(dummy_options());
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let (t, a, tn) = empty();
+    let t = idle.start_turn(
+        AgentMessage::user("hello"),
+        vec![],
+        t,
+        a,
+        tn,
+        &ContextProjectionBudget::default(),
+        "",
+    );
+    let StartTurnTransition::Streaming(t) = t else {
+        panic!("expected Streaming");
+    };
+    let (_events, _actions, _state, T, A, turn_number, _markers) = t.into_parts();
+
+    let transition = _state.finish_llm(
+        LlmResult::Err {
+            error: LlmError {
+                code: "test_error".to_string(),
+                message: "boom".to_string(),
+                details: None,
+            },
+            aborted: false,
+        },
+        T,
+        A,
+        turn_number,
+        &ContextProjectionBudget::default(),
+    );
+    let (events, actions, _runtime, T, _A, _turn_number, _markers) = transition.into_parts();
+
+    assert!(
+        actions.iter().any(|a| matches!(a, AgentAction::Finished)),
+        "errored turn should still finish"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::AgentEnd)),
+        "errored turn should signal AgentEnd"
+    );
+    assert_eq!(
+        T.len(),
+        1,
+        "errored empty assistant message must not be pushed to T"
+    );
+}
+
+#[test]
+fn on_llm_done_non_empty_assistant_still_pushes_to_t() {
+    // Regression guard: a real assistant message with text must still enter T.
+    let runtime = AgentRuntime::new(dummy_options());
+    let AgentRuntime::Idle(idle) = runtime else {
+        panic!("expected Idle");
+    };
+    let (t, a, tn) = empty();
+    let t = idle.start_turn(
+        AgentMessage::user("hello"),
+        vec![],
+        t,
+        a,
+        tn,
+        &ContextProjectionBudget::default(),
+        "",
+    );
+    let StartTurnTransition::Streaming(t) = t else {
+        panic!("expected Streaming");
+    };
+    let (_events, _actions, _state, T, A, turn_number, _markers) = t.into_parts();
+
+    let mut assistant = AssistantMessage::empty();
+    assistant.content = vec![Content::Text(TextContent {
+        text: "real reply".to_string(),
+    })];
+
+    let transition = _state.finish_llm(
+        LlmResult::Ok(assistant),
+        T,
+        A,
+        turn_number,
+        &ContextProjectionBudget::default(),
+    );
+    let (_events, _actions, _runtime, T, _A, _turn_number, _markers) = transition.into_parts();
+
+    assert_eq!(
+        T.len(),
+        2,
+        "user + non-empty assistant should both be in T"
+    );
+}
+
+#[test]
 fn reset_clears_state() {
     let runtime = AgentRuntime::new(dummy_options());
     let AgentRuntime::Idle(idle) = runtime else {

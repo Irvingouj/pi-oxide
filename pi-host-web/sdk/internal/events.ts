@@ -12,6 +12,7 @@ import type {
 import type {
 	AgentArtifactRef,
 	AgentContentBlock,
+	AgentError,
 	AgentMessage,
 	AgentRunResult,
 	AgentStatus,
@@ -32,6 +33,7 @@ export interface RunState {
 	text: string;
 	currentMessage: AgentMessage | null;
 	currentTool: AgentToolRun | null;
+	error: AgentError | null;
 }
 
 export class EventMapper {
@@ -50,6 +52,7 @@ export class EventMapper {
 			text: "",
 			currentMessage: null,
 			currentTool: null,
+			error: null,
 		};
 	}
 
@@ -201,6 +204,13 @@ export class EventMapper {
 					state.messages.push(finalMsg);
 				}
 
+				if (finalMsg.stopReason === "error" && finalMsg.errorMessage) {
+					state.error = {
+						code: "model_error",
+						message: finalMsg.errorMessage,
+						recoverable: true,
+					};
+				}
 				// Extract tool results
 				for (const tr of rawEvent.tool_results) {
 					let tool = state.toolCalls.find((t) => t.id === tr.tool_call_id);
@@ -285,6 +295,17 @@ export class EventMapper {
 			};
 		}
 
+		if (state.error) {
+			return {
+				status: "failed",
+				text: state.text,
+				toolCalls: state.toolCalls,
+				artifacts: state.artifacts,
+				usage: state.usage,
+				error: state.error,
+			};
+		}
+
 		return {
 			status: "completed",
 			message: state.currentMessage ?? undefined,
@@ -313,7 +334,7 @@ export class EventMapper {
 
 	private convertWasmMessage(msg: WasmAgentMessage): AgentMessage {
 		const id = this.generateStableId(msg);
-		return {
+		const base: AgentMessage = {
 			id,
 			role: msg.role,
 			content: msg.content.map((c) => this.convertContent(c)),
@@ -323,6 +344,15 @@ export class EventMapper {
 					? (msg as unknown as { tool_call_id: string }).tool_call_id
 					: undefined,
 		};
+		if (msg.role === "assistant") {
+			const asm = msg as unknown as {
+				stop_reason?: string;
+				error_message?: string;
+			};
+			if (asm.stop_reason) base.stopReason = asm.stop_reason;
+			if (asm.error_message) base.errorMessage = asm.error_message;
+		}
+		return base;
 	}
 
 	private generateStableId(msg: WasmAgentMessage): string {

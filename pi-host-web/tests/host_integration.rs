@@ -1046,3 +1046,62 @@ fn marker_processing_in_host_tool_cancelled() {
 
     destroy_host_agent(handle);
 }
+
+
+#[test]
+fn llm_stream_error_produces_finished_with_error_stop_reason() {
+    let resp = create_host_agent(dummy_options(), default_budget());
+    let handle = resp.data.unwrap().handle;
+
+    let resp = start_turn(
+        handle,
+        StartTurnInput {
+            prompt: make_user_prompt("hello"),
+            tools: vec![],
+        },
+    );
+    assert!(resp.ok);
+
+    let resp = host_llm_done(
+        handle,
+        LlmResult::Err {
+            error: LlmError {
+                code: "stream_error".to_string(),
+                message: "network connection lost".to_string(),
+                details: None,
+            },
+            aborted: false,
+        },
+    );
+    assert!(resp.ok, "host_llm_done failed: {:?}", resp.error);
+    let data = resp.data.unwrap();
+
+    assert!(
+        data.directives
+            .iter()
+            .any(|d| matches!(d, HostDirective::Finished)),
+        "should emit Finished directive when LLM stream errors"
+    );
+
+    let turn_end = data.events.iter().find_map(|e| match e {
+        AgentEvent::TurnEnd { message, .. } => Some(message),
+        _ => None,
+    });
+    let turn_end = turn_end.expect("should emit TurnEnd event on stream error");
+    let assistant = match turn_end {
+        AgentMessage::Assistant(a) => a,
+        _ => panic!("TurnEnd message should be Assistant"),
+    };
+    assert_eq!(
+        assistant.stop_reason,
+        StopReason::Error,
+        "assistant message should have Error stop_reason"
+    );
+    assert_eq!(
+        assistant.error_message.as_deref(),
+        Some("network connection lost"),
+        "assistant message should carry the stream error message"
+    );
+
+    destroy_host_agent(handle);
+}

@@ -129,6 +129,8 @@ export interface AgentMessage {
 	content: AgentContentBlock[];
 	timestamp?: number;
 	tool_call_id?: string;
+	stopReason?: string;
+	errorMessage?: string;
 }
 
 export type AgentContentBlock =
@@ -266,6 +268,7 @@ export interface AgentError {
 		| "model_auth_failed"
 		| "model_rate_limited"
 		| "model_unavailable"
+		| "model_error"
 		| "tool_input_invalid"
 		| "tool_failed"
 		| "tool_duplicate"

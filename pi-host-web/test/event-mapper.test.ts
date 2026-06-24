@@ -277,4 +277,67 @@ describe("EventMapper", () => {
 		assert.ok(toolEnd, "should emit toolEnd");
 		assert.equal((toolEnd!.payload as any).status, "cancelled");
 	});
+	it("preserves stopReason and errorMessage on an error assistant message", () => {
+		const state = mapper.createRunState();
+		const rawEvent: RawAgentEvent = {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [],
+				stop_reason: "error",
+				error_message: "Model returned an error stop reason",
+				timestamp: 1,
+			},
+		} as RawAgentEvent;
+
+		const events = mapper.map(rawEvent, state);
+
+		const messageEnd = events.find((e) => e.type === "messageEnd");
+		assert.ok(messageEnd, "should emit messageEnd");
+		assert.equal((messageEnd!.payload as any).stopReason, "error");
+		assert.equal(
+			(messageEnd!.payload as any).errorMessage,
+			"Model returned an error stop reason",
+		);
+	});
+
+	it("turn_end with error stop_reason captures error in runState", () => {
+		const state = mapper.createRunState();
+		const rawEvent: RawAgentEvent = {
+			type: "turn_end",
+			message: {
+				role: "assistant",
+				content: [],
+				stop_reason: "error",
+				error_message: "stream failed mid-turn",
+				timestamp: 1,
+			},
+			tool_results: [],
+		} as RawAgentEvent;
+
+		mapper.map(rawEvent, state);
+
+		assert.ok(state.error, "runState.error should be set");
+		assert.equal(state.error.code, "model_error");
+		assert.equal(state.error.message, "stream failed mid-turn");
+		assert.equal(state.error.recoverable, true);
+	});
+
+	it("buildRunResult returns failed status when runState has error", () => {
+		const state = mapper.createRunState();
+		state.text = "partial output";
+		state.error = {
+			code: "model_error",
+			message: "stream failed",
+			recoverable: true,
+		};
+
+		const result = mapper.buildRunResult(state, { aborted: false });
+
+		assert.equal(result.status, "failed");
+		assert.equal(result.text, "partial output");
+		assert.ok(result.error);
+		assert.equal(result.error!.code, "model_error");
+		assert.equal(result.error!.message, "stream failed");
+	});
 });

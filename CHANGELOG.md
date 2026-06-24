@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.4] - 2026-06-23
+
+### Fixed
+
+- LLM stream errors mid-turn are now surfaced as `AgentRunResult.status: "failed"` with `error` populated, instead of being silently reported as `"completed"`. Previously, when the model stream errored after prior successful tool calls, the SDK's `EventMapper` dropped the `stop_reason`/`error_message` from the `TurnEnd` event and `buildRunResult` returned `completed` with no error — causing consumers (e.g. Browsergent) to report `done` instead of `error`.
+- `AgentMessage` (SDK type) now carries optional `stopReason` and `errorMessage` fields, preserving the WASM `AssistantMessage` metadata through the event mapper.
+- `AgentError.code` union extended with `"model_error"`.
+- `RunState` now tracks `error: AgentError | null`, set from `turn_end` events with `stop_reason: "error"`.
+
+### Changed
+
+- `@pi-oxide/pi-host-web` SDK version bumped to `0.9.4`.
+
 ## [0.9.1] - 2026-06-07
 
 ### Changed

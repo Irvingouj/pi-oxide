@@ -244,17 +244,85 @@ export interface AnthropicConfig {
 	baseUrl: string;
 	model: string;
 	maxTokens?: number;
+	maxRetries?: number;
+	onRetry?: (info: RetryInfo) => void;
+}
+
+export interface RetryInfo {
+	attempt: number;
+	maxAttempts: number;
+	delayMs: number;
+	status?: number;
+	error: string;
+	recoverable: boolean;
+}
+
+const DEFAULT_MAX_RETRIES = 3;
+const BASE_DELAY_MS = 500;
+const MAX_DELAY_MS = 8000;
+const JITTER_RATIO = 0.25;
+const RETRYABLE_STATUSES: Record<number, true> = {
+	429: true,
+	500: true,
+	502: true,
+	503: true,
+	504: true,
+	529: true,
+};
+
+function computeBackoff(attempt: number): number {
+	const exp = Math.min(BASE_DELAY_MS * 2 ** (attempt - 1), MAX_DELAY_MS);
+	const jitter = exp * JITTER_RATIO * (Math.random() * 2 - 1);
+	return Math.max(0, Math.round(exp + jitter));
+}
+
+function parseRetryAfter(header: string | null): number | undefined {
+	if (!header) return undefined;
+	const secs = Number(header);
+	if (!Number.isNaN(secs)) return secs * 1000;
+	const date = Date.parse(header);
+	if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
+	return undefined;
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+	const { promise, resolve, reject } = Promise.withResolvers<void>();
+	if (ms <= 0) {
+		resolve();
+		return promise;
+	}
+	const onAbort = () => {
+		clearTimeout(timer);
+		reject(new DOMException("Aborted", "AbortError"));
+	};
+	const timer = setTimeout(() => {
+		signal?.removeEventListener("abort", onAbort);
+		resolve();
+	}, ms);
+	if (signal) {
+		if (signal.aborted) {
+			clearTimeout(timer);
+			reject(new DOMException("Aborted", "AbortError"));
+		} else {
+			signal.addEventListener("abort", onAbort, { once: true });
+		}
+	}
+	return promise;
 }
 
 /**
  * Call the Anthropic Messages API and return a ProviderResult.
+ * Retries on 429/500/502/503/504/529 and network errors with exponential
+ * backoff + jitter. Honors the `retry-after` header.
  */
 export async function callAnthropic(
 	request: LlmRequest,
 	config: AnthropicConfig,
+	signal?: AbortSignal,
 ): Promise<ProviderResult> {
 	const log: string[] = [];
 	const providerName = "anthropic";
+	const maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES;
 
 	const body = {
 		model: config.model,
@@ -268,60 +336,145 @@ export async function callAnthropic(
 		`anthropic_request: model=${config.model}, messages=${body.messages.length}, tools=${body.tools.length}`,
 	);
 
-	let resp: Response;
-	try {
-		resp = await fetch(`${config.baseUrl}/v1/messages`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"x-api-key": config.apiKey,
-				"anthropic-version": "2023-06-01",
-			},
-			body: JSON.stringify(body),
-		});
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err);
-		log.push(`anthropic_network_error: ${msg}`);
-		return {
-			llmResult: {
-				Err: { error: { code: "network_error", message: msg }, aborted: false },
-			},
-			chunks: [],
-			log,
-		};
-	}
+	let lastError = "";
+	let lastStatus: number | undefined;
+	let lastRetryAfterMs: number | undefined;
 
-	if (!resp.ok) {
-		let errorBody: AnthropicError | null = null;
-		try {
-			errorBody = (await resp.json()) as AnthropicError;
-		} catch {
-			// ignore parse failure
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		if (attempt > 0) {
+			const delay =
+				lastRetryAfterMs !== undefined
+					? lastRetryAfterMs
+					: computeBackoff(attempt);
+			config.onRetry?.({
+				attempt,
+				maxAttempts: maxRetries,
+				delayMs: delay,
+				status: lastStatus,
+				error: lastError,
+				recoverable: true,
+			});
+			try {
+				await sleep(delay, signal);
+			} catch {
+				log.push("anthropic_retry_aborted");
+				return {
+					llmResult: {
+						Err: {
+							error: { code: "aborted", message: "Request aborted" },
+							aborted: true,
+						},
+					},
+					chunks: [],
+					log,
+				};
+			}
 		}
+
+		if (signal?.aborted) {
+			return {
+				llmResult: {
+					Err: {
+						error: { code: "aborted", message: "Request aborted" },
+						aborted: true,
+					},
+				},
+				chunks: [],
+				log,
+			};
+		}
+
+		let resp: Response;
+		try {
+			resp = await fetch(`${config.baseUrl}/v1/messages`, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"x-api-key": config.apiKey,
+					"anthropic-version": "2023-06-01",
+				},
+				body: JSON.stringify(body),
+				signal: signal ?? null,
+			});
+		} catch (err) {
+		lastError = err instanceof Error ? err.message : String(err);
+		lastStatus = undefined;
+		lastRetryAfterMs = undefined;
+		const isNetwork =
+			err instanceof TypeError ||
+			(err instanceof Error && err.message.includes("fetch"));
+			if (isNetwork && attempt < maxRetries) {
+				log.push(`anthropic_network_error (attempt ${attempt}): ${lastError}`);
+				continue;
+			}
+			log.push(`anthropic_network_error: ${lastError}`);
+			return {
+				llmResult: {
+					Err: {
+						error: { code: "network_error", message: lastError },
+						aborted: false,
+					},
+				},
+				chunks: [],
+				log,
+			};
+		}
+
+		if (!resp.ok) {
+			let errorBody: AnthropicError | null = null;
+			try {
+				errorBody = (await resp.json()) as AnthropicError;
+			} catch {
+				// ignore parse failure
+			}
 		const code = `http_${resp.status}`;
 		const message =
-			errorBody?.error?.message ?? `HTTP ${resp.status}: ${resp.statusText}`;
+			errorBody?.error?.message ??
+			`HTTP ${resp.status}: ${resp.statusText}`;
+		lastError = message;
+		lastStatus = resp.status;
+		lastRetryAfterMs = parseRetryAfter(resp.headers.get("retry-after"));
 		log.push(`anthropic_error: ${code} - ${message}`);
-		return {
-			llmResult: {
-				Err: { error: { code, message }, aborted: false },
-			},
-			chunks: [],
-			log,
-		};
+
+			if (RETRYABLE_STATUSES[resp.status] && attempt < maxRetries) {
+				continue;
+			}
+			return {
+				llmResult: {
+					Err: { error: { code, message }, aborted: false },
+				},
+				chunks: [],
+				log,
+			};
+		}
+
+		const data = (await resp.json()) as AnthropicResponse;
+		log.push(
+			`anthropic_response: stop_reason=${data.stop_reason}, content_blocks=${data.content.length}`,
+		);
+
+		const { llmResult, chunks } = convertResponse(
+			data,
+			providerName,
+			config.model,
+		);
+		return { llmResult, chunks, log };
 	}
 
-	const data = (await resp.json()) as AnthropicResponse;
-	log.push(
-		`anthropic_response: stop_reason=${data.stop_reason}, content_blocks=${data.content.length}`,
-	);
-
-	const { llmResult, chunks } = convertResponse(
-		data,
-		providerName,
-		config.model,
-	);
-	return { llmResult, chunks, log };
+	log.push(`anthropic_retries_exhausted: ${lastError}`);
+	return {
+		llmResult: {
+			Err: {
+				error: {
+					code: lastStatus ? `http_${lastStatus}` : "network_error",
+					message: lastError || "Retries exhausted",
+				},
+				aborted: false,
+			},
+		},
+		chunks: [],
+		log,
+	};
 }
 
 // --- SDK factory ---
@@ -335,6 +488,8 @@ export function anthropic(config: {
 	model: string;
 	baseUrl?: string;
 	maxTokens?: number;
+	maxRetries?: number;
+	onRetry?: (info: RetryInfo) => void;
 }): AgentModel {
 	const logger = getLogger("anthropic");
 	const anthropicConfig: AnthropicConfig = {
@@ -342,6 +497,8 @@ export function anthropic(config: {
 		baseUrl: config.baseUrl ?? "https://api.anthropic.com",
 		model: config.model,
 		maxTokens: config.maxTokens,
+		maxRetries: config.maxRetries,
+		onRetry: config.onRetry,
 	};
 
 	return {
@@ -425,14 +582,18 @@ export function anthropic(config: {
 			};
 
 			try {
-				const result = await callAnthropic(llmRequest, anthropicConfig);
+			const result = await callAnthropic(
+				llmRequest,
+				anthropicConfig,
+				request.signal,
+			);
 
-				if ("Err" in result.llmResult) {
-					const err = (
-						result.llmResult as {
-							Err: { error: { code: string; message: string } };
-						}
-					).Err.error;
+			if ("Err" in result.llmResult) {
+				const err = (
+					result.llmResult as {
+						Err: { error: { code: string; message: string } };
+					}
+				).Err.error;
 					logger.warn("Anthropic API error", {
 						code: err.code,
 						message: err.message,

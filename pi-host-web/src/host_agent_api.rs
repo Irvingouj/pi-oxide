@@ -595,36 +595,19 @@ pub fn host_steer(handle: u32, message: AgentMessage) -> TurnResultResult {
         Err(e) => return err(&e),
     };
 
-    let result = match host_agent.runtime {
-        AgentRuntime::Idle(mut idle) => {
-            let events = idle.steer(core_message);
-            host_agent.runtime = idle.into_runtime();
-            Ok(events)
-        }
-        AgentRuntime::ReadyToContinue(mut ready) => {
-            let events = ready.steer(core_message);
-            host_agent.runtime = ready.into_runtime();
-            Ok(events)
-        }
-        other => {
-            let actual = runtime_phase_name(&other);
-            host_agent.runtime = other;
-            Err(HostError::WrongPhase {
-                expected: "Idle or ReadyToContinue",
-                actual,
-            })
-        }
-    };
+    // Steering is a pure queue op (pi-core AgentRuntime::steer pushes to
+    // steering_queue unconditionally). It never interrupts an in-flight LLM
+    // stream or tool batch; the message drains into the transcript at the
+    // next continue_turn. Accept it in any phase so a host can queue
+    // environmental input (e.g. a navigation event) mid-turn.
+    let events = host_agent.runtime.steer(core_message);
 
     put_host_agent(host_agent);
-    match result {
-        Ok(events) => ok(TurnResultOutput {
-            events: try_conv!(convert_events(events)),
-            directives: vec![],
-            markers: vec![],
-        }),
-        Err(e) => err(&e),
-    }
+    ok(TurnResultOutput {
+        events: try_conv!(convert_events(events)),
+        directives: vec![],
+        markers: vec![],
+    })
 }
 
 #[wasm_bindgen(js_name = "hostContinueTurn")]

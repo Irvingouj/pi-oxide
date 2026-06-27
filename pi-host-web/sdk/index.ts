@@ -62,5 +62,7 @@ export type {
 	ModelRequest,
 	ModelResponse,
 	TokenUsage,
+	TriggerSource,
+	SteerEvent,
 	Unsubscribe,
 } from "./types.ts";

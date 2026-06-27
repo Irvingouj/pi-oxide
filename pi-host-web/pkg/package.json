@@ -1,11 +1,11 @@
 {
-  "name": "@pi-oxide/pi-host-web",
+  "name": "pi-host-web",
   "type": "module",
   "collaborators": [
     "Irving Ou <irving@pi-oxide.dev>"
   ],
   "description": "WASM host for pi-core. Browser FileSystem Access API, fetch(), JS event loop.",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -20,7 +20,9 @@
     "LICENSE",
     "dist/bindings.d.ts",
     "dist/index-BMpbP3yl.js",
+    "dist/index-BZHn1T3C.js",
     "dist/index-BcEmg1i6.js",
+    "dist/index-Bk5U3XQX.js",
     "dist/index-C8phwA2v.js",
     "dist/index-CAp51VNq.js",
     "dist/index-DCDPUiQC.js",

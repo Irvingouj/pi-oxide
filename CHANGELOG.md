@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.6] - 2026-06-27
+
+### Added
+
+- **Environmental steer support.** `Agent.steer()` now accepts a `TriggerSource` (`user` | `navigation` | `system`) and emits a `steer` event so hosts can route injected messages (e.g. a navigation-triggered skill) distinctly from user chat. New exports: `TriggerSource`, `SteerEvent`; new event name `"steer"` on `AgentEventName`.
+
+### Fixed
+
+- **`hostSteer` now queues in any phase** (pi-core `AgentRuntime::steer` is a pure queue push). Previously it rejected anything but `Idle`/`ReadyToContinue` with `wrong_phase`, blocking environmental injection during an in-flight stream. Steering never interrupts a stream — the message drains at the next `continue_turn`.
+- **Steering queued during a final-answer stream is no longer lost.** `on_llm_done`'s no-tool-calls branch now defers to `continue_turn` when the steering queue is non-empty, so the message drains and forces a continuation stream instead of being stranded.
+- **Tool input schemas now emit a usable JSON Schema for real providers.** `zodToJsonSchema` was called with a `name` option that wrapped the output in a `{$ref}` envelope with no top-level `type`, which real Anthropic-compatible providers reject. The flat object schema is now emitted.
+
+### Changed
+
+- `@pi-oxide/pi-host-web` SDK version bumped to `0.9.6`. WASM bindings rebuilt.
+
 ## [0.9.4] - 2026-06-23
 
 ### Fixed

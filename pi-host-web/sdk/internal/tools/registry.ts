@@ -139,9 +139,13 @@ export class ToolRegistryBuilder {
 
 				let parameters: Record<string, unknown>;
 				if (isZodSchema(def.inputSchema)) {
+					// zodToJsonSchema with a `name` wraps the output in a
+					// {$ref: "#/definitions/<name>"} envelope with no top-level
+					// `type`, which real Anthropic-compatible providers reject
+					// ("schema must be of type object, got type null"). Emit the
+					// flat object schema instead.
 					const schemaResult = zodToJsonSchema(
 						def.inputSchema as z.ZodTypeAny,
-						{ name: def.name },
 					);
 					parameters = isRecord(schemaResult)
 						? schemaResult

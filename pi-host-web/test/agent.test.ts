@@ -15,6 +15,8 @@ import type {
 	AgentRunResult,
 	AgentStatus,
 	ModelRequest,
+	SteerEvent,
+	TriggerSource,
 } from "../sdk/types.ts";
 
 // Initialize WASM once for all tests that need it
@@ -388,6 +390,142 @@ describe("Agent class", () => {
 
 			assert.equal(threw, true);
 			assert.equal(error.code, "agent_not_initialized");
+		});
+	});
+
+	describe("TM-46: steer() source + steer event (mid-stream queueing)", () => {
+		// hostSteer now queues in any phase (pi-core AgentRuntime::steer is a
+		// pure push). These tests steer during an in-flight LLM stream — the
+		// realistic environmental-injection path — and assert the steer event
+		// fires and the turn is not broken.
+		async function waitForStreaming(agent: Agent): Promise<void> {
+			const deadline = Date.now() + 2000;
+			while (Date.now() < deadline) {
+				if (agent.getStatus().state === "calling_model") return;
+				await new Promise((r) => setTimeout(r, 5));
+			}
+			throw new Error(
+				`agent never entered streaming (last: ${agent.getStatus().state})`,
+			);
+		}
+
+		it("emits a steer event with user source by default for string input", async () => {
+			const agent = new Agent({
+				sessionId: "test-steer-default",
+				model: makeSlowModel(300),
+			});
+			const events: SteerEvent[] = [];
+			agent.on("steer", (e) => events.push(e));
+			const runPromise = agent.run("Hi");
+			await waitForStreaming(agent);
+			await agent.steer("ctx");
+			await runPromise;
+			agent.dispose();
+
+			assert.equal(events.length, 1);
+			assert.deepEqual(events[0]!.source, { kind: "user" });
+			assert.equal(events[0]!.text, "ctx");
+			assert.equal(typeof events[0]!.timestamp, "number");
+		});
+
+		it("emits a steer event with user source when source omitted on object input", async () => {
+			const agent = new Agent({
+				sessionId: "test-steer-obj-no-source",
+				model: makeSlowModel(300),
+			});
+			const events: SteerEvent[] = [];
+			agent.on("steer", (e) => events.push(e));
+			const runPromise = agent.run("Hi");
+			await waitForStreaming(agent);
+			await agent.steer({ text: "ctx" });
+			await runPromise;
+			agent.dispose();
+
+			assert.equal(events.length, 1);
+			assert.deepEqual(events[0]!.source, { kind: "user" });
+			assert.equal(events[0]!.text, "ctx");
+		});
+
+		it("carries a navigation source through to the steer event", async () => {
+			const agent = new Agent({
+				sessionId: "test-steer-nav",
+				model: makeSlowModel(300),
+			});
+			const events: SteerEvent[] = [];
+			agent.on("steer", (e) => events.push(e));
+			const runPromise = agent.run("Hi");
+			await waitForStreaming(agent);
+			const source: TriggerSource = {
+				kind: "navigation",
+				url: "https://example.com/jobs",
+				matchedSkills: ["linkedin-jobs"],
+			};
+			await agent.steer({
+				text: "<navigation_trigger url='https://example.com/jobs'><skill>linkedin-jobs</skill></navigation_trigger>",
+				source,
+			});
+			await runPromise;
+			agent.dispose();
+
+			assert.equal(events.length, 1);
+			assert.equal(events[0]!.source.kind, "navigation");
+			assert.equal(
+				(events[0]!.source as { url: string }).url,
+				"https://example.com/jobs",
+			);
+			assert.deepEqual(
+				(events[0]!.source as { matchedSkills: string[] }).matchedSkills,
+				["linkedin-jobs"],
+			);
+		});
+
+		it("delivers a steer queued during a final-answer stream (no tool calls)", async () => {
+			// Regression: on_llm_done's no-tool-calls branch must drain the
+			// steering queue and continue the turn — otherwise a steer queued
+			// during a plain final answer is silently stranded.
+			// Call 1: text-only "final answer" (the loss path). Call 2: echoes
+			// the steered token, proving the steer drained and re-streamed.
+			const STEER_TOKEN = "DRAINED_TOKEN_7q";
+			let call = 0;
+			const model = defineModel({
+				id: "final-answer-then-steer",
+				generate: async (_req: ModelRequest) => {
+					call++;
+					if (call === 1) {
+						return {
+							content: [{ type: "text" as const, text: "all done" }],
+							stopReason: "end" as const,
+						};
+					}
+					// Second call only happens if the steer drained and forced
+					// a continuation. Echo the token we steered.
+					return {
+						content: [{ type: "text" as const, text: `saw:${STEER_TOKEN}` }],
+						stopReason: "end" as const,
+					};
+				},
+			});
+			const agent = new Agent({
+				sessionId: "test-steer-drain-on-final",
+				model,
+			});
+			let sawToken = false;
+			agent.on("text", (delta: string) => {
+				if (delta.includes(STEER_TOKEN)) sawToken = true;
+			});
+
+			const runPromise = agent.run("Hi");
+			await waitForStreaming(agent);
+			// Steer mid-stream with a token the second call must echo.
+			await agent.steer(`inject:${STEER_TOKEN}`);
+			const result = await runPromise;
+			agent.dispose();
+
+			assert.equal(result.status, "completed");
+			// call===2 proves the steer drained and forced a second LLM round;
+			// sawToken proves the steered content reached the model.
+			assert.equal(call, 2, "steer did not force a continuation stream");
+			assert.equal(sawToken, true, "steered token never reached the LLM");
 		});
 	});
 

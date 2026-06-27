@@ -56,12 +56,18 @@ export interface AgentConfig {
 	};
 }
 
+export type TriggerSource =
+	| { kind: "user" }
+	| { kind: "navigation"; url: string; matchedSkills: string[] }
+	| { kind: "system"; reason: string };
+
 export type AgentInput =
 	| string
 	| {
 			text: string;
 			attachments?: AgentAttachment[];
 			metadata?: Record<string, unknown>;
+			source?: TriggerSource;
 	  };
 
 export interface AgentAttachment {
@@ -96,7 +102,14 @@ export type AgentEventName =
 	| "status"
 	| "done"
 	| "error"
-	| "debug";
+	| "debug"
+	| "steer";
+
+export interface SteerEvent {
+	source: TriggerSource;
+	text: string;
+	timestamp: number;
+}
 
 export type AgentEventHandler<E extends AgentEventName> =
 	E extends "messageStart"
@@ -121,7 +134,9 @@ export type AgentEventHandler<E extends AgentEventName> =
 											? (error: AgentError) => void
 											: E extends "debug"
 												? (event: unknown) => void
-												: never;
+												: E extends "steer"
+													? (event: SteerEvent) => void
+													: never;
 
 export interface AgentMessage {
 	id: string;

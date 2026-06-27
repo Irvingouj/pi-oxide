@@ -1,6 +1,6 @@
 use super::{Agent, Phase};
 use crate::context_projection::projection_scan;
-use crate::events::{AgentAction, AgentEvent, ContentDelta};
+use crate::events::{AgentAction, AgentEvent, ContentDelta, WaitMode};
 use crate::llm::{LlmChunk, LlmResult};
 use crate::message::{
     AgentMessage, Artifacts, Content, StopReason, TextContent, ToolCall, TrimmedMessage,
@@ -157,6 +157,24 @@ impl Agent {
                 message: msg,
                 tool_results: vec![],
             });
+
+            // If a steering message was queued during this stream, do not
+            // finish: hand control back so continue_turn drains the queue and
+            // re-streams. Without this, a steer queued during a final-answer
+            // stream is silently stranded (continue_turn is the only drain
+            // site, and Finished never reaches it).
+            if !self.steering_queue.is_empty() {
+                debug!(
+                    queued = self.steering_queue.len(),
+                    "ending stream with pending steering — deferring to continue_turn"
+                );
+                self.phase = Phase::WaitForInput;
+                events.push(AgentEvent::AgentEnd);
+                actions.push(AgentAction::WaitForInput {
+                    mode: WaitMode::Steering,
+                });
+                return (events, actions, markers, t, a);
+            }
 
             events.push(AgentEvent::AgentEnd);
             self.phase = Phase::Idle;

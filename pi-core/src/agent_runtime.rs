@@ -398,6 +398,18 @@ impl AgentRuntime {
         self.as_agent_mut().state_mut()
     }
 
+    /// Queue a steering message regardless of current phase.
+    ///
+    /// Steering is a pure queue operation (Agent::steer pushes to
+    /// steering_queue unconditionally). The message is drained into the
+    /// transcript at the next continue_turn, never interrupting an in-flight
+    /// LLM stream or tool batch. Accepting steers in any phase mirrors how a
+    /// host orchestrates environmental input (e.g. a navigation event arriving
+    /// mid-stream) — it queues, it does not preempt.
+    pub fn steer(&mut self, message: AgentMessage) -> Vec<AgentEvent> {
+        self.as_agent_mut().steer(message)
+    }
+
     /// Consume the runtime and return the underlying agent.
     pub fn into_agent(self) -> Agent {
         match self {

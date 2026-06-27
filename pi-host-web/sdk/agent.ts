@@ -254,7 +254,13 @@ export class Agent {
 			);
 		}
 		this.logger.info("Steering agent", { sessionId: this.config.sessionId });
-		return steerAgent(this.engineAgent, input);
+		const text = typeof input === "string" ? input : input.text;
+		const source =
+			typeof input !== "string" && input.source
+				? input.source
+				: { kind: "user" as const };
+		await steerAgent(this.engineAgent, input);
+		this.emitter.emit("steer", { source, text, timestamp: Date.now() });
 	}
 
 	async reset(): Promise<void> {

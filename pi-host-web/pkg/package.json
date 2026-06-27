@@ -1,5 +1,5 @@
 {
-  "name": "pi-host-web",
+  "name": "@pi-oxide/pi-host-web",
   "type": "module",
   "collaborators": [
     "Irving Ou <irving@pi-oxide.dev>"

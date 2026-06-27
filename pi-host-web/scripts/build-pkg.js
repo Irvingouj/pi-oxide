@@ -111,6 +111,10 @@ pkg.dependencies = {
 	"zod-to-json-schema": sourcePkg.dependencies["zod-to-json-schema"],
 };
 
+// wasm-pack names the package after the crate (unscoped "pi-host-web").
+// Force the published scoped name so `npm publish` targets the right package.
+pkg.name = "@pi-oxide/pi-host-web";
+
 pkg.version = sourcePkg.version;
 
 writeFileSync(pkgJsonPath, JSON.stringify(pkg, null, 2) + "\n");

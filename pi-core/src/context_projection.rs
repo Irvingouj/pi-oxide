@@ -512,9 +512,7 @@ mod tests {
         let _ = empty_assistant; // content stays Vec::new()
         let t = vec![
             trimmed_user("hello"),
-            crate::message::TrimmedMessage::Assistant(
-                crate::message::AssistantMessage::empty(),
-            ),
+            crate::message::TrimmedMessage::Assistant(crate::message::AssistantMessage::empty()),
             trimmed_user("next question"),
         ];
         let ctx = build_llm_context_from_trimmed(&t, "system", &[]);

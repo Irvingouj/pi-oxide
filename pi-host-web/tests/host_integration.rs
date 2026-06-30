@@ -1047,7 +1047,6 @@ fn marker_processing_in_host_tool_cancelled() {
     destroy_host_agent(handle);
 }
 
-
 #[test]
 fn llm_stream_error_produces_finished_with_error_stop_reason() {
     let resp = create_host_agent(dummy_options(), default_budget());

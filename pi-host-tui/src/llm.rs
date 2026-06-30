@@ -367,7 +367,11 @@ fn convert_messages(messages: &[pi_core::AgentMessage]) -> Vec<serde_json::Value
                         texts.push(user_text(&u.content));
                     }
                 }
-                let joined = texts.into_iter().filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n");
+                let joined = texts
+                    .into_iter()
+                    .filter(|t| !t.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 if !joined.is_empty() {
                     result.push(serde_json::json!({
                         "role": "user",

@@ -163,9 +163,7 @@ fn on_llm_done_error_does_not_persist_empty_assistant_to_t() {
         "errored turn should still finish"
     );
     assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, AgentEvent::AgentEnd)),
+        events.iter().any(|e| matches!(e, AgentEvent::AgentEnd)),
         "errored turn should signal AgentEnd"
     );
     assert_eq!(
@@ -211,11 +209,7 @@ fn on_llm_done_non_empty_assistant_still_pushes_to_t() {
     );
     let (_events, _actions, _runtime, T, _A, _turn_number, _markers) = transition.into_parts();
 
-    assert_eq!(
-        T.len(),
-        2,
-        "user + non-empty assistant should both be in T"
-    );
+    assert_eq!(T.len(), 2, "user + non-empty assistant should both be in T");
 }
 
 #[test]

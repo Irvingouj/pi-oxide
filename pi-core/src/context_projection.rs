@@ -508,7 +508,7 @@ mod tests {
     fn build_llm_context_skips_empty_assistant_message() {
         // An empty assistant message (no text, no tool calls) must not be sent
         // to the provider — Anthropic rejects empty assistant content arrays.
-        let mut empty_assistant = crate::message::AssistantMessage::empty();
+        let empty_assistant = crate::message::AssistantMessage::empty();
         let _ = empty_assistant; // content stays Vec::new()
         let t = vec![
             trimmed_user("hello"),

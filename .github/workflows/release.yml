@@ -1,0 +1,75 @@
+name: Release
+
+# Publishes @pi-oxide/pi-host-web to npm with provenance.
+# Tag: vX.Y.Z  (must match pi-host-web/package.json version)
+#
+# Provenance: OIDC, no long-lived npm token. Requires the package to be linked
+# to this repo (Irvingouj/pi-oxide) under npm → Settings → publishing access.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write  # npm provenance (OIDC)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Install wasm-bindgen-cli (matched to Cargo.lock)
+        run: |
+          wb_version=$(grep -A1 '^name = "wasm-bindgen"' Cargo.lock | grep version | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "Installing wasm-bindgen-cli@$wb_version"
+          cargo install wasm-bindgen-cli --version "$wb_version" --locked
+
+      - name: Verify tag matches package version
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          pkg=$(node -p "require('./pi-host-web/package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag ($tag) ≠ pi-host-web/package.json ($pkg)"
+            exit 1
+          fi
+
+      - name: Build WASM (cargo + wasm-bindgen)
+        run: |
+          cargo build --release --target wasm32-unknown-unknown
+          wasm-bindgen \
+            --target web \
+            --out-dir pi-host-web \
+            target/wasm32-unknown-unknown/release/pi_host_web.wasm
+          test -f pi-host-web/pi_host_web_bg.wasm || { echo "wasm-bindgen did not emit pi_host_web_bg.wasm"; exit 1; }
+
+      - name: Build SDK + pkg/
+        run: |
+          cd pi-host-web
+          npm ci
+          npm run build
+          node scripts/build-pkg.js
+          test -f pkg/package.json || { echo "pkg/package.json missing after build-pkg"; exit 1; }
+
+      - name: Publish with provenance
+        run: |
+          cd pi-host-web/pkg
+          npm publish --provenance --access public
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true

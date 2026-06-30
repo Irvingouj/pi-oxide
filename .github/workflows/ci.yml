@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Format + clippy
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --lib --tests -- -D warnings
+      - name: Workspace lib tests
+        run: cargo test --workspace --lib

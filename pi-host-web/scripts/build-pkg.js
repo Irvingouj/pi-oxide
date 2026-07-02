@@ -116,6 +116,11 @@ pkg.dependencies = {
 pkg.name = "@pi-oxide/pi-host-web";
 
 pkg.version = sourcePkg.version;
+pkg.repository = {
+	type: "git",
+	url: "git+https://github.com/Irvingouj/pi-oxide.git",
+	directory: "pi-host-web",
+};
 
 writeFileSync(pkgJsonPath, JSON.stringify(pkg, null, 2) + "\n");
 console.log("Package built successfully.");

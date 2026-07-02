@@ -27,11 +27,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Install wasm-bindgen-cli (matched to Cargo.lock)
         run: |
+          npm install -g npm@latest
+          node --version
+          npm --version
           wb_version=$(grep -A1 '^name = "wasm-bindgen"' Cargo.lock | grep version | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "Installing wasm-bindgen-cli@$wb_version"
           cargo install wasm-bindgen-cli --version "$wb_version" --locked

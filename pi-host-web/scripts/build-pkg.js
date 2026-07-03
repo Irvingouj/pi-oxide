@@ -54,6 +54,18 @@ fixWasmImports(join(distDir, "sdk"));
 rmSync(join(pkgDir, "sdk"), { recursive: true, force: true });
 cpSync(distDir, join(pkgDir, "dist"), { recursive: true, force: true });
 
+// Copy the wasm-bindgen output (pi_host_web.js/.d.ts/.wasm/.wasm.d.ts) into
+// pkg/ so the published "./raw" export resolves. wasm-bindgen emits these at
+// the crate root (pi-host-web/), not under dist/.
+for (const name of [
+	"pi_host_web.js",
+	"pi_host_web.d.ts",
+	"pi_host_web_bg.wasm",
+	"pi_host_web_bg.wasm.d.ts",
+]) {
+	cpSync(join(rootDir, name), join(pkgDir, name), { force: true });
+}
+
 // Update pkg/package.json with proper exports
 const pkgJsonPath = join(pkgDir, "package.json");
 const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));

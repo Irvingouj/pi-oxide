@@ -50,10 +50,12 @@ jobs:
 
       - name: Build WASM (cargo + wasm-bindgen)
         run: |
-          # Build only pi-host-web for wasm. The workspace also contains
-          # pi-host-tui, which depends on syntect/onig_sys (Oniguruma C);
-          # those native deps cannot compile to wasm32 and must not be
-          # pulled into the wasm target build.
+          # Scope to pi-host-web: it is the only workspace member that targets
+          # wasm. pi-host-tui is a native terminal binary (ratatui/crossterm)
+          # and has no wasm target, so building the whole workspace for
+          # wasm32 would fail on crossterm's #[cfg(unix/windows)] gates.
+          # pi-host-tui's syntect now uses the pure-Rust regex-fancy backend,
+          # so no C deps (onig_sys) enter the workspace's wasm resolution.
           cargo build --release -p pi-host-web --target wasm32-unknown-unknown
           wasm-bindgen \
             --target web \

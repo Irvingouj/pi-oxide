@@ -5,7 +5,7 @@
     "Irving Ou <irving@pi-oxide.dev>"
   ],
   "description": "WASM host for pi-core. Browser FileSystem Access API, fetch(), JS event loop.",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "license": "MIT",
   "repository": {
     "type": "git",

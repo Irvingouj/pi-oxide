@@ -1,18 +1,6 @@
-import type {
-	Content,
-	LlmChunk,
-	LlmResult,
-	AgentMessage as WasmAgentMessage,
-} from "../../pi_host_web.js";
+import type { Content, LlmChunk, LlmResult, AgentMessage as WasmAgentMessage } from "../../pi_host_web.js";
 import type { LlmStream } from "../bindings/types.ts";
-import type {
-	AgentContentBlock,
-	AgentModel,
-	ModelEvent,
-	ModelRequest,
-	ModelResponse,
-	TokenUsage,
-} from "../types.ts";
+import type { AgentContentBlock, AgentModel, ModelEvent, ModelRequest, ModelResponse, TokenUsage } from "../types.ts";
 import { convertWasmMessagesToAgentMessages } from "./config-builders.ts";
 
 function stringifyToolArguments(argumentsValue: unknown): string {
@@ -51,11 +39,8 @@ export function modelStreamToLlmStream(
 	runState: { usage?: TokenUsage },
 ): LlmStream {
 	let textAccumulator = "";
-	const toolCalls = new Map<
-		string,
-		{ id: string; name: string; arguments: string }
-	>();
-	let stopReason: "end" | "tool_call" | "length" | "error" = "end";
+	const toolCalls = new Map<string, { id: string; name: string; arguments: string }>();
+	const streamState: { stopReason: "end" | "tool_call" | "length" | "error" } = { stopReason: "end" };
 	let modelId: string | undefined;
 	let usage: TokenUsage | undefined;
 	let streamError: unknown;
@@ -90,9 +75,7 @@ export function modelStreamToLlmStream(
 								delta?: unknown;
 							};
 							const existing = toolCalls.get(delta.id);
-							const argumentFragment = stringifyToolArguments(
-								delta.arguments ?? delta.delta ?? "",
-							);
+							const argumentFragment = stringifyToolArguments(delta.arguments ?? delta.delta ?? "");
 							toolCalls.set(delta.id, {
 								id: delta.id,
 								name: delta.name || existing?.name || "",
@@ -110,7 +93,7 @@ export function modelStreamToLlmStream(
 							modelId = response.model;
 							usage = response.usage;
 							if (response.usage) runState.usage = response.usage;
-							stopReason = response.stopReason;
+							streamState.stopReason = response.stopReason;
 							for (const block of response.content) {
 								if (block.type !== "tool_call") continue;
 								toolCalls.set(block.id, {
@@ -139,10 +122,19 @@ export function modelStreamToLlmStream(
 				Err: {
 					error: {
 						code: "stream_error",
-						message:
-							streamError instanceof Error
-								? streamError.message
-								: String(streamError),
+						message: streamError instanceof Error ? streamError.message : String(streamError),
+					},
+					aborted: false,
+				},
+			} as LlmResult;
+		}
+
+		if (streamState.stopReason === "error") {
+			return {
+				Err: {
+					error: {
+						code: "model_error",
+						message: "Model returned an error stop reason",
 					},
 					aborted: false,
 				},
@@ -168,11 +160,9 @@ export function modelStreamToLlmStream(
 				api: "sdk",
 				provider: "sdk",
 				model: modelId ?? "sdk-model",
-				stop_reason: toWasmStopReason(stopReason),
+				stop_reason: toWasmStopReason(streamState.stopReason),
 				error_message:
-					toWasmStopReason(stopReason) === "error"
-						? "Model returned an error stop reason"
-						: undefined,
+					toWasmStopReason(streamState.stopReason) === "error" ? "Model returned an error stop reason" : undefined,
 				timestamp: Date.now(),
 				usage: {
 					input: usage?.input ?? 0,
@@ -188,10 +178,7 @@ export function modelStreamToLlmStream(
 	return { chunks, result };
 }
 
-export function modelResponseToLlmStream(
-	response: ModelResponse,
-	signal: AbortSignal,
-): LlmStream {
+export function modelResponseToLlmStream(response: ModelResponse, signal: AbortSignal): LlmStream {
 	const chunks: AsyncIterable<LlmChunk> = {
 		[Symbol.asyncIterator]: async function* () {
 			if (signal.aborted) return;
@@ -230,37 +217,45 @@ export function modelResponseToLlmStream(
 		},
 	};
 
-	const result: Promise<LlmResult> = Promise.resolve({
-		Ok: {
-			content: response.content.map((c: AgentContentBlock) => {
-				if (c.type === "text") return { type: "text", text: c.text };
-				if (c.type === "tool_call")
-					return {
-						type: "tool_call",
-						id: c.id,
-						name: c.name,
-						arguments: c.arguments,
-					};
-				return { type: "text", text: "" };
-			}),
-			api: "sdk",
-			provider: "sdk",
-			model: response.model ?? "sdk-model",
-			stop_reason: toWasmStopReason(response.stopReason),
-			error_message:
-				response.stopReason === "error"
-					? "Model returned an error stop reason"
-					: undefined,
-			timestamp: Date.now(),
-			usage: {
-				input: response.usage?.input ?? 0,
-				output: response.usage?.output ?? 0,
-				cache_read: response.usage?.cache_read ?? 0,
-				cache_write: response.usage?.cache_write ?? 0,
-				total_tokens: response.usage?.total_tokens ?? 0,
-			},
-		},
-	});
+	const result: Promise<LlmResult> =
+		response.stopReason === "error"
+			? Promise.resolve({
+					Err: {
+						error: {
+							code: "model_error",
+							message: "Model returned an error stop reason",
+						},
+						aborted: false,
+					},
+				} as LlmResult)
+			: Promise.resolve({
+					Ok: {
+						content: response.content.map((c: AgentContentBlock) => {
+							if (c.type === "text") return { type: "text", text: c.text };
+							if (c.type === "tool_call")
+								return {
+									type: "tool_call",
+									id: c.id,
+									name: c.name,
+									arguments: c.arguments,
+								};
+							return { type: "text", text: "" };
+						}),
+						api: "sdk",
+						provider: "sdk",
+						model: response.model ?? "sdk-model",
+						stop_reason: toWasmStopReason(response.stopReason),
+						error_message: undefined,
+						timestamp: Date.now(),
+						usage: {
+							input: response.usage?.input ?? 0,
+							output: response.usage?.output ?? 0,
+							cache_read: response.usage?.cache_read ?? 0,
+							cache_write: response.usage?.cache_write ?? 0,
+							total_tokens: response.usage?.total_tokens ?? 0,
+						},
+					},
+				} as LlmResult);
 
 	return { chunks, result };
 }

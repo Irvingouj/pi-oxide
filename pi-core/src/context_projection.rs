@@ -169,8 +169,22 @@ pub enum NewProjectionStrategy {
 }
 
 /// Look up projection strategy by tool name.
-pub fn projection_strategy(_tool_name: &str) -> NewProjectionStrategy {
-    NewProjectionStrategy::KeepFull
+pub fn projection_strategy(tool_name: &str) -> NewProjectionStrategy {
+    match tool_name {
+        "edit" => NewProjectionStrategy::KeepFull,
+        "grep" => NewProjectionStrategy::Head {
+            min_age: 1,
+            max_chars: 3_000,
+        },
+        "read" => NewProjectionStrategy::Head {
+            min_age: 2,
+            max_chars: 2_000,
+        },
+        _ => NewProjectionStrategy::Head {
+            min_age: 1,
+            max_chars: 3_000,
+        },
+    }
 }
 
 /// Run projection scan over T at turn end.

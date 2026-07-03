@@ -1,13 +1,6 @@
-import type {
-	LlmContext,
-	PersistData,
-	AgentEvent as RawAgentEvent,
-} from "../../pi_host_web.js";
+import type { LlmContext, PersistData, AgentEvent as RawAgentEvent } from "../../pi_host_web.js";
 import { hostReset } from "../../pi_host_web.js";
-import {
-	createHostAgentInstance,
-	type HostAgent,
-} from "../bindings/host-agent.ts";
+import { createHostAgentInstance, type HostAgent } from "../bindings/host-agent.ts";
 import { unwrap } from "../bindings/init.ts";
 import { runTurnWithHostAgent } from "../bindings/turn-loop.ts";
 import type { AgentRunConfig, LlmStream } from "../bindings/types.ts";
@@ -15,13 +8,7 @@ import { EventMapper } from "../internal/events.ts";
 import { getLogger } from "../internal/logger.ts";
 import { ToolRegistryBuilder } from "../internal/tools/registry.ts";
 import { SnapshotSerializer } from "../snapshot.ts";
-import type {
-	AgentConfig,
-	AgentInput,
-	AgentRunOptions,
-	AgentRunResult,
-	AgentStatus,
-} from "../types.ts";
+import type { AgentConfig, AgentInput, AgentRunOptions, AgentRunResult, AgentStatus } from "../types.ts";
 import {
 	buildArtifactStore,
 	buildUserMessage,
@@ -29,11 +16,7 @@ import {
 	mergeMetadata,
 	normalizeTools,
 } from "./config-builders.ts";
-import {
-	defaultSummarizer,
-	modelResponseToLlmStream,
-	modelStreamToLlmStream,
-} from "./model-adapter.ts";
+import { defaultSummarizer, modelResponseToLlmStream, modelStreamToLlmStream } from "./model-adapter.ts";
 
 export type { HostAgent } from "../bindings/host-agent.ts";
 export { createHostAgentInstance } from "../bindings/host-agent.ts";
@@ -58,9 +41,7 @@ export async function createEngineAgent(
 		const snapshot = await config.store.loadSession(config.sessionId);
 		if (snapshot) {
 			const serializer = new SnapshotSerializer();
-			sessionState = serializer.deserialize(snapshot) as
-				| PersistData
-				| undefined;
+			sessionState = serializer.deserialize(snapshot) as PersistData | undefined;
 			if (sessionState) {
 				logger.info("Session snapshot loaded", { sessionId: config.sessionId });
 			} else {
@@ -150,7 +131,9 @@ export async function runAgentTurn(
 			? async (wasmMessages, sig) => {
 					logger.info("Calling model summarizer");
 					const sdkMessages = convertWasmMessagesToAgentMessages(wasmMessages);
-					return config.model.summarize?.(sdkMessages, sig);
+					return config.model.summarize
+						? config.model.summarize(sdkMessages, sig)
+						: defaultSummarizer(config.model, wasmMessages, sig);
 				}
 			: async (wasmMessages, sig) => {
 					logger.info("Using default summarizer");
@@ -207,10 +190,7 @@ export async function runAgentTurn(
 	}
 }
 
-export async function steerAgent(
-	hostAgent: HostAgent,
-	input: string | AgentInput,
-): Promise<void> {
+export async function steerAgent(hostAgent: HostAgent, input: string | AgentInput): Promise<void> {
 	const text = typeof input === "string" ? input : input.text;
 	hostAgent.steer({
 		role: "user",

@@ -395,8 +395,6 @@ fn events_still_emitted_alongside_directives() {
 
 #[test]
 fn steering_during_stream_produces_directives() {
-    // Steering during streaming is not supported by the current AgentRuntime.
-    // The host_steer function returns a wrong_phase error when called while streaming.
     let resp = create_host_agent(dummy_options(), default_budget());
     let handle = resp.data.unwrap().handle;
 
@@ -411,8 +409,14 @@ fn steering_during_stream_produces_directives() {
 
     let steer_msg = make_user_prompt("steer");
     let resp = host_steer(handle, steer_msg);
-    assert!(!resp.ok);
-    assert_eq!(resp.error.as_ref().unwrap().code, "wrong_phase");
+    assert!(resp.ok, "host_steer failed: {:?}", resp.error);
+    let data = resp.data.unwrap();
+    assert!(
+        data.events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::QueueUpdate { .. })),
+        "steering should queue the message and emit QueueUpdate"
+    );
     destroy_host_agent(handle);
 }
 

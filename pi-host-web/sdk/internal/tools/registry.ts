@@ -5,44 +5,29 @@
 
 import type { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import type {
-	ToolCall,
-	ToolDefinition,
-	ToolResult,
-} from "../../../pi_host_web.js";
+import type { ToolCall, ToolDefinition, ToolResult } from "../../../pi_host_web.js";
+import type { ArtifactStore } from "../../bindings/types.ts";
 import { createAgentError } from "../../errors.ts";
 import { HostError } from "../../init.ts";
 import { isRecord } from "../../internal/util/types.ts";
 import type { AgentTools } from "../../types.ts";
-import type { ArtifactStore } from "../engine.ts";
 import { createArtifactToolRegistry } from "./service.ts";
 
-export type ToolMap = Record<
-	string,
-	(call: ToolCall) => Promise<ToolResult> | ToolResult
->;
+export type ToolMap = Record<string, (call: ToolCall) => Promise<ToolResult> | ToolResult>;
 
 export class ToolRegistryBuilder {
 	/**
 	 * Build a WASM ToolMap from AgentTools packs.
 	 * Artifact tools are wired with the store at build time.
 	 */
-	build(
-		tools: AgentTools[],
-		artifactStore?: ArtifactStore,
-		sessionId?: string,
-	): ToolMap {
+	build(tools: AgentTools[], artifactStore?: ArtifactStore, sessionId?: string): ToolMap {
 		const toolMap: ToolMap = {};
 		const seenNames = new Set<string>();
 
 		for (const pack of tools) {
 			for (const def of pack.definitions) {
 				if (seenNames.has(def.name)) {
-					throw createAgentError(
-						"tool_duplicate",
-						`Duplicate tool name: ${def.name}`,
-						{ recoverable: false },
-					);
+					throw createAgentError("tool_duplicate", `Duplicate tool name: ${def.name}`, { recoverable: false });
 				}
 				seenNames.add(def.name);
 
@@ -54,10 +39,7 @@ export class ToolRegistryBuilder {
 							const schema = def.inputSchema as z.ZodTypeAny;
 							const parseResult = schema.safeParse(call.arguments);
 							if (!parseResult.success) {
-								throw new HostError(
-									"tool_input_invalid",
-									`Invalid input: ${parseResult.error.message}`,
-								);
+								throw new HostError("tool_input_invalid", `Invalid input: ${parseResult.error.message}`);
 							}
 							parsedInput = parseResult.data;
 						} else {
@@ -72,10 +54,7 @@ export class ToolRegistryBuilder {
 						}
 
 						// Otherwise wrap the output
-						const text =
-							typeof output === "string"
-								? output
-								: JSON.stringify(output, null, 2);
+						const text = typeof output === "string" ? output : JSON.stringify(output, null, 2);
 						const result: ToolResult = {
 							content: [{ type: "text", text }],
 						};
@@ -93,9 +72,7 @@ export class ToolRegistryBuilder {
 
 		// Wire artifact tools with store if any artifact pack was provided
 		const hasArtifactTools = tools.some((p) =>
-			p.definitions.some(
-				(d) => d.name === "artifact_read" || d.name === "artifact_search",
-			),
+			p.definitions.some((d) => d.name === "artifact_read" || d.name === "artifact_search"),
 		);
 		if (hasArtifactTools) {
 			const artifactRegistry = createArtifactToolRegistry(
@@ -105,11 +82,7 @@ export class ToolRegistryBuilder {
 			);
 			for (const [name, handler] of Object.entries(artifactRegistry)) {
 				if (seenNames.has(name)) {
-					throw createAgentError(
-						"tool_duplicate",
-						`Duplicate tool name: ${name}`,
-						{ recoverable: false },
-					);
+					throw createAgentError("tool_duplicate", `Duplicate tool name: ${name}`, { recoverable: false });
 				}
 				toolMap[name] = handler;
 			}
@@ -129,11 +102,7 @@ export class ToolRegistryBuilder {
 		for (const pack of tools) {
 			for (const def of pack.definitions) {
 				if (seenNames.has(def.name)) {
-					throw createAgentError(
-						"tool_duplicate",
-						`Duplicate tool name: ${def.name}`,
-						{ recoverable: false },
-					);
+					throw createAgentError("tool_duplicate", `Duplicate tool name: ${def.name}`, { recoverable: false });
 				}
 				seenNames.add(def.name);
 
@@ -144,12 +113,8 @@ export class ToolRegistryBuilder {
 					// `type`, which real Anthropic-compatible providers reject
 					// ("schema must be of type object, got type null"). Emit the
 					// flat object schema instead.
-					const schemaResult = zodToJsonSchema(
-						def.inputSchema as z.ZodTypeAny,
-					);
-					parameters = isRecord(schemaResult)
-						? schemaResult
-						: { type: "object", properties: {} };
+					const schemaResult = zodToJsonSchema(def.inputSchema as z.ZodTypeAny);
+					parameters = isRecord(schemaResult) ? schemaResult : { type: "object", properties: {} };
 				} else if (isRecord(def.inputSchema)) {
 					parameters = def.inputSchema;
 				} else {
@@ -172,10 +137,7 @@ export class ToolRegistryBuilder {
 
 function isToolResult(value: unknown): value is ToolResult {
 	return (
-		typeof value === "object" &&
-		value !== null &&
-		"content" in value &&
-		Array.isArray((value as ToolResult).content)
+		typeof value === "object" && value !== null && "content" in value && Array.isArray((value as ToolResult).content)
 	);
 }
 
@@ -185,8 +147,6 @@ function isZodSchema(value: unknown): value is z.ZodTypeAny {
 		value !== null &&
 		"_def" in value &&
 		typeof (value as { _def: unknown })._def === "object" &&
-		!!(value as { _def: { typeName?: string } })._def?.typeName?.startsWith(
-			"Zod",
-		)
+		!!(value as { _def: { typeName?: string } })._def?.typeName?.startsWith("Zod")
 	);
 }

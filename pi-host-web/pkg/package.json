@@ -9,7 +9,8 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pi-oxide/pi-oxide"
+    "url": "git+https://github.com/Irvingouj/pi-oxide.git",
+    "directory": "pi-host-web"
   },
   "files": [
     "pi_host_web_bg.wasm",
@@ -20,6 +21,7 @@
     "LICENSE",
     "dist/bindings.d.ts",
     "dist/index-BMpbP3yl.js",
+    "dist/index-BRi2bRQU.js",
     "dist/index-BZHn1T3C.js",
     "dist/index-BcEmg1i6.js",
     "dist/index-Bk5U3XQX.js",

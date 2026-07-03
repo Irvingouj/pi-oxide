@@ -103,13 +103,6 @@ impl Agent {
         let assistant_msg = result.finalize_message();
         let msg = AgentMessage::Assistant(assistant_msg.clone());
 
-        // Push finalized assistant message to T — but never an empty one.
-        // An empty assistant message (no text, no tool calls) is rejected by
-        // the provider next turn; the error/abort path below surfaces it via
-        // events instead of polluting the transcript.
-        if !assistant_msg.is_empty() {
-            t.push(TrimmedMessage::Assistant(assistant_msg.clone()));
-        }
         self.streaming_assistant = None;
 
         events.push(AgentEvent::MessageEnd {
@@ -135,6 +128,13 @@ impl Agent {
             self.phase = Phase::Idle;
             actions.push(AgentAction::Finished);
             return (events, actions, markers, t, a);
+        }
+
+        // Push finalized assistant message to T — but never an empty one.
+        // Failed streams are handled above and must not pollute T with partial
+        // tool calls that have no matching ToolResult in the next provider turn.
+        if !assistant_msg.is_empty() {
+            t.push(TrimmedMessage::Assistant(assistant_msg.clone()));
         }
 
         // Check for tool calls
@@ -195,5 +195,64 @@ impl Agent {
         );
         actions.push(AgentAction::PrepareToolCalls { calls: tool_calls });
         (events, actions, markers, t, a)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::{AgentOptions, Phase};
+    use crate::events::{QueueMode, ThinkingLevel};
+    use crate::llm::{LlmError, Model, ModelCapabilities, ModelCost};
+    use crate::message::{Artifacts, TrimmedMessage, UserMessage};
+    use crate::tool::ExecutionMode;
+
+    fn test_agent() -> Agent {
+        let mut agent = Agent::new(AgentOptions {
+            system_prompt: "test".to_string(),
+            model: Model {
+                id: crate::types::ModelId::new("test"),
+                name: crate::types::ModelName::new("test"),
+                api: crate::types::ApiName::new("test"),
+                provider: crate::types::ProviderName::new("test"),
+                base_url: None,
+                reasoning: false,
+                context_window: 1000,
+                max_tokens: 100,
+                capabilities: ModelCapabilities::default(),
+                cost: ModelCost::default(),
+            },
+            thinking_level: ThinkingLevel::Off,
+            steering_mode: QueueMode::OneAtATime,
+            follow_up_mode: QueueMode::OneAtATime,
+            tool_execution_mode: ExecutionMode::Sequential,
+            session_id: None,
+        });
+        agent.phase = Phase::Streaming;
+        agent
+    }
+
+    #[test]
+    fn failed_llm_turn_does_not_persist_assistant_message() {
+        let mut agent = test_agent();
+        let t = vec![TrimmedMessage::User(UserMessage::new_text("continue"))];
+
+        let (_events, _actions, _markers, t, _a) = agent.on_llm_done(
+            LlmResult::Err {
+                error: LlmError {
+                    code: "stream_error".to_string(),
+                    message: "network error".to_string(),
+                    details: None,
+                },
+                aborted: false,
+            },
+            t,
+            Artifacts::new(),
+            1,
+            &crate::context_projection::ContextProjectionBudget::default(),
+        );
+
+        assert_eq!(t.len(), 1);
+        assert!(matches!(t[0], TrimmedMessage::User(_)));
     }
 }

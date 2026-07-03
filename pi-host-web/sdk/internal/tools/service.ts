@@ -4,18 +4,10 @@
  * Pure JS, no React. Wraps browser tool execution into the SDK ToolMap shape.
  */
 
-import type {
-	ToolCall,
-	ToolDefinition,
-	ToolResult,
-} from "../../../pi_host_web.js";
+import type { ToolCall, ToolDefinition, ToolResult } from "../../../pi_host_web.js";
+import type { ArtifactStore } from "../../bindings/types.ts";
 import { getString } from "../../internal/util/types.ts";
-import type { ArtifactStore } from "../engine.ts";
-import {
-	BROWSER_TOOLS,
-	executeBrowserTool,
-	wrapToolHandler,
-} from "./browser.ts";
+import { BROWSER_TOOLS, executeBrowserTool, wrapToolHandler } from "./browser.ts";
 import type { BrowserRuntime } from "./browserRuntime.ts";
 
 // ========================================================================
@@ -72,26 +64,17 @@ const ARTIFACT_SEARCH: ToolDefinition = {
 };
 
 /** All artifact tools exposed by the host. */
-export const ARTIFACT_TOOLS: ToolDefinition[] = [
-	ARTIFACT_READ,
-	ARTIFACT_SEARCH,
-];
+export const ARTIFACT_TOOLS: ToolDefinition[] = [ARTIFACT_READ, ARTIFACT_SEARCH];
 
 // ========================================================================
 // Tool registry
 // ========================================================================
 
-export type ToolMap = Record<
-	string,
-	(call: ToolCall) => Promise<ToolResult> | ToolResult
->;
+export type ToolMap = Record<string, (call: ToolCall) => Promise<ToolResult> | ToolResult>;
 
 export function createToolRegistry(runtime: BrowserRuntime): ToolMap {
 	return Object.fromEntries(
-		BROWSER_TOOLS.map((t) => [
-			t.name,
-			wrapToolHandler((call: ToolCall) => executeBrowserTool(call, runtime)),
-		]),
+		BROWSER_TOOLS.map((t) => [t.name, wrapToolHandler((call: ToolCall) => executeBrowserTool(call, runtime))]),
 	);
 }
 

@@ -31,6 +31,12 @@ struct Cli {
     /// API base URL (supports Anthropic-compatible endpoints)
     #[arg(long, env = "PI_BASE_URL")]
     base_url: Option<String>,
+    /// Provider family: anthropic, openai, deepseek, deepseek-anthropic, openai-compat, anthropic-compat
+    #[arg(long, env = "PI_PROVIDER", default_value = "anthropic")]
+    provider: String,
+    /// API key (fallback; provider-specific env vars take precedence)
+    #[arg(long, env = "PI_API_KEY")]
+    api_key: Option<String>,
     /// System prompt
     #[arg(long, default_value = "You are a helpful coding assistant.")]
     system: String,
@@ -50,10 +56,51 @@ struct Cli {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
-    let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
+
+    // Resolve wire format from provider
+    let wire_format = match cli.provider.as_str() {
+        "anthropic" | "anthropic-compat" | "deepseek-anthropic" => {
+            crate::llm::WireFormat::Anthropic
+        }
+        "openai" | "openai-compat" | "deepseek" => crate::llm::WireFormat::OpenAI,
+        other => {
+            eprintln!("Unknown provider: {other}. Supported: anthropic, openai, deepseek, deepseek-anthropic, openai-compat, anthropic-compat");
+            std::process::exit(1);
+        }
+    };
+
+    // Resolve API key: provider-specific env var first, then --api-key / PI_API_KEY
+    let api_key = match cli.provider.as_str() {
+        "anthropic" | "anthropic-compat" => std::env::var("ANTHROPIC_API_KEY")
+            .ok()
+            .or_else(|| cli.api_key.clone())
+            .unwrap_or_default(),
+        "openai" | "openai-compat" => std::env::var("OPENAI_API_KEY")
+            .ok()
+            .or_else(|| cli.api_key.clone())
+            .unwrap_or_default(),
+        "deepseek" | "deepseek-anthropic" => std::env::var("DEEPSEEK_API_KEY")
+            .ok()
+            .or_else(|| cli.api_key.clone())
+            .unwrap_or_default(),
+        _ => cli.api_key.clone().unwrap_or_default(),
+    };
+
+    // Resolve base URL from provider
     let base_url = cli
         .base_url
-        .unwrap_or_else(|| "https://api.anthropic.com".into());
+        .clone()
+        .unwrap_or_else(|| match cli.provider.as_str() {
+            "anthropic" => "https://api.anthropic.com".into(),
+            "openai" => "https://api.openai.com".into(),
+            "deepseek" => "https://api.deepseek.com".into(),
+            "deepseek-anthropic" => "https://api.deepseek.com/anthropic".into(),
+            "openai-compat" | "anthropic-compat" => {
+                eprintln!("{} requires --base-url", cli.provider);
+                std::process::exit(1);
+            }
+            _ => "https://api.anthropic.com".into(),
+        });
 
     let session_backend = session::FileSystemSessionBackend::new();
     let mut host_state = None;
@@ -75,6 +122,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cli.session_id,
         host_state,
         &cwd,
+        wire_format,
+        &cli.provider,
         #[cfg(feature = "record")]
         cli.record_to,
         #[cfg(feature = "replay")]

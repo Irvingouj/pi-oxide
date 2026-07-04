@@ -16,9 +16,9 @@ use pi_core::{
 
 use crate::extension::{BashExtension, BuiltinExtension, Extension};
 use crate::host_state::{HostDirective, HostState};
-use crate::llm::LlmClient;
 #[allow(unused_imports)]
 use crate::llm::LlmProvider;
+use crate::llm::{LlmClient, WireFormat};
 use crate::session::FileSystemSessionBackend;
 
 // ---------------------------------------------------------------------------
@@ -129,14 +129,16 @@ impl App {
         session_id: Option<String>,
         host_state: Option<HostState>,
         cwd: &Path,
+        wire_format: WireFormat,
+        provider: &str,
         #[cfg(feature = "record")] record_to: Option<std::path::PathBuf>,
         #[cfg(feature = "replay")] replay_from: Option<std::path::PathBuf>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let model = Model {
             id: ModelId::new(model_id),
             name: ModelName::new(model_id),
-            api: ApiName::new("anthropic"),
-            provider: ProviderName::new("anthropic"),
+            api: ApiName::new(provider),
+            provider: ProviderName::new(provider),
             base_url: Some(base_url.to_string()),
             reasoning: false,
             context_window: 200_000,
@@ -167,6 +169,7 @@ impl App {
             api_key,
             base_url,
             model_id,
+            wire_format,
             #[cfg(feature = "record")]
             record_to,
             #[cfg(feature = "replay")]
@@ -178,7 +181,7 @@ impl App {
         )];
         if api_key.is_empty() {
             init_entries.push(ChatEntry::System(
-                "Warning: ANTHROPIC_API_KEY not set. LLM calls will fail.".into(),
+                "Warning: API key not set. LLM calls will fail.".into(),
             ));
         }
         if session_id.is_some() {
@@ -226,12 +229,13 @@ impl App {
         api_key: &str,
         base_url: &str,
         model_id: &str,
+        wire_format: WireFormat,
         #[cfg(feature = "record")] record_to: Option<std::path::PathBuf>,
         #[cfg(feature = "replay")] replay_from: Option<std::path::PathBuf>,
     ) -> Result<crate::llm::LlmBackend, Box<dyn std::error::Error>> {
         #[cfg(not(any(feature = "record", feature = "replay")))]
         {
-            Ok(LlmClient::new(api_key, base_url, model_id))
+            Ok(LlmClient::new(api_key, base_url, model_id, wire_format))
         }
         #[cfg(feature = "record")]
         {
@@ -239,6 +243,7 @@ impl App {
                 api_key,
                 base_url,
                 model_id,
+                wire_format,
                 record_to.unwrap_or_else(|| std::path::PathBuf::from("cassette.json")),
             ))
         }

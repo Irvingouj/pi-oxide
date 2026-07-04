@@ -50,6 +50,7 @@ mod tests {
             &api_key,
             "https://api.fireworks.ai/inference",
             "accounts/fireworks/routers/kimi-k2p6-turbo",
+            crate::llm::WireFormat::Anthropic,
         );
 
         let options = AgentOptions {
@@ -360,5 +361,102 @@ mod tests {
 
         // Suppress unused warnings at end of test
         let _ = runtime; // Option<AgentRuntime>
+    }
+
+    #[test]
+    fn smoke_deepseek_openai_wire_format() {
+        let api_key = std::env::var("DEEPSEEK_API_KEY").unwrap_or_default();
+        if api_key.is_empty() {
+            eprintln!("SKIP: no DEEPSEEK_API_KEY set");
+            return;
+        }
+
+        let llm_client = LlmClient::new(
+            &api_key,
+            "https://api.deepseek.com",
+            "deepseek-chat",
+            crate::llm::WireFormat::OpenAI,
+        );
+
+        let chunks: Vec<_> = llm_client
+            .stream_sync(
+                "You are a helpful assistant.",
+                &[pi_core::AgentMessage::user(
+                    "Say exactly 'wire format works' and nothing else",
+                )],
+                &[],
+            )
+            .expect("stream_sync should succeed")
+            .collect();
+
+        let text_deltas: Vec<_> = chunks
+            .iter()
+            .filter_map(|c| match c {
+                pi_core::LlmChunk::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        let full_text: String = text_deltas.concat();
+        println!("DeepSeek response: {full_text}");
+
+        assert!(
+            full_text.contains("wire format works"),
+            "Expected 'wire format works' in response, got: {full_text}"
+        );
+
+        // Verify we got a Done chunk
+        assert!(
+            chunks.iter().any(|c| matches!(c, pi_core::LlmChunk::Done)),
+            "Expected Done chunk"
+        );
+    }
+
+    #[test]
+    fn smoke_deepseek_anthropic_wire_format() {
+        let api_key = std::env::var("DEEPSEEK_API_KEY").unwrap_or_default();
+        if api_key.is_empty() {
+            eprintln!("SKIP: no DEEPSEEK_API_KEY set");
+            return;
+        }
+
+        let llm_client = LlmClient::new(
+            &api_key,
+            "https://api.deepseek.com/anthropic",
+            "claude-sonnet", // DeepSeek maps claude-* to its models
+            crate::llm::WireFormat::Anthropic,
+        );
+
+        let chunks: Vec<_> = llm_client
+            .stream_sync(
+                "You are a helpful assistant.",
+                &[pi_core::AgentMessage::user(
+                    "Say exactly 'anthropic wire works' and nothing else",
+                )],
+                &[],
+            )
+            .expect("stream_sync should succeed")
+            .collect();
+
+        let text_deltas: Vec<_> = chunks
+            .iter()
+            .filter_map(|c| match c {
+                pi_core::LlmChunk::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        let full_text: String = text_deltas.concat();
+        println!("DeepSeek Anthropic response: {full_text}");
+
+        assert!(
+            full_text.contains("anthropic wire works"),
+            "Expected 'anthropic wire works' in response, got: {full_text}"
+        );
+
+        assert!(
+            chunks.iter().any(|c| matches!(c, pi_core::LlmChunk::Done)),
+            "Expected Done chunk"
+        );
     }
 }

@@ -16,10 +16,16 @@ pub struct RecordingLlmClient {
 }
 
 impl RecordingLlmClient {
-    pub fn new(api_key: &str, base_url: &str, model: &str, output_path: PathBuf) -> Self {
+    pub fn new(
+        api_key: &str,
+        base_url: &str,
+        model: &str,
+        wire_format: crate::llm::WireFormat,
+        output_path: PathBuf,
+    ) -> Self {
         info!(path = %output_path.display(), "LLM recording enabled");
         Self {
-            inner: LlmClient::new(api_key, base_url, model),
+            inner: LlmClient::new(api_key, base_url, model, wire_format),
             cassette: Arc::new(Mutex::new(Cassette {
                 version: 1,
                 model: model.to_string(),

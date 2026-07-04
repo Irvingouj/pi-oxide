@@ -1,6 +1,36 @@
-# CLAUDE.md
+# AGENTS.md
 
 Project and behavioral guidelines for agents working in this repository.
+
+## What This Repo Is
+
+`pi-oxide` is a Rust-first agent framework where the core state machine is
+runtime-free and hosts own side effects.
+
+Current shape:
+- `pi-core`: synchronous, runtime-free agent state machine, context projection,
+  queueing, and tool-routing policy.
+- `pi-llm`: typed LLM provider protocol definitions, not network execution.
+- `pi-host-web`: WASM/browser host for fetch, events, storage, and JS bindings.
+- `pi-host-tui`: terminal host for local interactive use.
+- `web` and `pkg`: generated/package surfaces for browser-facing consumers.
+
+Core invariant: Rust owns portable agent decisions and typed domain contracts.
+Hosts own HTTP, filesystem, browser APIs, UI, shell execution, and other side
+effects. The boundary is typed messages, not raw JSON bags.
+
+Do not duplicate canonical types in this file. Source Rust types are the truth.
+
+## Priority Order
+
+The top three principles are:
+
+1. Readability.
+2. Maintainability.
+3. Correctness.
+
+Never sacrifice these for speed or speculative flexibility. Performance work is
+valid only after the readable, maintainable, correct design is clear.
 
 ## Project Boundaries
 
@@ -45,6 +75,21 @@ Project and behavioral guidelines for agents working in this repository.
    - Keep the core state machine readable.
    - If a change makes the control flow hard to reason about, simplify before moving on.
 
+## Type Safety Rules
+
+- Rust: avoid manual parsing of raw values. Use serde, serde-wasm-bindgen,
+  wasm-bindgen, or another declarative typed boundary.
+- Do not walk `serde_json::Value`, `JsValue`, maps, or strings by hand when a
+  derived struct/enum can express the shape.
+- Raw values are allowed only at the host boundary. Narrow them immediately into
+  concrete domain types before entering core logic.
+- TypeScript: never use `any`. Every `unknown`, `Object`, or
+  `Record<string, string>` must be justified by a short comment and narrowed at
+  the boundary.
+- TypeScript external data must be parsed with zod, not hand-rolled shape
+  checks.
+- Prefer exhaustive enums/discriminated unions for closed state.
+
 ## 1. Think Before Coding
 
 Don't assume. Don't hide confusion. Surface tradeoffs.
@@ -86,6 +131,12 @@ The test: Every changed line should trace directly to the user's request.
 ## 4. Goal-Driven Execution
 
 Define success criteria. Loop until verified.
+
+TDD is the default for non-trivial work:
+- Write one public-behavior test that fails.
+- Write the smallest implementation that passes it.
+- Repeat in vertical slices.
+- Refactor only while green.
 
 Transform tasks into verifiable goals:
 - "Add validation" -> "Write tests for invalid inputs, then make them pass"

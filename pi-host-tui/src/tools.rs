@@ -2,6 +2,7 @@
 //!
 //! Four tools: bash, read, write, edit — the minimum viable coding agent.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use pi_core::{
@@ -86,6 +87,46 @@ pub fn definitions() -> Vec<ToolDefinition> {
             execution_mode: ExecutionMode::Sequential,
             tool_run_mode: ToolRunMode::Immediate,
         },
+        ToolDefinition {
+            name: ToolName::new("grep"),
+            label: "Grep Files".into(),
+            description: "Search files using regex patterns. Respects .gitignore.".into(),
+            parameters: JsonSchema::new(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regex pattern to search for"
+                    },
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Files, directories, or globs to search. Defaults to workspace root if omitted."
+                    }
+                },
+                "required": ["pattern"]
+            })),
+            execution_mode: ExecutionMode::Parallel,
+            tool_run_mode: ToolRunMode::Immediate,
+        },
+        ToolDefinition {
+            name: ToolName::new("glob"),
+            label: "Glob Files".into(),
+            description: "Find files matching glob patterns (e.g. src/**/*.ts). Respects .gitignore.".into(),
+            parameters: JsonSchema::new(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Glob patterns to match"
+                    }
+                },
+                "required": ["paths"]
+            })),
+            execution_mode: ExecutionMode::Parallel,
+            tool_run_mode: ToolRunMode::Immediate,
+        },
     ]
 }
 
@@ -106,6 +147,8 @@ pub fn execute(call: &ToolCall, cwd: &Path) -> Result<pi_core::ToolResult, ToolE
         "read" => exec_read(&call.arguments, cwd),
         "write" => exec_write(&call.arguments, cwd),
         "edit" => exec_edit(&call.arguments, cwd),
+        "grep" => exec_grep(&call.arguments, cwd),
+        "glob" => exec_glob(&call.arguments, cwd),
         name => Err(ToolError::new(
             "unknown_tool",
             format!("Unknown tool: {name}"),
@@ -231,195 +274,171 @@ fn exec_edit(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, To
     Ok(pi_core::ToolResult::text(format!("Edited {resolved_str}")))
 }
 
-// --- Tests ---
+fn exec_grep(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, ToolError> {
+    let pattern = get_str(args, "pattern")?;
+    let re = regex::Regex::new(pattern)
+        .map_err(|e| ToolError::new("invalid_regex", format!("Invalid regex: {e}")))?;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pi_core::{Content, ToolCallId};
+    let paths: Vec<String> = args.0
+        .get("paths")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_else(|| vec![".".to_string()]);
 
-    fn make_call(name: &str, args: serde_json::Value) -> ToolCall {
-        ToolCall {
-            id: ToolCallId::new("test-id"),
-            name: ToolName::new(name),
-            arguments: ToolArguments::new(args),
+    let mut results: Vec<(String, u64, String)> = Vec::new();
+
+    for path_str in &paths {
+        let path = resolve_path(path_str, cwd);
+
+        if path.is_dir() {
+            let walker = ignore::WalkBuilder::new(&path)
+                .standard_filters(true)
+                .hidden(false)
+                .build();
+
+            for entry in walker {
+                let entry = entry.map_err(|e| ToolError::new("walk_error", format!("{e}")))?;
+                let file_path = entry.path();
+
+                if !file_path.is_file() {
+                    continue;
+                }
+
+                if is_binary(file_path) {
+                    continue;
+                }
+
+                match std::fs::read_to_string(file_path) {
+                    Ok(content) => {
+                        for (line_idx, line) in content.lines().enumerate() {
+                            if re.is_match(line) {
+                                let rel_path = file_path.strip_prefix(cwd)
+                                    .unwrap_or(file_path)
+                                    .to_string_lossy()
+                                    .to_string();
+                                results.push((rel_path, (line_idx + 1) as u64, line.to_string()));
+                            }
+                        }
+                    }
+                    Err(_) => { /* skip unreadable files */ }
+                }
+            }
+        } else if path.is_file() {
+            if is_binary(&path) {
+                continue;
+            }
+            match std::fs::read_to_string(&path) {
+                Ok(content) => {
+                    let rel_path = path.strip_prefix(cwd)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .to_string();
+                    for (line_idx, line) in content.lines().enumerate() {
+                        if re.is_match(line) {
+                            results.push((rel_path.clone(), (line_idx + 1) as u64, line.to_string()));
+                        }
+                    }
+                }
+                Err(_) => { /* skip unreadable files */ }
+            }
         }
     }
 
-    #[test]
-    fn test_bash_echo() {
-        let call = make_call("bash", serde_json::json!({"command": "echo hello world"}));
-        let result = execute(&call, Path::new(".")).unwrap();
-        let text = result
-            .content
-            .iter()
-            .filter_map(|c| {
-                if let Content::Text(t) = c {
-                    Some(t.text.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("");
-        assert!(text.contains("hello world"));
+    let mut output = String::new();
+    let mut current_file: Option<String> = None;
+
+    for (file, line_num, line) in &results {
+        if current_file.as_deref() != Some(file.as_str()) {
+            current_file = Some(file.clone());
+            output.push_str(&format!("[{file}]\n"));
+        }
+        output.push_str(&format!("*{line_num}:{line}\n"));
     }
 
-    #[test]
-    fn test_bash_failure() {
-        let call = make_call("bash", serde_json::json!({"command": "exit 42"}));
-        let result = execute(&call, Path::new(".")).unwrap();
-        let text = result
-            .content
-            .iter()
-            .filter_map(|c| {
-                if let Content::Text(t) = c {
-                    Some(t.text.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("");
-        assert!(text.contains("exit code: 42"));
+    if results.is_empty() {
+        return Ok(pi_core::ToolResult::text("No matches found."));
     }
 
-    #[test]
-    fn test_read_write() {
-        let dir = std::env::temp_dir().join("pi-test-tools");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("test.txt");
-        let path_str = path.to_str().unwrap();
+    let file_count = results.iter().map(|(f, _, _)| f).collect::<std::collections::HashSet<_>>().len();
+    Ok(pi_core::ToolResult::text(format!(
+        "Found {} match{} in {} file{}:\n{}",
+        results.len(),
+        if results.len() == 1 { "" } else { "es" },
+        file_count,
+        if file_count == 1 { "" } else { "s" },
+        output
+    )))
+}
 
-        // Write
-        let write_call = make_call(
-            "write",
-            serde_json::json!({
-                "path": path_str,
-                "content": "line 1\nline 2\nline 3\n"
-            }),
-        );
-        execute(&write_call, Path::new(".")).unwrap();
+fn exec_glob(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, ToolError> {
+    let patterns: Vec<String> = args.0
+        .get("paths")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .ok_or_else(|| ToolError::new("missing_param", "Missing parameter: paths"))?;
 
-        // Read all
-        let read_call = make_call("read", serde_json::json!({"path": path_str}));
-        let result = execute(&read_call, Path::new(".")).unwrap();
-        let text = result
-            .content
-            .iter()
-            .filter_map(|c| {
-                if let Content::Text(t) = c {
-                    Some(t.text.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("");
-        assert!(text.contains("line 1"));
-        assert!(text.contains("line 3"));
-
-        // Read with offset/limit
-        let read_partial = make_call(
-            "read",
-            serde_json::json!({
-                "path": path_str,
-                "offset": 1,
-                "limit": 1
-            }),
-        );
-        let result = execute(&read_partial, Path::new(".")).unwrap();
-        let text = result
-            .content
-            .iter()
-            .filter_map(|c| {
-                if let Content::Text(t) = c {
-                    Some(t.text.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("");
-        assert!(text.contains("line 2"));
-        assert!(!text.contains("line 1"));
-
-        // Cleanup
-        std::fs::remove_dir_all(&dir).ok();
+    if patterns.is_empty() {
+        return Err(ToolError::new("invalid_param", "paths array must not be empty"));
     }
 
-    #[test]
-    fn test_edit() {
-        let dir = std::env::temp_dir().join("pi-test-edit");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("edit.txt");
-        std::fs::write(&path, "hello world\nfoo bar\n").unwrap();
-        let path_str = path.to_str().unwrap();
+    let mut builder = globset::GlobSetBuilder::new();
+    for pattern in &patterns {
+        let g = globset::Glob::new(pattern).map_err(|e| {
+            ToolError::new("invalid_glob", format!("Invalid glob pattern: {e}"))
+        })?;
+        builder.add(g);
+    }
+    let glob_set = builder.build().map_err(|e| {
+        ToolError::new("glob_build_error", format!("{e}"))
+    })?;
 
-        let edit_call = make_call(
-            "edit",
-            serde_json::json!({
-                "path": path_str,
-                "old_string": "hello world",
-                "new_string": "hello rust"
-            }),
-        );
-        execute(&edit_call, Path::new(".")).unwrap();
+    let mut results: Vec<String> = Vec::new();
 
-        let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("hello rust"));
-        assert!(!content.contains("hello world"));
-        assert!(content.contains("foo bar"));
+    let walker = ignore::WalkBuilder::new(cwd)
+        .standard_filters(true)
+        .hidden(false)
+        .build();
 
-        std::fs::remove_dir_all(&dir).ok();
+    for entry in walker {
+        let entry = entry.map_err(|e| ToolError::new("walk_error", format!("{e}")))?;
+        let path = entry.path();
+
+        let rel_path = path.strip_prefix(cwd)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+
+        if glob_set.is_match(&rel_path) {
+            results.push(rel_path);
+        }
     }
 
-    #[test]
-    fn test_edit_not_found() {
-        let dir = std::env::temp_dir().join("pi-test-edit-nf");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("nf.txt");
-        std::fs::write(&path, "abc\n").unwrap();
+    results.sort();
+    results.dedup();
 
-        let call = make_call(
-            "edit",
-            serde_json::json!({
-                "path": path.to_str().unwrap(),
-                "old_string": "xyz",
-                "new_string": "123"
-            }),
-        );
-        let err = execute(&call, Path::new(".")).unwrap_err();
-        assert_eq!(err.code, "not_found");
-
-        std::fs::remove_dir_all(&dir).ok();
+    if results.is_empty() {
+        return Ok(pi_core::ToolResult::text("No matches found."));
     }
 
-    #[test]
-    fn test_edit_ambiguous() {
-        let dir = std::env::temp_dir().join("pi-test-edit-amb");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("amb.txt");
-        std::fs::write(&path, "abc abc\n").unwrap();
+    Ok(pi_core::ToolResult::text(format!(
+        "Found {} match{}:\n{}",
+        results.len(),
+        if results.len() == 1 { "" } else { "es" },
+        results.join("\n")
+    )))
+}
 
-        let call = make_call(
-            "edit",
-            serde_json::json!({
-                "path": path.to_str().unwrap(),
-                "old_string": "abc",
-                "new_string": "xyz"
-            }),
-        );
-        let err = execute(&call, Path::new(".")).unwrap_err();
-        assert_eq!(err.code, "ambiguous");
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn test_unknown_tool() {
-        let call = make_call("fly", serde_json::json!({}));
-        let err = execute(&call, Path::new(".")).unwrap_err();
-        assert_eq!(err.code, "unknown_tool");
+fn is_binary(path: &Path) -> bool {
+    // Only read first 8KB to detect binary - avoid loading whole file into memory
+    match std::fs::File::open(path) {
+        Ok(f) => {
+            let mut reader = std::io::BufReader::with_capacity(8192, f);
+            let mut buf = [0u8; 8192];
+            match reader.read(&mut buf) {
+                Ok(n) => buf[..n].contains(&0),
+                Err(_) => true,
+            }
+        }
+        Err(_) => true,
     }
 }

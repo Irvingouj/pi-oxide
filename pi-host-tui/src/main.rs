@@ -16,6 +16,8 @@ mod markdown;
 mod session;
 mod smoke_test;
 mod tools;
+#[cfg(test)]
+mod tools_test;
 mod tui;
 
 #[cfg(test)]

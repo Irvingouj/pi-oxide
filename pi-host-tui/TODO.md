@@ -7,7 +7,7 @@ Gap analysis vs `../pi` (TypeScript reference) and `../claude-code` (industry re
 1. **More model providers** — ~~Anthropic-only is a hard ceiling.~~ OpenAI, Google, and local models at minimum. `pi` has 10+ providers with OAuth; claude-code supports all major providers. **DONE: OpenAI + Anthropic wire formats implemented (Anthropic, OpenAI, DeepSeek, DeepSeek Anthropic, OpenAI-compat, Anthropic-compat). Remaining: Google, local models.**
 2. **grep/find/glob tools** — Cannot search codebases without them. Both `pi` (7 tools) and claude-code (~40 tools) include these. **DONE: grep + glob implemented with gitignore awareness. pi-oxide now has 6 tools (bash/read/write/edit/grep/glob).**
 3. **Session tree (fork/branch/resume)** — Cannot explore alternatives or recover from bad paths. `pi` has JSONL-based session trees with branching and forking; claude-code has full session lifecycle management.
-4. **Virtual scrolling** — Long sessions become unusable without it. ratatui does full-screen redraws. claude-code uses viewport + overscan rendering; `pi` uses differential rendering (better but still not virtual).
+4. **Virtual scrolling** — Long sessions become unusable without it. ratatui does full-screen redraws. claude-code uses viewport + overscan rendering; `pi` uses differential rendering (better but still not virtual). **DONE: Two-pass virtual scroll with pure scroll helpers (derive_scroll_intent, apply_scroll, compute_scroll, visible_range), E2E tests via TestBackend, partial-entry overlap handling, and tracing.**
 
 ## Should-Have (serious UX deficit)
 

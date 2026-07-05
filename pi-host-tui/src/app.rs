@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Text;
 use ratatui::widgets::ListState;
 use ratatui::Frame;
@@ -58,6 +58,145 @@ pub(crate) enum ChatEntry {
     System(String),
 }
 
+fn _wrapped_lines(text: &str, width: usize) -> usize {
+    if text.is_empty() {
+        return 1;
+    }
+    let display_len = text.chars().count();
+    (display_len.saturating_add(width.saturating_sub(1))) / width
+}
+
+impl ChatEntry {
+    /// Approximate wrapped line count at the given width.
+    pub(crate) fn line_count(&self, width: usize) -> u16 {
+        match self {
+            ChatEntry::User(text) => {
+                let mut count: u16 = 2; // header "You: " + blank
+                for line in text.lines() {
+                    count += _wrapped_lines(line, width) as u16;
+                }
+                count
+            }
+            ChatEntry::Assistant(text) => {
+                let mut count: u16 = 0;
+                for line in &text.lines {
+                    let s: String = line.spans.iter().map(|s| (*s.content).to_string()).collect();
+                    count += _wrapped_lines(&s, width).max(1) as u16;
+                }
+                count + 1 // blank
+            }
+            ChatEntry::ToolStart { name, args_summary } => {
+                let full = format!(" ┌─ {} {}", name, args_summary);
+                _wrapped_lines(&full, width) as u16
+            }
+            ChatEntry::ToolResult { output, is_error, .. } => {
+                let mut count: u16 = 0;
+                for line in output.lines() {
+                    let full = format!("{}{}", if *is_error { " ┃ " } else { " │ " }, line);
+                    count += _wrapped_lines(&full, width) as u16;
+                }
+                count + 2 // footer + blank
+            }
+            ChatEntry::System(text) => {
+                let full = format!("  {}", text);
+                _wrapped_lines(&full, width) as u16 + 1 // + blank
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scroll key handling
+// ---------------------------------------------------------------------------
+
+/// Scroll intent derived from a keypress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScrollIntent {
+    Up,       // one row
+    Down,     // one row
+    PageUp,   // one viewport
+    PageDown, // one viewport
+    Top,      // to start
+    Bottom,   // to end / re-arm auto_scroll
+}
+
+/// Map a `KeyEvent` to a `ScrollIntent`. Returns `None` when the key is not
+/// a scroll key.
+pub(crate) fn derive_scroll_intent(key: &KeyEvent) -> Option<ScrollIntent> {
+    match key.code {
+        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => Some(ScrollIntent::Up),
+        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => Some(ScrollIntent::Down),
+        KeyCode::PageUp => Some(ScrollIntent::PageUp),
+        KeyCode::PageDown => Some(ScrollIntent::PageDown),
+        KeyCode::Home => Some(ScrollIntent::Top),
+        KeyCode::End => Some(ScrollIntent::Bottom),
+        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(ScrollIntent::PageUp),
+        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(ScrollIntent::PageDown),
+        _ => None,
+    }
+}
+
+/// Pure state transition. Returns the new `(scroll_offset, auto_scroll)`.
+pub(crate) fn apply_scroll(
+    intent: ScrollIntent,
+    total_lines: u16,
+    visible: u16,
+    scroll_offset: u16,
+    auto_scroll: bool,
+) -> (u16, bool) {
+    // Everything fits — no scrolling needed
+    if total_lines <= visible {
+        let (off, auto) = match intent {
+            ScrollIntent::Bottom => (scroll_offset, true),
+            _ => (scroll_offset, auto_scroll),
+        };
+        tracing::debug!(?intent, total_lines, visible, scroll_offset, auto_scroll, offset = off, auto_scroll = auto, "apply_scroll: fits");
+        return (off, auto);
+    }
+
+    let max_offset = total_lines - visible;
+
+    let (off, auto) = match intent {
+        ScrollIntent::Up => {
+            if auto_scroll {
+                (max_offset.saturating_sub(1), false)
+            } else {
+                (scroll_offset.saturating_sub(1), false)
+            }
+        }
+        ScrollIntent::Down => {
+            if auto_scroll {
+                (scroll_offset, true)
+            } else {
+                let new_offset = (scroll_offset + 1).min(max_offset);
+                if new_offset >= max_offset { (max_offset, true) }
+                else { (new_offset, false) }
+            }
+        }
+        ScrollIntent::PageUp => {
+            if auto_scroll {
+                (max_offset.saturating_sub(visible), false)
+            } else {
+                (scroll_offset.saturating_sub(visible), false)
+            }
+        }
+        ScrollIntent::PageDown => {
+            if auto_scroll {
+                (scroll_offset, true)
+            } else {
+                let new_offset = (scroll_offset + visible).min(max_offset);
+                if new_offset >= max_offset { (max_offset, true) }
+                else { (new_offset, false) }
+            }
+        }
+        ScrollIntent::Top => (0, false),
+        ScrollIntent::Bottom => (scroll_offset, true),
+    };
+
+    tracing::debug!(?intent, total_lines, visible, scroll_offset, auto_scroll, offset = off, auto_scroll = auto, "apply_scroll");
+    (off, auto)
+}
+
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
@@ -104,6 +243,8 @@ pub struct App {
     pub(crate) artifacts: Artifacts,
     pub(crate) turn_number: u32,
     pub(crate) budget: ContextProjectionBudget,
+    /// Cached chat area from the last render frame.
+    pub(crate) last_chat_area: Rect,
 }
 
 pub(crate) struct RunningTask {
@@ -221,6 +362,7 @@ impl App {
             artifacts: Artifacts::new(),
             turn_number: 0,
             budget: ContextProjectionBudget::default(),
+            last_chat_area: ratatui::layout::Rect::ZERO,
         })
     }
 
@@ -272,8 +414,10 @@ impl App {
             if crossterm::event::poll(Duration::from_millis(33))? {
                 let event = crossterm::event::read()?;
                 if let crossterm::event::Event::Key(key) = event {
-                    if key.kind == KeyEventKind::Press {
-                        self.handle_key(terminal, key);
+                    if key.kind == KeyEventKind::Press
+                        && !self.handle_key(key)
+                    {
+                        self.handle_terminal_key(terminal, key);
                     }
                 }
             }
@@ -290,13 +434,24 @@ impl App {
         Ok(())
     }
 
-    fn handle_key(&mut self, terminal: &mut ratatui::DefaultTerminal, key: KeyEvent) {
+    /// Handle keys that don't need the terminal. Returns `true` if the key was consumed.
+    pub(crate) fn handle_key(&mut self, key: KeyEvent) -> bool {
         // Ctrl+C: cancel running LLM
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             if self.running {
                 self.cancelled = true;
             }
-            return;
+            return true;
+        }
+
+        // Scroll keys — handled before the main match
+        if let Some(intent) = derive_scroll_intent(&key) {
+            let visible = self.last_chat_area.height.saturating_sub(2);
+            let total_lines = self.wrapped_line_count(self.last_chat_area.width as usize);
+            let (off, auto) = apply_scroll(intent, total_lines, visible, self.scroll_offset, self.auto_scroll);
+            self.scroll_offset = off;
+            self.auto_scroll = auto;
+            return true;
         }
 
         match key.code {
@@ -307,17 +462,15 @@ impl App {
                             self.input = cmd;
                             self.cursor_pos = self.input.len();
                             self.show_suggestions = false;
-                            return;
+                            return true;
                         }
                     }
                 }
                 if !self.running && !self.input.trim().is_empty() {
-                    let text = self.input.clone();
-                    self.input.clear();
-                    self.cursor_pos = 0;
-                    self.show_suggestions = false;
-                    self.submit_prompt(terminal, &text);
+                    // Defer to handle_terminal_key for submit (needs terminal)
+                    return false;
                 }
+                true
             }
             KeyCode::Tab => {
                 if self.input.starts_with('/') {
@@ -325,6 +478,7 @@ impl App {
                 } else if self.show_suggestions {
                     self.suggestion_state.select_next();
                 }
+                true
             }
             KeyCode::Up => {
                 if self.show_suggestions {
@@ -332,6 +486,7 @@ impl App {
                 } else {
                     self.history_recall_previous();
                 }
+                true
             }
             KeyCode::Down => {
                 if self.show_suggestions {
@@ -339,15 +494,11 @@ impl App {
                 } else {
                     self.history_recall_next();
                 }
+                true
             }
-            KeyCode::Char(c) => {
-                self.input.insert(self.cursor_pos, c);
-                self.cursor_pos += c.len_utf8();
-                if self.show_suggestions && !self.input.starts_with('/') {
-                    self.show_suggestions = false;
-                } else if self.input.starts_with('/') {
-                    self.update_suggestions();
-                }
+            KeyCode::Char(_) => {
+                // Handled below
+                false
             }
             KeyCode::Backspace => {
                 if self.cursor_pos > 0 {
@@ -364,6 +515,7 @@ impl App {
                 } else {
                     self.update_suggestions();
                 }
+                true
             }
             KeyCode::Left => {
                 if self.cursor_pos > 0 {
@@ -375,6 +527,7 @@ impl App {
                         .map(|(i, _)| i)
                         .unwrap_or(0);
                 }
+                true
             }
             KeyCode::Right => {
                 if self.cursor_pos < self.input.len() {
@@ -384,12 +537,39 @@ impl App {
                         .map(|c| self.cursor_pos + c.len_utf8())
                         .unwrap_or(self.input.len());
                 }
+                true
             }
             KeyCode::Esc => {
                 if self.show_suggestions {
                     self.show_suggestions = false;
                 } else {
                     self.should_quit = true;
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Handle keys that need the terminal (submit_prompt).
+    fn handle_terminal_key(&mut self, terminal: &mut ratatui::DefaultTerminal, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                if !self.running && !self.input.trim().is_empty() {
+                    let text = self.input.clone();
+                    self.input.clear();
+                    self.cursor_pos = 0;
+                    self.show_suggestions = false;
+                    self.submit_prompt(terminal, &text);
+                }
+            }
+            KeyCode::Char(c) => {
+                self.input.insert(self.cursor_pos, c);
+                self.cursor_pos += c.len_utf8();
+                if self.show_suggestions && !self.input.starts_with('/') {
+                    self.show_suggestions = false;
+                } else if self.input.starts_with('/') {
+                    self.update_suggestions();
                 }
             }
             _ => {}
@@ -973,8 +1153,347 @@ impl App {
         ])
         .areas(frame.area());
 
+        self.last_chat_area = chat_area;
         self.render_chat(frame, chat_area);
         self.render_input(frame, input_area);
         self.render_status(frame, status_area);
+    }
+}
+
+#[cfg(test)]
+impl App {
+    /// Build a minimal App for render/scroll E2E tests — no agent, no tools, dummy LLM.
+    fn with_entries_for_test(entries: Vec<ChatEntry>) -> Self {
+        Self {
+            agent: None,
+            entries,
+            input: String::new(),
+            cursor_pos: 0,
+            scroll_offset: 0,
+            auto_scroll: true,
+            should_quit: false,
+            running: false,
+            streaming_text: String::new(),
+            current_tools: Vec::new(),
+            tool_definitions: Vec::new(),
+            llm_client: LlmClient::new("x", "x", "test", WireFormat::OpenAI),
+            host_state: None,
+            last_usage: None,
+            session_id: None,
+            session_backend: FileSystemSessionBackend::new(),
+            cwd: std::path::PathBuf::from("."),
+            cancelled: false,
+            history: Vec::new(),
+            history_index: None,
+            original_input: String::new(),
+            suggestions: Vec::new(),
+            show_suggestions: false,
+            suggestion_state: ListState::default(),
+            extensions: Vec::new(),
+            running_tasks: Vec::new(),
+            transcript: Vec::new(),
+            artifacts: Artifacts::new(),
+            turn_number: 0,
+            budget: ContextProjectionBudget::default(),
+            last_chat_area: Rect::ZERO,
+        }
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+    use crossterm::event::KeyEventKind;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn make_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        }
+    }
+
+    #[test]
+    fn derive_scroll_shift_up() {
+        let key = make_key(KeyCode::Up, KeyModifiers::SHIFT);
+        assert_eq!(derive_scroll_intent(&key), Some(ScrollIntent::Up));
+    }
+
+    #[test]
+    fn derive_scroll_shift_down() {
+        let key = make_key(KeyCode::Down, KeyModifiers::SHIFT);
+        assert_eq!(derive_scroll_intent(&key), Some(ScrollIntent::Down));
+    }
+
+    #[test]
+    fn derive_scroll_page_up() {
+        let key = make_key(KeyCode::PageUp, KeyModifiers::NONE);
+        assert_eq!(derive_scroll_intent(&key), Some(ScrollIntent::PageUp));
+    }
+
+    #[test]
+    fn derive_scroll_page_down() {
+        let key = make_key(KeyCode::PageDown, KeyModifiers::NONE);
+        assert_eq!(derive_scroll_intent(&key), Some(ScrollIntent::PageDown));
+    }
+
+    #[test]
+    fn derive_scroll_home() {
+        let key = make_key(KeyCode::Home, KeyModifiers::NONE);
+        assert_eq!(derive_scroll_intent(&key), Some(ScrollIntent::Top));
+    }
+
+    #[test]
+    fn derive_scroll_end() {
+        let key = make_key(KeyCode::End, KeyModifiers::NONE);
+        assert_eq!(derive_scroll_intent(&key), Some(ScrollIntent::Bottom));
+    }
+
+    #[test]
+    fn derive_scroll_ctrl_b() {
+        let key = make_key(KeyCode::Char('b'), KeyModifiers::CONTROL);
+        assert_eq!(derive_scroll_intent(&key), Some(ScrollIntent::PageUp));
+    }
+
+    #[test]
+    fn derive_scroll_ctrl_f() {
+        let key = make_key(KeyCode::Char('f'), KeyModifiers::CONTROL);
+        assert_eq!(derive_scroll_intent(&key), Some(ScrollIntent::PageDown));
+    }
+
+    #[test]
+    fn derive_scroll_plain_up_not_scroll() {
+        let key = make_key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(derive_scroll_intent(&key), None);
+    }
+
+    #[test]
+    fn derive_scroll_plain_down_not_scroll() {
+        let key = make_key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(derive_scroll_intent(&key), None);
+    }
+
+    #[test]
+    fn apply_scroll_top() {
+        let (off, auto) = apply_scroll(ScrollIntent::Top, 100, 10, 50, false);
+        assert_eq!(off, 0);
+        assert!(!auto);
+    }
+
+    #[test]
+    fn apply_scroll_bottom() {
+        let (off, auto) = apply_scroll(ScrollIntent::Bottom, 100, 10, 50, false);
+        assert!(!auto || off == 50); // offset unchanged, auto=true
+        assert!(auto);
+    }
+
+    #[test]
+    fn apply_scroll_up_from_auto() {
+        let (off, auto) = apply_scroll(ScrollIntent::Up, 100, 10, 90, true);
+        assert_eq!(off, 89);
+        assert!(!auto);
+    }
+
+    #[test]
+    fn apply_scroll_down_from_auto_noop() {
+        let (off, auto) = apply_scroll(ScrollIntent::Down, 100, 10, 90, true);
+        assert_eq!(off, 90);
+        assert!(auto);
+    }
+
+    #[test]
+    fn apply_scroll_down_reaches_bottom() {
+        let (off, auto) = apply_scroll(ScrollIntent::Down, 100, 10, 89, false);
+        assert_eq!(off, 90);
+        assert!(auto);
+    }
+
+    #[test]
+    fn apply_scroll_fits_all_noop() {
+        let (off, auto) = apply_scroll(ScrollIntent::Up, 5, 10, 0, true);
+        assert_eq!(off, 0);
+        assert!(auto);
+    }
+
+
+    #[test]
+    fn handle_key_scroll_shift_up_disengages_auto() {
+        // Simulate what handle_key does for scroll keys:
+        // 1. derive_scroll_intent maps Shift+Up → ScrollIntent::Up
+        // 2. apply_scroll computes new state
+        // 3. handle_key writes back to self
+        let key = make_key(KeyCode::Up, KeyModifiers::SHIFT);
+        let intent = derive_scroll_intent(&key).expect("should be scroll key");
+        // 100 lines, 10 visible, auto_scroll=true, offset=0 (at bottom = 90)
+        let (off, auto) = apply_scroll(intent, 100, 10, 0, true);
+        assert!(!auto, "auto_scroll should be disengaged");
+        assert_eq!(off, 89, "should scroll up one row from bottom");
+    }
+
+    #[test]
+    fn handle_key_scroll_home_jumps_to_top() {
+        let key = make_key(KeyCode::Home, KeyModifiers::NONE);
+        let intent = derive_scroll_intent(&key).expect("should be scroll key");
+        let (off, auto) = apply_scroll(intent, 100, 10, 50, false);
+        assert_eq!(off, 0);
+        assert!(!auto);
+    }
+
+    #[test]
+    fn handle_key_scroll_end_rearms_auto() {
+        let key = make_key(KeyCode::End, KeyModifiers::NONE);
+        let intent = derive_scroll_intent(&key).expect("should be scroll key");
+        let (off, auto) = apply_scroll(intent, 100, 10, 0, false);
+        assert!(auto, "auto_scroll should be re-armed");
+    }
+
+    #[test]
+    fn handle_key_plain_up_not_consumed_as_scroll() {
+        // Plain Up (no modifier) should NOT be treated as a scroll key
+        let key = make_key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(derive_scroll_intent(&key), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // E2E: render → scroll key → re-render → assert buffer content changed
+    // -----------------------------------------------------------------------
+
+    fn build_scroll_entries() -> Vec<ChatEntry> {
+        (0..30)
+            .map(|i| ChatEntry::System(format!("Line {i:02}")))
+            .collect()
+    }
+
+    fn get_backend_render(app: &mut App, terminal: &mut Terminal<TestBackend>) -> String {
+        terminal.draw(|f| app.render(f)).unwrap();
+        terminal.backend().to_string()
+    }
+
+    #[test]
+    fn e2e_home_end_scroll() {
+        let entries = build_scroll_entries();
+        let mut app = App::with_entries_for_test(entries);
+        let backend = ratatui::backend::TestBackend::new(40, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Initial render — auto-scroll should show bottom
+        let rendered = get_backend_render(&mut app, &mut terminal);
+        assert!(
+            rendered.contains("Line 29"),
+            "auto-scroll should show bottom; got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("Line 00"),
+            "top should not be visible; got: {rendered}"
+        );
+
+        // Press Home → jump to top
+        let consumed = app.handle_key(make_key(KeyCode::Home, KeyModifiers::NONE));
+        assert!(consumed, "Home should be consumed as scroll key");
+        let rendered = get_backend_render(&mut app, &mut terminal);
+        assert!(
+            rendered.contains("Line 00"),
+            "after Home, top should be visible; got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("Line 29"),
+            "after Home, bottom should not be visible; got: {rendered}"
+        );
+
+        // Press End → jump to bottom
+        let consumed = app.handle_key(make_key(KeyCode::End, KeyModifiers::NONE));
+        assert!(consumed, "End should be consumed as scroll key");
+        let rendered = get_backend_render(&mut app, &mut terminal);
+        assert!(
+            rendered.contains("Line 29"),
+            "after End, bottom should be visible; got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("Line 00"),
+            "after End, top should not be visible; got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn e2e_page_scroll() {
+        let entries = build_scroll_entries();
+        let mut app = App::with_entries_for_test(entries);
+        let backend = ratatui::backend::TestBackend::new(40, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Initial render at bottom
+        let rendered = get_backend_render(&mut app, &mut terminal);
+        assert!(rendered.contains("Line 29"), "start at bottom; got: {rendered}");
+
+        // PageUp (Ctrl+B) → shift up one viewport
+        app.handle_key(make_key(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        let rendered = get_backend_render(&mut app, &mut terminal);
+        assert!(
+            !rendered.contains("Line 29"),
+            "after PageUp, bottom should not be visible; got: {rendered}"
+        );
+        assert!(!app.auto_scroll, "PageUp should disengage auto_scroll");
+
+        // PageDown (Ctrl+F) twice → back to bottom
+        app.handle_key(make_key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        app.handle_key(make_key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        let rendered = get_backend_render(&mut app, &mut terminal);
+        assert!(
+            rendered.contains("Line 29"),
+            "after 2x PageDown, bottom should be visible; got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn e2e_partial_entry_overlap() {
+        // Build entries where one entry is very long (wraps to many lines)
+        // so it may only partially overlap the visible range.
+        // Short entries first to fill up, then one long entry at the end.
+        let mut entries: Vec<ChatEntry> = (0..10)
+            .map(|i| ChatEntry::System(format!("Short {i:02}")))
+            .collect();
+        // One long user message that wraps to ~15 lines at width 40
+        let long_text = (0..15)
+            .map(|i| format!("Long line {i:02} of the big message"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        entries.push(ChatEntry::User(long_text));
+
+        let mut app = App::with_entries_for_test(entries);
+        let backend = ratatui::backend::TestBackend::new(40, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Initial render at bottom — should show end of long message
+        let rendered = get_backend_render(&mut app, &mut terminal);
+        assert!(
+            rendered.contains("Long line 14"),
+            "auto-scroll should show end of long message; got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("Short 00"),
+            "top short entries should not be visible; got: {rendered}"
+        );
+
+        // Scroll to top
+        app.handle_key(make_key(KeyCode::Home, KeyModifiers::NONE));
+        let rendered = get_backend_render(&mut app, &mut terminal);
+        assert!(
+            rendered.contains("Short 00"),
+            "after Home, first short entry should be visible; got: {rendered}"
+        );
+
+        // Scroll line by line down until we hit the long message
+        for _ in 0..20 {
+            app.handle_key(make_key(KeyCode::Down, KeyModifiers::SHIFT));
+        }
+        let rendered = get_backend_render(&mut app, &mut terminal);
+        // We should be somewhere in the long message now
+        assert!(
+            rendered.contains("Long line"),
+            "after scrolling down, long message should be visible; got: {rendered}"
+        );
     }
 }

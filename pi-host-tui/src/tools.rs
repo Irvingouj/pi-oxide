@@ -112,7 +112,8 @@ pub fn definitions() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: ToolName::new("glob"),
             label: "Glob Files".into(),
-            description: "Find files matching glob patterns (e.g. src/**/*.ts). Respects .gitignore.".into(),
+            description:
+                "Find files matching glob patterns (e.g. src/**/*.ts). Respects .gitignore.".into(),
             parameters: JsonSchema::new(serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -279,10 +280,15 @@ fn exec_grep(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, To
     let re = regex::Regex::new(pattern)
         .map_err(|e| ToolError::new("invalid_regex", format!("Invalid regex: {e}")))?;
 
-    let paths: Vec<String> = args.0
+    let paths: Vec<String> = args
+        .0
         .get("paths")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_else(|| vec![".".to_string()]);
 
     let mut results: Vec<(String, u64, String)> = Vec::new();
@@ -312,7 +318,8 @@ fn exec_grep(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, To
                     Ok(content) => {
                         for (line_idx, line) in content.lines().enumerate() {
                             if re.is_match(line) {
-                                let rel_path = file_path.strip_prefix(cwd)
+                                let rel_path = file_path
+                                    .strip_prefix(cwd)
                                     .unwrap_or(file_path)
                                     .to_string_lossy()
                                     .to_string();
@@ -329,13 +336,18 @@ fn exec_grep(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, To
             }
             match std::fs::read_to_string(&path) {
                 Ok(content) => {
-                    let rel_path = path.strip_prefix(cwd)
+                    let rel_path = path
+                        .strip_prefix(cwd)
                         .unwrap_or(&path)
                         .to_string_lossy()
                         .to_string();
                     for (line_idx, line) in content.lines().enumerate() {
                         if re.is_match(line) {
-                            results.push((rel_path.clone(), (line_idx + 1) as u64, line.to_string()));
+                            results.push((
+                                rel_path.clone(),
+                                (line_idx + 1) as u64,
+                                line.to_string(),
+                            ));
                         }
                     }
                 }
@@ -359,7 +371,11 @@ fn exec_grep(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, To
         return Ok(pi_core::ToolResult::text("No matches found."));
     }
 
-    let file_count = results.iter().map(|(f, _, _)| f).collect::<std::collections::HashSet<_>>().len();
+    let file_count = results
+        .iter()
+        .map(|(f, _, _)| f)
+        .collect::<std::collections::HashSet<_>>()
+        .len();
     Ok(pi_core::ToolResult::text(format!(
         "Found {} match{} in {} file{}:\n{}",
         results.len(),
@@ -371,26 +387,33 @@ fn exec_grep(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, To
 }
 
 fn exec_glob(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, ToolError> {
-    let patterns: Vec<String> = args.0
+    let patterns: Vec<String> = args
+        .0
         .get("paths")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .ok_or_else(|| ToolError::new("missing_param", "Missing parameter: paths"))?;
 
     if patterns.is_empty() {
-        return Err(ToolError::new("invalid_param", "paths array must not be empty"));
+        return Err(ToolError::new(
+            "invalid_param",
+            "paths array must not be empty",
+        ));
     }
 
     let mut builder = globset::GlobSetBuilder::new();
     for pattern in &patterns {
-        let g = globset::Glob::new(pattern).map_err(|e| {
-            ToolError::new("invalid_glob", format!("Invalid glob pattern: {e}"))
-        })?;
+        let g = globset::Glob::new(pattern)
+            .map_err(|e| ToolError::new("invalid_glob", format!("Invalid glob pattern: {e}")))?;
         builder.add(g);
     }
-    let glob_set = builder.build().map_err(|e| {
-        ToolError::new("glob_build_error", format!("{e}"))
-    })?;
+    let glob_set = builder
+        .build()
+        .map_err(|e| ToolError::new("glob_build_error", format!("{e}")))?;
 
     let mut results: Vec<String> = Vec::new();
 
@@ -403,7 +426,8 @@ fn exec_glob(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, To
         let entry = entry.map_err(|e| ToolError::new("walk_error", format!("{e}")))?;
         let path = entry.path();
 
-        let rel_path = path.strip_prefix(cwd)
+        let rel_path = path
+            .strip_prefix(cwd)
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();

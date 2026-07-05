@@ -173,10 +173,13 @@ fn test_grep_basic() {
     let path = dir.join("test.rs");
     std::fs::write(&path, "fn hello() {}\nfn world() {}\nfn hello_again() {}\n").unwrap();
 
-    let call = make_call("grep", serde_json::json!({
-        "pattern": "hello",
-        "paths": [path.to_str().unwrap()]
-    }));
+    let call = make_call(
+        "grep",
+        serde_json::json!({
+            "pattern": "hello",
+            "paths": [path.to_str().unwrap()]
+        }),
+    );
     let result = execute(&call, &dir).unwrap();
     let text = extract_text(result);
     assert!(text.contains("hello"));
@@ -193,10 +196,13 @@ fn test_grep_no_match() {
     let path = dir.join("test.txt");
     std::fs::write(&path, "no matches here\n").unwrap();
 
-    let call = make_call("grep", serde_json::json!({
-        "pattern": "xyz123",
-        "paths": [path.to_str().unwrap()]
-    }));
+    let call = make_call(
+        "grep",
+        serde_json::json!({
+            "pattern": "xyz123",
+            "paths": [path.to_str().unwrap()]
+        }),
+    );
     let result = execute(&call, &dir).unwrap();
     assert!(extract_text(result).contains("No matches"));
 
@@ -217,15 +223,21 @@ fn test_grep_with_gitignore_e2e() {
     std::fs::create_dir_all(dir.join("node_modules/pkg")).unwrap();
     std::fs::write(dir.join("node_modules/pkg/index.js"), "fn main() {}\n").unwrap();
 
-    let call = make_call("grep", serde_json::json!({
-        "pattern": "fn main"
-    }));
+    let call = make_call(
+        "grep",
+        serde_json::json!({
+            "pattern": "fn main"
+        }),
+    );
     let result = execute(&call, &dir).unwrap();
     let text = extract_text(result);
 
     assert!(text.contains("src/main.rs"), "should find in src/main.rs");
     assert!(!text.contains("app.log"), "should ignore *.log files");
-    assert!(!text.contains("node_modules"), "should ignore node_modules/");
+    assert!(
+        !text.contains("node_modules"),
+        "should ignore node_modules/"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -237,13 +249,24 @@ fn test_grep_directory_walk_e2e() {
 
     std::fs::create_dir_all(dir.join("src/utils")).unwrap();
     std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
-    std::fs::write(dir.join("src/utils/helper.rs"), "fn main() {}\npub fn help() {}\n").unwrap();
+    std::fs::write(
+        dir.join("src/utils/helper.rs"),
+        "fn main() {}\npub fn help() {}\n",
+    )
+    .unwrap();
     std::fs::create_dir_all(dir.join("tests")).unwrap();
-    std::fs::write(dir.join("tests/integration.rs"), "fn main() {}\n#[test]\nfn test_it() {}\n").unwrap();
+    std::fs::write(
+        dir.join("tests/integration.rs"),
+        "fn main() {}\n#[test]\nfn test_it() {}\n",
+    )
+    .unwrap();
 
-    let call = make_call("grep", serde_json::json!({
-        "pattern": "fn main"
-    }));
+    let call = make_call(
+        "grep",
+        serde_json::json!({
+            "pattern": "fn main"
+        }),
+    );
     let result = execute(&call, &dir).unwrap();
     let text = extract_text(result);
 
@@ -266,9 +289,12 @@ fn test_glob_basic() {
     std::fs::write(sub.join("lib.rs"), "").unwrap();
     std::fs::write(dir.join("Cargo.toml"), "").unwrap();
 
-    let call = make_call("glob", serde_json::json!({
-        "paths": ["src/*.rs"]
-    }));
+    let call = make_call(
+        "glob",
+        serde_json::json!({
+            "paths": ["src/*.rs"]
+        }),
+    );
     let result = execute(&call, &dir).unwrap();
     let text = extract_text(result);
     assert!(text.contains("src/main.rs"));
@@ -292,9 +318,12 @@ fn test_glob_with_gitignore_e2e() {
     std::fs::create_dir_all(dir.join("target")).unwrap();
     std::fs::write(dir.join("target/debug.bin"), "").unwrap();
 
-    let call = make_call("glob", serde_json::json!({
-        "paths": ["**/*"]
-    }));
+    let call = make_call(
+        "glob",
+        serde_json::json!({
+            "paths": ["**/*"]
+        }),
+    );
     let result = execute(&call, &dir).unwrap();
     let text = extract_text(result);
 

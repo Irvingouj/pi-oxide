@@ -7,3 +7,4 @@ rust_out.wasm
 dist/
 test-results/
 pi-core/bindings/
+.pi-oxide/config.toml

@@ -14,6 +14,7 @@ use pi_core::{
     ToolCallTransform, ToolDefinition, TrimmedMessage, WaitMode,
 };
 
+use crate::config::ResolvedConfig;
 use crate::extension::{BashExtension, BuiltinExtension, Extension};
 use crate::host_state::{HostDirective, HostState};
 #[allow(unused_imports)]
@@ -35,6 +36,7 @@ const COMMANDS: &[&str] = &[
     "/session new",
     "/tokens",
     "/undo",
+    "/config",
 ];
 
 // ---------------------------------------------------------------------------
@@ -80,7 +82,11 @@ impl ChatEntry {
             ChatEntry::Assistant(text) => {
                 let mut count: u16 = 0;
                 for line in &text.lines {
-                    let s: String = line.spans.iter().map(|s| (*s.content).to_string()).collect();
+                    let s: String = line
+                        .spans
+                        .iter()
+                        .map(|s| (*s.content).to_string())
+                        .collect();
                     count += _wrapped_lines(&s, width).max(1) as u16;
                 }
                 count + 1 // blank
@@ -89,7 +95,9 @@ impl ChatEntry {
                 let full = format!(" ┌─ {} {}", name, args_summary);
                 _wrapped_lines(&full, width) as u16
             }
-            ChatEntry::ToolResult { output, is_error, .. } => {
+            ChatEntry::ToolResult {
+                output, is_error, ..
+            } => {
                 let mut count: u16 = 0;
                 for line in output.lines() {
                     let full = format!("{}{}", if *is_error { " ┃ " } else { " │ " }, line);
@@ -130,8 +138,12 @@ pub(crate) fn derive_scroll_intent(key: &KeyEvent) -> Option<ScrollIntent> {
         KeyCode::PageDown => Some(ScrollIntent::PageDown),
         KeyCode::Home => Some(ScrollIntent::Top),
         KeyCode::End => Some(ScrollIntent::Bottom),
-        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(ScrollIntent::PageUp),
-        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(ScrollIntent::PageDown),
+        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(ScrollIntent::PageUp)
+        }
+        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(ScrollIntent::PageDown)
+        }
         _ => None,
     }
 }
@@ -150,7 +162,16 @@ pub(crate) fn apply_scroll(
             ScrollIntent::Bottom => (scroll_offset, true),
             _ => (scroll_offset, auto_scroll),
         };
-        tracing::debug!(?intent, total_lines, visible, scroll_offset, auto_scroll, offset = off, auto_scroll = auto, "apply_scroll: fits");
+        tracing::debug!(
+            ?intent,
+            total_lines,
+            visible,
+            scroll_offset,
+            auto_scroll,
+            offset = off,
+            auto_scroll = auto,
+            "apply_scroll: fits"
+        );
         return (off, auto);
     }
 
@@ -169,8 +190,11 @@ pub(crate) fn apply_scroll(
                 (scroll_offset, true)
             } else {
                 let new_offset = (scroll_offset + 1).min(max_offset);
-                if new_offset >= max_offset { (max_offset, true) }
-                else { (new_offset, false) }
+                if new_offset >= max_offset {
+                    (max_offset, true)
+                } else {
+                    (new_offset, false)
+                }
             }
         }
         ScrollIntent::PageUp => {
@@ -185,15 +209,27 @@ pub(crate) fn apply_scroll(
                 (scroll_offset, true)
             } else {
                 let new_offset = (scroll_offset + visible).min(max_offset);
-                if new_offset >= max_offset { (max_offset, true) }
-                else { (new_offset, false) }
+                if new_offset >= max_offset {
+                    (max_offset, true)
+                } else {
+                    (new_offset, false)
+                }
             }
         }
         ScrollIntent::Top => (0, false),
         ScrollIntent::Bottom => (scroll_offset, true),
     };
 
-    tracing::debug!(?intent, total_lines, visible, scroll_offset, auto_scroll, offset = off, auto_scroll = auto, "apply_scroll");
+    tracing::debug!(
+        ?intent,
+        total_lines,
+        visible,
+        scroll_offset,
+        auto_scroll,
+        offset = off,
+        auto_scroll = auto,
+        "apply_scroll"
+    );
     (off, auto)
 }
 
@@ -245,6 +281,7 @@ pub struct App {
     pub(crate) budget: ContextProjectionBudget,
     /// Cached chat area from the last render frame.
     pub(crate) last_chat_area: Rect,
+    pub(crate) resolved_config: ResolvedConfig,
 }
 
 pub(crate) struct RunningTask {
@@ -274,6 +311,7 @@ impl App {
         provider: &str,
         #[cfg(feature = "record")] record_to: Option<std::path::PathBuf>,
         #[cfg(feature = "replay")] replay_from: Option<std::path::PathBuf>,
+        resolved_config: ResolvedConfig,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let model = Model {
             id: ModelId::new(model_id),
@@ -363,6 +401,7 @@ impl App {
             turn_number: 0,
             budget: ContextProjectionBudget::default(),
             last_chat_area: ratatui::layout::Rect::ZERO,
+            resolved_config,
         })
     }
 
@@ -414,9 +453,7 @@ impl App {
             if crossterm::event::poll(Duration::from_millis(33))? {
                 let event = crossterm::event::read()?;
                 if let crossterm::event::Event::Key(key) = event {
-                    if key.kind == KeyEventKind::Press
-                        && !self.handle_key(key)
-                    {
+                    if key.kind == KeyEventKind::Press && !self.handle_key(key) {
                         self.handle_terminal_key(terminal, key);
                     }
                 }
@@ -448,7 +485,13 @@ impl App {
         if let Some(intent) = derive_scroll_intent(&key) {
             let visible = self.last_chat_area.height.saturating_sub(2);
             let total_lines = self.wrapped_line_count(self.last_chat_area.width as usize);
-            let (off, auto) = apply_scroll(intent, total_lines, visible, self.scroll_offset, self.auto_scroll);
+            let (off, auto) = apply_scroll(
+                intent,
+                total_lines,
+                visible,
+                self.scroll_offset,
+                self.auto_scroll,
+            );
             self.scroll_offset = off;
             self.auto_scroll = auto;
             return true;
@@ -906,6 +949,48 @@ impl App {
                         .push(ChatEntry::System("Nothing to undo.".into()));
                 }
             }
+            "/config" => {
+                let cfg = &self.resolved_config;
+                let path = cfg
+                    .config_path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "(none — using defaults)".into());
+                let masked_key = if cfg.api_key.is_empty() {
+                    "(not set)".into()
+                } else if cfg.api_key.len() > 8 {
+                    format!("{}...", &cfg.api_key[..4])
+                } else {
+                    "****".into()
+                };
+                let system_prompt = self
+                    .host_state
+                    .as_ref()
+                    .map(|h| h.system_prompt.as_str())
+                    .unwrap_or("(unknown)");
+                let sp_display: String = system_prompt.chars().take(80).collect();
+                let sp_display = if system_prompt.chars().count() > 80 {
+                    sp_display + "..."
+                } else {
+                    sp_display
+                };
+                self.entries.push(ChatEntry::System(format!(
+                    "Config file: {path}\n\
+                     Model: {}\n\
+                     Provider: {}\n\
+                     API key: {}\n\
+                     Base URL: {}\n\
+                     Session: {}\n\
+                     System prompt: {}",
+                    cfg.model,
+                    cfg.provider,
+                    masked_key,
+                    cfg.base_url,
+                    self.session_id.as_deref().unwrap_or("(none)"),
+                    sp_display,
+                )));
+            }
+
             _ => {
                 self.entries.push(ChatEntry::System(format!(
                     "Unknown command: {cmd}. Type /help for list."
@@ -1196,6 +1281,13 @@ impl App {
             turn_number: 0,
             budget: ContextProjectionBudget::default(),
             last_chat_area: Rect::ZERO,
+            resolved_config: crate::config::ResolvedConfig {
+                model: "test".into(),
+                provider: "openai".into(),
+                api_key: "***".into(),
+                base_url: "x".into(),
+                config_path: None,
+            },
         }
     }
 }
@@ -1318,7 +1410,6 @@ mod scroll_tests {
         assert!(auto);
     }
 
-
     #[test]
     fn handle_key_scroll_shift_up_disengages_auto() {
         // Simulate what handle_key does for scroll keys:
@@ -1426,7 +1517,10 @@ mod scroll_tests {
 
         // Initial render at bottom
         let rendered = get_backend_render(&mut app, &mut terminal);
-        assert!(rendered.contains("Line 29"), "start at bottom; got: {rendered}");
+        assert!(
+            rendered.contains("Line 29"),
+            "start at bottom; got: {rendered}"
+        );
 
         // PageUp (Ctrl+B) → shift up one viewport
         app.handle_key(make_key(KeyCode::Char('b'), KeyModifiers::CONTROL));

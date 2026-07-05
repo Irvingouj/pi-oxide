@@ -30,11 +30,7 @@ pub(crate) fn compute_scroll(
 
 /// Returns `(start, end)` — half-open row range to materialize for the
 /// current frame. `end - start <= visible`.
-pub(crate) fn visible_range(
-    total_lines: u16,
-    visible: u16,
-    scroll: u16,
-) -> (u16, u16) {
+pub(crate) fn visible_range(total_lines: u16, visible: u16, scroll: u16) -> (u16, u16) {
     if total_lines <= visible {
         return (0, total_lines);
     }
@@ -90,7 +86,9 @@ fn emit_entry(entry: &ChatEntry, lines: &mut Vec<Line<'static>>) {
                 ),
             ]));
         }
-        ChatEntry::ToolResult { output, is_error, .. } => {
+        ChatEntry::ToolResult {
+            output, is_error, ..
+        } => {
             let color = if *is_error { Color::Red } else { Color::Green };
             let border = if *is_error { " ┃ " } else { " │ " };
             for line in output.lines() {
@@ -112,7 +110,6 @@ fn emit_entry(entry: &ChatEntry, lines: &mut Vec<Line<'static>>) {
     }
 }
 
-
 impl App {
     /// Count the total number of wrapped lines across all entries.
     pub(crate) fn wrapped_line_count(&self, width: usize) -> u16 {
@@ -131,10 +128,12 @@ impl App {
         let width = area.width as usize;
 
         // Check if we need the streaming indicator
-        let has_streaming = self.running && self.streaming_text.is_empty() && self.running_tasks.is_empty();
+        let has_streaming =
+            self.running && self.streaming_text.is_empty() && self.running_tasks.is_empty();
 
         // Pass 1: count approximate wrapped lines per entry
-        let mut entry_line_counts: Vec<u16> = Vec::with_capacity(self.entries.len() + if has_streaming { 1 } else { 0 });
+        let mut entry_line_counts: Vec<u16> =
+            Vec::with_capacity(self.entries.len() + if has_streaming { 1 } else { 0 });
         for entry in &self.entries {
             let count = count_entry_lines(entry, width);
             entry_line_counts.push(count);

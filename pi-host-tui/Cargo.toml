@@ -31,8 +31,10 @@ syntect = { version = "5.2", default-features = false, features = ["regex-fancy"
 ignore = "0.4"
 globset = "0.4"
 regex = "1.11"
+toml = "0.8"
 
 [features]
 default = []
 record = []
 replay = []
+

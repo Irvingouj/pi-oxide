@@ -149,9 +149,36 @@ pub struct ResolvedConfig {
     pub config_path: Option<PathBuf>,
 }
 
+/// Detect a provider from whichever API key environment variable is set.
+///
+/// Used as a fallback when no explicit provider is configured but an API key
+/// is available — prevents the default "anthropic" provider from being chosen
+/// when the user only has, say, DEEPSEEK_API_KEY set.
+fn detect_provider_from_env() -> Option<String> {
+    if std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .is_some_and(|v| !v.is_empty())
+    {
+        return Some("anthropic".into());
+    }
+    if std::env::var("OPENAI_API_KEY")
+        .ok()
+        .is_some_and(|v| !v.is_empty())
+    {
+        return Some("openai".into());
+    }
+    if std::env::var("DEEPSEEK_API_KEY")
+        .ok()
+        .is_some_and(|v| !v.is_empty())
+    {
+        return Some("deepseek".into());
+    }
+    None
+}
+
 /// Resolve the final configuration.
 ///
-/// Precedence per field: CLI override (if Some) > env var > config file > hardcoded default.
+/// Precedence per field: CLI override (if Some) > env var > config file > auto-detect > hardcoded default.
 /// CLI overrides are passed as `Option` values; `None` means "not set by CLI".
 pub fn resolve(
     cli_model: Option<&str>,
@@ -168,12 +195,38 @@ pub fn resolve(
         );
     }
 
-    let model = resolve_field(cli_model, "PI_MODEL", &config.llm.model, "claude-sonnet-5");
-    let provider = resolve_field(
-        cli_provider,
-        "PI_PROVIDER",
-        &config.llm.provider,
-        "anthropic",
+    // Resolve provider: CLI > env > config file > auto-detect from API key env > hardcoded default.
+    let provider = if config_path.is_none()
+        && cli_provider.is_none()
+        && std::env::var("PI_PROVIDER")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .is_none()
+    {
+        // No explicit provider anywhere — try auto-detecting from API key env vars
+        detect_provider_from_env()
+            .unwrap_or_else(|| resolve_field(None, "PI_PROVIDER", "", "anthropic"))
+    } else {
+        resolve_field(
+            cli_provider,
+            "PI_PROVIDER",
+            &config.llm.provider,
+            "anthropic",
+        )
+    };
+
+    // Resolve model: CLI > env > config file (only if from real file) > provider-aware default.
+    let model_from_config = if config_path.is_some() {
+        &config.llm.model
+    } else {
+        // No config file — skip the default model so we fall through to provider-aware default
+        ""
+    };
+    let model = resolve_field(
+        cli_model,
+        "PI_MODEL",
+        model_from_config,
+        resolve_default_model(&provider),
     );
 
     let api_key = resolve_api_key(&provider, cli_api_key, &config.llm.api_key);
@@ -231,6 +284,16 @@ fn resolve_api_key(provider: &str, cli_override: Option<&str>, config_value: &st
             }
         })
         .unwrap_or_default()
+}
+
+/// Return the default model ID for a known provider.
+pub fn resolve_default_model(provider: &str) -> &'static str {
+    match provider {
+        "anthropic" | "anthropic-compat" => "claude-sonnet-5",
+        "openai" | "openai-compat" => "gpt-5.5",
+        "deepseek" | "deepseek-anthropic" => "deepseek-v4-pro",
+        _ => "claude-sonnet-5",
+    }
 }
 
 /// Return the default base URL for a known provider.
@@ -306,5 +369,271 @@ base-url = "https://example.com"
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.llm.api_key, "key");
         assert_eq!(config.llm.base_url, "https://example.com");
+    }
+
+    // -----------------------------------------------------------------------
+    // Auto-detect provider from API key env vars
+    // -----------------------------------------------------------------------
+
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+    use std::sync::Mutex;
+
+    static RESOLVE_LOCK: Mutex<()> = Mutex::new(());
+
+    const ISOLATE_KEYS: &[&str] = &[
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "PI_API_KEY",
+        "PI_MODEL",
+        "PI_PROVIDER",
+        "PI_BASE_URL",
+    ];
+
+    struct ResolveGuard {
+        saved_env: HashMap<String, Option<OsString>>,
+        saved_dir: Option<std::path::PathBuf>,
+        temp_dir: Option<PathBuf>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for ResolveGuard {
+        fn drop(&mut self) {
+            // Restore env vars
+            for (key, value) in &self.saved_env {
+                match value {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+            // Restore working directory
+            if let Some(ref dir) = self.saved_dir {
+                let _ = std::env::set_current_dir(dir);
+            }
+            // Clean up temp directory
+            if let Some(ref dir) = self.temp_dir {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+
+    fn isolate_env() -> ResolveGuard {
+        let _lock = RESOLVE_LOCK.lock().expect("RESOLVE_LOCK");
+        let dir = std::env::temp_dir().join(format!(
+            "pi-resolve-test-{}-{}",
+            std::process::id(),
+            std::time::Instant::now().elapsed().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp");
+
+        // Save and clear all relevant env vars
+        let mut saved_env = HashMap::new();
+        for &key in ISOLATE_KEYS {
+            saved_env.insert(key.to_string(), std::env::var_os(key));
+            std::env::remove_var(key);
+        }
+        // Save HOME
+        saved_env.insert("HOME".to_string(), std::env::var_os("HOME"));
+        std::env::set_var("HOME", &dir);
+
+        ResolveGuard {
+            saved_env,
+            saved_dir: None,
+            temp_dir: Some(dir),
+            _lock,
+        }
+    }
+
+    impl ResolveGuard {
+        fn temp_dir(&self) -> &PathBuf {
+            self.temp_dir.as_ref().expect("temp_dir already cleaned up")
+        }
+    }
+
+    #[test]
+    fn test_detect_provider_from_env_deepseek() {
+        let _guard = isolate_env();
+        std::env::set_var("DEEPSEEK_API_KEY", "sk-test");
+        assert_eq!(detect_provider_from_env(), Some("deepseek".into()));
+    }
+
+    #[test]
+    fn test_detect_provider_from_env_anthropic() {
+        let _guard = isolate_env();
+        std::env::set_var("ANTHROPIC_API_KEY", "sk-test");
+        assert_eq!(detect_provider_from_env(), Some("anthropic".into()));
+    }
+
+    #[test]
+    fn test_detect_provider_from_env_openai() {
+        let _guard = isolate_env();
+        std::env::set_var("OPENAI_API_KEY", "sk-test");
+        assert_eq!(detect_provider_from_env(), Some("openai".into()));
+    }
+
+    #[test]
+    fn test_detect_provider_from_env_none() {
+        let _guard = isolate_env();
+        assert_eq!(detect_provider_from_env(), None);
+    }
+
+    #[test]
+    fn test_resolve_auto_detects_deepseek_when_no_config() {
+        let _guard = isolate_env();
+        std::env::set_var("DEEPSEEK_API_KEY", "sk-deepseek-test");
+
+        let resolved = resolve(None, None, None, None);
+        assert_eq!(resolved.provider, "deepseek");
+        assert_eq!(resolved.api_key, "sk-deepseek-test");
+        assert_eq!(resolved.base_url, "https://api.deepseek.com");
+    }
+
+    #[test]
+    fn test_resolve_explicit_provider_overrides_auto_detect() {
+        let _guard = isolate_env();
+        std::env::set_var("DEEPSEEK_API_KEY", "sk-deepseek");
+        std::env::set_var("ANTHROPIC_API_KEY", "sk-anthropic");
+        std::env::set_var("PI_PROVIDER", "anthropic");
+
+        let resolved = resolve(None, None, None, None);
+        assert_eq!(resolved.provider, "anthropic");
+        assert_eq!(resolved.api_key, "sk-anthropic");
+    }
+
+    // -----------------------------------------------------------------------
+    // Provider-aware default model
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_default_model_for_anthropic() {
+        assert_eq!(resolve_default_model("anthropic"), "claude-sonnet-5");
+        assert_eq!(resolve_default_model("anthropic-compat"), "claude-sonnet-5");
+    }
+
+    #[test]
+    fn test_default_model_for_openai() {
+        assert_eq!(resolve_default_model("openai"), "gpt-5.5");
+        assert_eq!(resolve_default_model("openai-compat"), "gpt-5.5");
+    }
+
+    #[test]
+    fn test_default_model_for_deepseek() {
+        assert_eq!(resolve_default_model("deepseek"), "deepseek-v4-pro");
+        assert_eq!(
+            resolve_default_model("deepseek-anthropic"),
+            "deepseek-v4-pro"
+        );
+    }
+
+    #[test]
+    fn test_default_model_fallback() {
+        assert_eq!(resolve_default_model("unknown"), "claude-sonnet-5");
+    }
+
+    #[test]
+    fn test_resolve_auto_detects_deepseek_model() {
+        let _guard = isolate_env();
+        std::env::set_var("DEEPSEEK_API_KEY", "sk-deepseek-test");
+
+        let resolved = resolve(None, None, None, None);
+        assert_eq!(resolved.provider, "deepseek");
+        assert_eq!(resolved.model, "deepseek-v4-pro");
+    }
+
+    #[test]
+    fn test_resolve_auto_detects_openai_model() {
+        let _guard = isolate_env();
+        std::env::set_var("OPENAI_API_KEY", "sk-openai-test");
+
+        let resolved = resolve(None, None, None, None);
+        assert_eq!(resolved.provider, "openai");
+        assert_eq!(resolved.model, "gpt-5.5");
+    }
+
+    #[test]
+    fn test_resolve_auto_detects_anthropic_model() {
+        let _guard = isolate_env();
+        std::env::set_var("ANTHROPIC_API_KEY", "sk-anthropic-test");
+
+        let resolved = resolve(None, None, None, None);
+        assert_eq!(resolved.provider, "anthropic");
+        assert_eq!(resolved.model, "claude-sonnet-5");
+    }
+
+    #[test]
+    fn test_cli_model_overrides_auto_detected_default() {
+        let _guard = isolate_env();
+        std::env::set_var("DEEPSEEK_API_KEY", "sk-deepseek-test");
+
+        let resolved = resolve(Some("deepseek-reasoner"), None, None, None);
+        assert_eq!(resolved.provider, "deepseek");
+        assert_eq!(resolved.model, "deepseek-reasoner");
+    }
+
+    #[test]
+    fn test_config_file_model_overrides_provider_default() {
+        let mut guard = isolate_env();
+        std::env::set_var("DEEPSEEK_API_KEY", "sk-deepseek-test");
+        let dir = guard.temp_dir().clone();
+
+        // Write a config file with a custom model
+        let config_path = dir.join(".pi-oxide");
+        std::fs::create_dir_all(&config_path).unwrap();
+        std::fs::write(
+            config_path.join("config.toml"),
+            r#"
+[llm]
+model = "deepseek-reasoner"
+provider = "deepseek"
+"#,
+        )
+        .unwrap();
+
+        // Change to the test directory so project config is found
+        guard.saved_dir = Some(std::env::current_dir().expect("current dir"));
+        std::env::set_current_dir(&dir).expect("set_current_dir");
+
+        let resolved = resolve(None, None, None, None);
+        assert_eq!(resolved.provider, "deepseek");
+        assert_eq!(resolved.model, "deepseek-reasoner"); // from config file, not default
+    }
+
+    // -----------------------------------------------------------------------
+    // Edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_empty_api_key_treated_as_unset() {
+        let _guard = isolate_env();
+        std::env::set_var("ANTHROPIC_API_KEY", "");
+        assert_eq!(detect_provider_from_env(), None);
+    }
+
+    #[test]
+    fn test_priority_anthropic_wins_over_deepseek() {
+        let _guard = isolate_env();
+        std::env::set_var("ANTHROPIC_API_KEY", "sk-ant");
+        std::env::set_var("DEEPSEEK_API_KEY", "sk-ds");
+        assert_eq!(detect_provider_from_env(), Some("anthropic".into()));
+    }
+
+    #[test]
+    fn test_priority_openai_wins_over_deepseek() {
+        let _guard = isolate_env();
+        std::env::set_var("OPENAI_API_KEY", "sk-oai");
+        std::env::set_var("DEEPSEEK_API_KEY", "sk-ds");
+        assert_eq!(detect_provider_from_env(), Some("openai".into()));
+    }
+
+    #[test]
+    fn test_pi_api_key_fallback() {
+        let _guard = isolate_env();
+        std::env::set_var("PI_API_KEY", "sk-generic");
+        std::env::set_var("PI_PROVIDER", "openai");
+
+        let resolved = resolve(None, None, None, None);
+        assert_eq!(resolved.provider, "openai");
+        assert_eq!(resolved.api_key, "sk-generic");
     }
 }

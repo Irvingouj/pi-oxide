@@ -46,7 +46,7 @@ const PRESETS: &[ProviderPreset] = &[
     ProviderPreset {
         label: "DeepSeek",
         key: "deepseek",
-        default_model: "deepseek-v4-flash",
+        default_model: "deepseek-v4-pro",
         default_url: "https://api.deepseek.com",
     },
 ];

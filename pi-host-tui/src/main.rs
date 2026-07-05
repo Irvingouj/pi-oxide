@@ -14,6 +14,7 @@ mod llm_record;
 #[cfg(feature = "replay")]
 mod llm_replay;
 mod markdown;
+mod model_picker;
 mod onboarding;
 #[cfg(test)]
 mod onboarding_test;

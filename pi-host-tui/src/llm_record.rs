@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use pi_core::LlmChunk;
 use tracing::{debug, info};
 
-use crate::llm::{CollectedToolCall, LlmClient, LlmProvider, LlmStreamState};
+use crate::llm::{
+    CollectedToolCall, LlmClient, LlmProvider, LlmStreamState, ModelDiscovery, ModelInfo,
+};
 use crate::llm_cassette::{Cassette, CassetteEntry, CassetteRequest, CassetteResponse};
 
 pub struct RecordingLlmClient {
@@ -70,6 +72,12 @@ impl LlmProvider for RecordingLlmClient {
 
     fn set_model(&mut self, model: &str) {
         self.inner.set_model(model);
+    }
+}
+
+impl ModelDiscovery for RecordingLlmClient {
+    fn list_models(&self) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error>> {
+        self.inner.list_models()
     }
 }
 

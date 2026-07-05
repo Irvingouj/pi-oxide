@@ -271,6 +271,9 @@ pub struct App {
     pub(crate) show_suggestions: bool,
     pub(crate) suggestion_state: ListState,
 
+    // New: model picker
+    pub(crate) model_picker: Option<crate::model_picker::ModelPicker>,
+
     // Extension-based tool execution
     pub(crate) extensions: Vec<Box<dyn Extension>>,
     pub(crate) running_tasks: Vec<RunningTask>,
@@ -280,6 +283,7 @@ pub struct App {
     pub(crate) artifacts: Artifacts,
     pub(crate) turn_number: u32,
     pub(crate) budget: ContextProjectionBudget,
+    pub(crate) context_window: u32,
     /// Cached chat area from the last render frame.
     pub(crate) last_chat_area: Rect,
     pub(crate) resolved_config: ResolvedConfig,
@@ -335,6 +339,8 @@ impl App {
         for ext in &extensions {
             tool_defs.extend(ext.tools());
         }
+        let context_window = model.context_window;
+
         let agent = AgentRuntime::new(AgentOptions {
             system_prompt: system_prompt.to_string(),
             model,
@@ -395,12 +401,14 @@ impl App {
             suggestions: Vec::new(),
             show_suggestions: false,
             suggestion_state: ListState::default(),
+            model_picker: None,
             extensions,
             running_tasks: Vec::new(),
             transcript: Vec::new(),
             artifacts: Artifacts::new(),
             turn_number: 0,
             budget: ContextProjectionBudget::default(),
+            context_window,
             last_chat_area: ratatui::layout::Rect::ZERO,
             resolved_config,
         })
@@ -496,6 +504,11 @@ impl App {
             self.scroll_offset = off;
             self.auto_scroll = auto;
             return true;
+        }
+
+        // Model picker keys — handled before the main match
+        if self.model_picker.is_some() {
+            return self.handle_model_picker_key(key);
         }
 
         match key.code {
@@ -654,6 +667,75 @@ impl App {
                     self.history_index = None;
                 }
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Model picker
+    // -----------------------------------------------------------------------
+
+    fn open_model_picker(&mut self) {
+        use crate::llm::ModelDiscovery;
+        let models = self
+            .llm_client
+            .list_models()
+            .map(|m| m.into_iter().map(|m| m.id).collect())
+            .unwrap_or_else(|_| {
+                // Fallback: just the current model
+                vec![self.agent().state().model.id.as_str().to_string()]
+            });
+        let current = self.agent().state().model.id.as_str().to_string();
+        if models.is_empty() {
+            self.entries
+                .push(ChatEntry::System("No available models".into()));
+            return;
+        }
+        self.model_picker = Some(crate::model_picker::ModelPicker::new(models, current));
+    }
+
+    fn switch_model(&mut self, model_id: &str) {
+        self.llm_client.set_model(model_id);
+        self.agent_mut().state_mut().model.id = ModelId::new(model_id);
+        self.agent_mut().state_mut().model.name = ModelName::new(model_id);
+        self.entries
+            .push(ChatEntry::System(format!("Model switched to {model_id}")));
+    }
+
+    fn handle_model_picker_key(&mut self, key: KeyEvent) -> bool {
+        let picker = self.model_picker.as_mut().expect("model_picker");
+        match key.code {
+            KeyCode::Enter => {
+                if let Some(model_id) = picker.confirm() {
+                    self.model_picker = None;
+                    self.input.clear();
+                    self.cursor_pos = 0;
+                    self.switch_model(&model_id);
+                }
+                true
+            }
+            KeyCode::Esc => {
+                self.model_picker = None;
+                self.input.clear();
+                self.cursor_pos = 0;
+                true
+            }
+            KeyCode::Up => {
+                picker.select_previous();
+                true
+            }
+            KeyCode::Down => {
+                picker.select_next();
+                true
+            }
+            KeyCode::Backspace => {
+                picker.backspace();
+                true
+            }
+            KeyCode::Char(c) => {
+                picker.append_char(c);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -850,14 +932,10 @@ impl App {
             "/model" => {
                 if parts.len() >= 2 {
                     let model_id = parts[1];
-                    self.llm_client.set_model(model_id);
-                    self.agent_mut().state_mut().model.id = ModelId::new(model_id);
-                    self.agent_mut().state_mut().model.name = ModelName::new(model_id);
-                    self.entries
-                        .push(ChatEntry::System(format!("Model switched to {model_id}")));
+                    self.switch_model(model_id);
                 } else {
-                    self.entries
-                        .push(ChatEntry::System("Usage: /model <model_id>".into()));
+                    // Open model picker
+                    self.open_model_picker();
                 }
             }
             "/session" => {
@@ -915,9 +993,8 @@ impl App {
             }
             "/tokens" => {
                 if let Some((input, output, total)) = self.last_usage {
-                    let budget = &self.budget;
-                    let ctx_pct = if budget.max_context_tokens > 0 {
-                        (input as f64 / budget.max_context_tokens as f64 * 100.0) as u16
+                    let ctx_pct = if self.context_window > 0 {
+                        (input as f64 / self.context_window as f64 * 100.0) as u16
                     } else {
                         0
                     };
@@ -1275,12 +1352,14 @@ impl App {
             suggestions: Vec::new(),
             show_suggestions: false,
             suggestion_state: ListState::default(),
+            model_picker: None,
             extensions: Vec::new(),
             running_tasks: Vec::new(),
             transcript: Vec::new(),
             artifacts: Artifacts::new(),
             turn_number: 0,
             budget: ContextProjectionBudget::default(),
+            context_window: 0,
             last_chat_area: Rect::ZERO,
             resolved_config: crate::config::ResolvedConfig {
                 model: "test".into(),

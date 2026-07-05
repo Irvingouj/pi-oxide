@@ -6,7 +6,7 @@ use std::path::Path;
 use pi_core::LlmChunk;
 use tracing::{debug, info, warn};
 
-use crate::llm::{CollectedToolCall, LlmProvider, LlmStreamState};
+use crate::llm::{CollectedToolCall, LlmProvider, LlmStreamState, ModelDiscovery, ModelInfo};
 use crate::llm_cassette::{Cassette, CassetteResponse};
 
 pub struct ReplayLlmClient {
@@ -75,6 +75,12 @@ impl LlmProvider for ReplayLlmClient {
 
     fn set_model(&mut self, _model: &str) {
         warn!("set_model called during replay — ignored");
+    }
+}
+
+impl ModelDiscovery for ReplayLlmClient {
+    fn list_models(&self) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error>> {
+        Err("model discovery is not available in replay mode".into())
     }
 }
 

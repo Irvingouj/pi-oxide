@@ -241,6 +241,19 @@ struct OpenAIToolResultMessage<'a> {
     content: &'a str,
 }
 
+/// Minimal model info returned by discovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelInfo {
+    pub id: String,
+}
+
+/// Runtime model discovery — fetches available models from a provider.
+///
+/// Deep module: one method, hides HTTP / wire-format details inside.
+pub trait ModelDiscovery {
+    fn list_models(&self) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error>>;
+}
+
 impl LlmClient {
     pub fn new(api_key: &str, base_url: &str, model: &str, wire_format: WireFormat) -> Self {
         Self {
@@ -258,6 +271,56 @@ impl LlmClient {
 
     pub fn set_model(&mut self, model: &str) {
         self.model = model.to_string();
+    }
+
+    fn list_models_openai(&self) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error>> {
+        let url = format!("{}/v1/models", self.base_url);
+
+        let resp = self
+            .client
+            .get(&url)
+            .header("authorization", format!("Bearer {}", self.api_key))
+            .send()?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().unwrap_or_default();
+            return Err(format!("API error {status}: {text}").into());
+        }
+
+        let body: serde_json::Value = resp.json()?;
+
+        let models: Vec<ModelInfo> = body
+            .get("data")
+            .and_then(|d| d.as_array())
+            .into_iter()
+            .flat_map(|arr| {
+                arr.iter()
+                    .filter_map(|m| {
+                        m.get("id")
+                            .and_then(|i| i.as_str())
+                            .map(|id| ModelInfo { id: id.to_string() })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        Ok(models)
+    }
+
+    fn list_models_anthropic(&self) -> Vec<ModelInfo> {
+        // Anthropic has no /v1/models endpoint. Return known current models.
+        [
+            "claude-sonnet-5",
+            "claude-opus-4",
+            "claude-haiku-4",
+            "claude-sonnet-4-20250514",
+            "claude-opus-4-20250514",
+            "claude-haiku-4-20250711",
+        ]
+        .into_iter()
+        .map(|id| ModelInfo { id: id.to_string() })
+        .collect()
     }
 
     /// Start a streaming LLM request. Returns an iterator of LlmChunk values.
@@ -342,6 +405,15 @@ impl LlmClient {
                 };
                 serde_json::to_value(&body).expect("serialize openai request")
             }
+        }
+    }
+}
+
+impl ModelDiscovery for LlmClient {
+    fn list_models(&self) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error>> {
+        match self.wire_format {
+            WireFormat::OpenAI => self.list_models_openai(),
+            WireFormat::Anthropic => Ok(self.list_models_anthropic()),
         }
     }
 }
@@ -1058,5 +1130,151 @@ mod tests {
         assert_eq!(converted[0]["tool_call_id"], "c1");
         assert_eq!(converted[1]["role"], "tool");
         assert_eq!(converted[1]["tool_call_id"], "c2");
+    }
+
+    // -----------------------------------------------------------------------
+    // Model discovery tests
+    // -----------------------------------------------------------------------
+
+    /// Mock discovery for testing trait abstraction
+    struct MockDiscovery {
+        models: Vec<ModelInfo>,
+    }
+    impl ModelDiscovery for MockDiscovery {
+        fn list_models(&self) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error>> {
+            Ok(self.models.clone())
+        }
+    }
+
+    fn discover_via_trait<D: ModelDiscovery>(discovery: &D) -> Vec<String> {
+        discovery
+            .list_models()
+            .map(|m| m.into_iter().map(|m| m.id).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn test_trait_accepts_mock_discovery() {
+        let mock = MockDiscovery {
+            models: vec![
+                ModelInfo {
+                    id: "mock-1".into(),
+                },
+                ModelInfo {
+                    id: "mock-2".into(),
+                },
+            ],
+        };
+        let ids = discover_via_trait(&mock);
+        assert_eq!(ids, vec!["mock-1", "mock-2"]);
+    }
+
+    #[test]
+    fn test_trait_accepts_llm_client() {
+        let client = LlmClient::new(
+            "test-key",
+            "https://api.anthropic.com",
+            "claude-sonnet-5",
+            WireFormat::Anthropic,
+        );
+        let ids = discover_via_trait(&client);
+        assert!(ids.iter().any(|id| id == "claude-sonnet-5"));
+        assert!(ids.iter().any(|id| id == "claude-opus-4"));
+    }
+
+    #[test]
+    fn test_list_models_anthropic_returns_hardcoded_list() {
+        let client = LlmClient::new(
+            "test-key",
+            "https://api.anthropic.com",
+            "claude-sonnet-5",
+            WireFormat::Anthropic,
+        );
+        let models = client.list_models().unwrap();
+        assert!(!models.is_empty());
+        assert!(models.iter().any(|m| m.id == "claude-sonnet-5"));
+        assert!(models.iter().any(|m| m.id == "claude-opus-4"));
+    }
+
+    #[test]
+    fn test_list_models_openai_parses_response() {
+        // Test the parsing logic by constructing a mock response
+        let response = serde_json::json!({
+            "object": "list",
+            "data": [
+                {"id": "gpt-5.5", "object": "model"},
+                {"id": "gpt-4o", "object": "model"},
+                {"id": "gpt-4o-mini", "object": "model"}
+            ]
+        });
+
+        let models: Vec<ModelInfo> = response
+            .get("data")
+            .and_then(|d| d.as_array())
+            .into_iter()
+            .flat_map(|arr| {
+                arr.iter()
+                    .filter_map(|m| {
+                        m.get("id")
+                            .and_then(|i| i.as_str())
+                            .map(|id| ModelInfo { id: id.to_string() })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        assert_eq!(models.len(), 3);
+        assert_eq!(models[0].id, "gpt-5.5");
+        assert_eq!(models[1].id, "gpt-4o");
+        assert_eq!(models[2].id, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn test_list_models_openai_handles_empty_response() {
+        let response = serde_json::json!({
+            "object": "list",
+            "data": []
+        });
+
+        let models: Vec<ModelInfo> = response
+            .get("data")
+            .and_then(|d| d.as_array())
+            .into_iter()
+            .flat_map(|arr| {
+                arr.iter()
+                    .filter_map(|m| {
+                        m.get("id")
+                            .and_then(|i| i.as_str())
+                            .map(|id| ModelInfo { id: id.to_string() })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn test_list_models_openai_handles_missing_data() {
+        let response = serde_json::json!({
+            "object": "list"
+        });
+
+        let models: Vec<ModelInfo> = response
+            .get("data")
+            .and_then(|d| d.as_array())
+            .into_iter()
+            .flat_map(|arr| {
+                arr.iter()
+                    .filter_map(|m| {
+                        m.get("id")
+                            .and_then(|i| i.as_str())
+                            .map(|id| ModelInfo { id: id.to_string() })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        assert!(models.is_empty());
     }
 }

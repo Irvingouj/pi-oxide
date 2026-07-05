@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Terminal TUI host for pi-core. Ratatui interface, native shell, blocking HTTP."
 
 [[bin]]
-name = "pi"
+name = "pio"
 path = "src/main.rs"
 
 [dependencies]

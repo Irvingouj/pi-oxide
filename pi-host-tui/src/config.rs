@@ -29,7 +29,7 @@ pub struct LlmConfig {
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
-            model: "claude-sonnet-4-20250514".into(),
+            model: "claude-sonnet-5".into(),
             provider: "anthropic".into(),
             api_key: String::new(),
             base_url: String::new(),
@@ -120,6 +120,17 @@ fn load_file(path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
     Ok(config)
 }
 
+/// Write the config to the global config file `~/.pi-oxide/config.toml`.
+pub fn write_global(config: Config) -> Result<(), Box<dyn std::error::Error>> {
+    let path = global_config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content = toml::to_string_pretty(&config)?;
+    std::fs::write(&path, content)?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Resolution: merge config + env + defaults
 // ---------------------------------------------------------------------------
@@ -157,12 +168,7 @@ pub fn resolve(
         );
     }
 
-    let model = resolve_field(
-        cli_model,
-        "PI_MODEL",
-        &config.llm.model,
-        "claude-sonnet-4-20250514",
-    );
+    let model = resolve_field(cli_model, "PI_MODEL", &config.llm.model, "claude-sonnet-5");
     let provider = resolve_field(
         cli_provider,
         "PI_PROVIDER",
@@ -245,7 +251,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.llm.model, "claude-sonnet-4-20250514");
+        assert_eq!(config.llm.model, "claude-sonnet-5");
         assert_eq!(config.llm.provider, "anthropic");
         assert!(config.llm.api_key.is_empty());
     }
@@ -265,13 +271,13 @@ mod tests {
     fn test_toml_roundtrip() {
         let toml_str = r#"
 [llm]
-model = "claude-sonnet-4-20250514"
+model = "claude-sonnet-5"
 provider = "openai"
 api-key = "sk-test"
 base-url = "https://custom.api"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.llm.model, "claude-sonnet-4-20250514");
+        assert_eq!(config.llm.model, "claude-sonnet-5");
         assert_eq!(config.llm.provider, "openai");
         assert_eq!(config.llm.api_key, "sk-test");
         assert_eq!(config.llm.base_url, "https://custom.api");

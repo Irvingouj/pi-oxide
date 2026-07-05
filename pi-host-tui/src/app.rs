@@ -60,10 +60,11 @@ pub(crate) enum ChatEntry {
     System(String),
 }
 
-fn _wrapped_lines(text: &str, width: usize) -> usize {
+fn wrapped_lines(text: &str, width: usize) -> usize {
     if text.is_empty() {
         return 1;
     }
+    let width = width.max(1);
     let display_len = text.chars().count();
     (display_len.saturating_add(width.saturating_sub(1))) / width
 }
@@ -75,7 +76,7 @@ impl ChatEntry {
             ChatEntry::User(text) => {
                 let mut count: u16 = 2; // header "You: " + blank
                 for line in text.lines() {
-                    count += _wrapped_lines(line, width) as u16;
+                    count += wrapped_lines(line, width) as u16;
                 }
                 count
             }
@@ -87,13 +88,13 @@ impl ChatEntry {
                         .iter()
                         .map(|s| (*s.content).to_string())
                         .collect();
-                    count += _wrapped_lines(&s, width).max(1) as u16;
+                    count += wrapped_lines(&s, width).max(1) as u16;
                 }
                 count + 1 // blank
             }
             ChatEntry::ToolStart { name, args_summary } => {
                 let full = format!(" ┌─ {} {}", name, args_summary);
-                _wrapped_lines(&full, width) as u16
+                wrapped_lines(&full, width) as u16
             }
             ChatEntry::ToolResult {
                 output, is_error, ..
@@ -101,13 +102,13 @@ impl ChatEntry {
                 let mut count: u16 = 0;
                 for line in output.lines() {
                     let full = format!("{}{}", if *is_error { " ┃ " } else { " │ " }, line);
-                    count += _wrapped_lines(&full, width) as u16;
+                    count += wrapped_lines(&full, width) as u16;
                 }
                 count + 2 // footer + blank
             }
             ChatEntry::System(text) => {
                 let full = format!("  {}", text);
-                _wrapped_lines(&full, width) as u16 + 1 // + blank
+                wrapped_lines(&full, width) as u16 + 1 // + blank
             }
         }
     }

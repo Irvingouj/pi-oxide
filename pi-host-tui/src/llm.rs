@@ -915,10 +915,10 @@ mod tests {
         let client = LlmClient::new(
             "test-key",
             "https://api.anthropic.com",
-            "claude-sonnet-4-20250514",
+            "claude-sonnet-5",
             WireFormat::Anthropic,
         );
-        assert_eq!(client.model_id(), "claude-sonnet-4-20250514");
+        assert_eq!(client.model_id(), "claude-sonnet-5");
     }
 
     #[test]

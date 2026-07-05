@@ -14,6 +14,9 @@ mod llm_record;
 #[cfg(feature = "replay")]
 mod llm_replay;
 mod markdown;
+mod onboarding;
+#[cfg(test)]
+mod onboarding_test;
 mod session;
 mod smoke_test;
 mod tools;
@@ -26,7 +29,7 @@ mod tui;
 mod replay_e2e;
 
 #[derive(Parser)]
-#[command(name = "pi", about = "Terminal coding agent")]
+#[command(name = "pio", about = "Terminal coding agent")]
 struct Cli {
     /// Model ID (overrides config)
     #[arg(long, env = "PI_MODEL")]
@@ -61,19 +64,72 @@ struct Cli {
     #[cfg(feature = "replay")]
     #[arg(long)]
     replay_from: Option<std::path::PathBuf>,
+    /// Skip the onboarding wizard
+    #[arg(long)]
+    skip_onboarding: bool,
+}
+
+/// Check whether onboarding should run: no config file found and no API key from env.
+fn should_run_onboarding(cli: &Cli) -> bool {
+    // If user provided any infra override, they know what they're doing
+    if cli.model.is_some()
+        || cli.provider.is_some()
+        || cli.api_key.is_some()
+        || cli.base_url.is_some()
+    {
+        return false;
+    }
+    // If a config file exists, skip onboarding
+    if config::project_config_path().exists() || config::global_config_path().exists() {
+        return false;
+    }
+    // If any API key env var is set, skip onboarding
+    let api_key_envs = [
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "PI_API_KEY",
+    ];
+    for key in &api_key_envs {
+        if std::env::var(key).ok().is_some_and(|v| !v.is_empty()) {
+            return false;
+        }
+    }
+    true
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
 
-    // Merge infrastructure config: CLI > env > config file > hardcoded defaults
-    let resolved = config::resolve(
-        cli.model.as_deref(),
-        cli.provider.as_deref(),
-        cli.api_key.as_deref(),
-        cli.base_url.as_deref(),
-    );
+    // Run onboarding if no config exists and no API key is available
+    let resolved = if !cli.skip_onboarding && should_run_onboarding(&cli) {
+        if let Some(onboard) = onboarding::run() {
+            // Re-resolve with onboarding results as CLI overrides
+            config::resolve(
+                Some(&onboard.model),
+                Some(&onboard.provider),
+                Some(&onboard.api_key),
+                Some(&onboard.base_url),
+            )
+        } else {
+            // User cancelled onboarding; fall back to defaults
+            config::resolve(
+                cli.model.as_deref(),
+                cli.provider.as_deref(),
+                cli.api_key.as_deref(),
+                cli.base_url.as_deref(),
+            )
+        }
+    } else {
+        // Merge infrastructure config: CLI > env > config file > hardcoded defaults
+        config::resolve(
+            cli.model.as_deref(),
+            cli.provider.as_deref(),
+            cli.api_key.as_deref(),
+            cli.base_url.as_deref(),
+        )
+    };
 
     // Per-invocation values: CLI > env > hardcoded default (never from config)
     let system_prompt = cli

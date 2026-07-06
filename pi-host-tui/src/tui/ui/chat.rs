@@ -550,6 +550,9 @@ mod tests {
                 base_url: "x".into(),
                 config_path: None,
             },
+            kill_ring: crate::app::KillRing::new(),
+            last_kill_action: false,
+            last_yank: None,
         }
     }
 

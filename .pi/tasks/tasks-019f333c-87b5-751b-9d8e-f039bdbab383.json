@@ -1,0 +1,60 @@
+{
+  "nextId": 8,
+  "tasks": [
+    {
+      "id": "4",
+      "subject": "Quick style fixes in chat.rs",
+      "description": "Apply the following style fixes in `pi-host-tui/src/tui/ui/chat.rs`:\n\n1. **Line 270**: Change `pub(crate) fn build_status_spans` to `fn build_status_spans` (module-private suffices for tests)\n\n2. **Lines 113, 130**: Change `///` doc comments to `//` comments for private helpers (consistent with file style)\n\n3. **Lines 114-128**: Rewrite `format_tokens` from staircase `return` to `if/else if` chain:\n```rust\nfn format_tokens(count: u32) -> String {\n    if count < 1000 {\n        count.to_string()\n    } else if count < 10_000 {\n        format!(\"{:.1}k\", count as f64 / 1000.0)\n    } else if count < 1_000_000 {\n        format!(\"{}k\", (count as f64 / 1000.0).round() as u32)\n    } else if count < 10_000_000 {\n        format!(\"{:.1}M\", count as f64 / 1_000_000.0)\n    } else {\n        format!(\"{}M\", (count as f64 / 1_000_000.0).round() as u32)\n    }\n}\n```\n\n4. **Line 545**: Check how many times `span_text` is used. If ≤2 uses, inline it. If more, keep it but remove explicit lifetime annotation: `fn span_text(s: &Span<'static>) -> &str { s.content.as_ref() }`\n\nRun `cargo test -p pi-host-tui` to verify all tests still pass.",
+      "status": "completed",
+      "activeForm": "Applying quick style fixes",
+      "metadata": {
+        "agentType": "general-purpose",
+        "agentId": "9527eda8-a3fa-469",
+        "result": "All 116 relevant tests pass. The single failure (`smoke_async_bash_with_fireworks`) is an unrelated API 401 error — not caused by these changes.\n\n**Summary of applied changes:**\n\n1. **`build_status_spans`**: Changed `pub(crate)` to module-private `fn`\n2. **Doc comments**: Changed `///` to `//` for `format_tokens` and `format_ctx_usage` (private helpers)\n3. **`format_tokens`**: Rewritten from staircase `return` statements to `if/else if` chain\n4. **`span_text`**: Could not remove the explicit lifetime — Rust requires `<'a>` here because `&Span<'static>` introduces two distinct lifetimes (the reference lifetime and `'static`), and the return `&str` must be tied to the former. The original signature was kept."
+      },
+      "blocks": [
+        "6"
+      ],
+      "blockedBy": [],
+      "createdAt": 1783273574935,
+      "updatedAt": 1783273824295,
+      "owner": "9527eda8-a3fa-469"
+    },
+    {
+      "id": "5",
+      "subject": "Add missing test cases",
+      "description": "Add two missing test cases in `pi-host-tui/src/tui/ui/chat.rs` in the `#[cfg(test)] mod tests` block:\n\n1. **Test for pct > 100%**:\n```rust\n#[test]\nfn format_ctx_usage_over_100_percent_is_red() {\n    let (text, color) = format_ctx_usage(150_000, 128_000, true);\n    assert!(text.contains(\"117.2%\"));\n    assert_eq!(color, Color::Red);\n}\n```\n\n2. **Test for running + tasks combined**:\n```rust\n#[test]\nfn build_status_spans_running_with_tasks_shows_tools_not_dot() {\n    let mut app = app_with_agent();\n    app.running = true;\n    let (_tx, rx) = std::sync::mpsc::channel();\n    app.running_tasks.push(crate::app::RunningTask {\n        tool_call_id: pi_core::types::ToolCallId(\"tc1\".to_string()),\n        stream: Box::new(rx),\n    });\n    let spans = app.build_status_spans();\n    // Should show tools indicator, not bare running dot\n    assert_eq!(span_text(spans.last().unwrap()), \" ● 1 tools\");\n    // Should NOT have a bare \" ●\" running indicator\n    assert!(!spans.iter().any(|s| s.content.as_ref() == \" ●\"));\n}\n```\n\nRun `cargo test -p pi-host-tui` to verify.",
+      "status": "completed",
+      "activeForm": "Adding missing test cases",
+      "metadata": {
+        "agentType": "general-purpose",
+        "agentId": "ac469271-aab8-487",
+        "result": "All 117 tests pass, including both new tests:\n\n- `format_ctx_usage_over_100_percent_is_red` — verifies that when input tokens exceed the context window (150k/128k = 117.2%), the color is `Red`\n- `build_status_spans_running_with_tasks_shows_tools_not_dot` — verifies that when both `running` and `running_tasks` are set, the status shows `\" ● 1 tools\"` (not the bare `\" ●\"` running indicator)"
+      },
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1783273574936,
+      "updatedAt": 1783273757751,
+      "owner": "ac469271-aab8-487"
+    },
+    {
+      "id": "6",
+      "subject": "Cache context_window on App and fix /model and /tokens",
+      "description": "Cache `context_window` on `App` to decouple render from agent internals. Changes span `app.rs` and `chat.rs`.\n\n**In `app.rs`:**\n\n1. Add field to `App` struct (near `budget` field):\n```rust\npub(crate) context_window: u32,\n```\n\n2. In `App::new()`, after creating the `Model`, set `context_window: model.context_window` in the `Self { ... }` constructor.\n\n3. In the `/model` command handler (around line 850), after switching model, also update `self.context_window`. Since we don't have model metadata on switch, keep the existing context_window or set to a reasonable default. The key fix is: when `App::new()` creates the model, it should set `context_window` from the resolved config or a model registry. For now, read it from `model.context_window` at construction and keep it on App.\n\n4. In the `/tokens` command handler (around line 916), change from `budget.max_context_tokens` to `self.context_window`:\n```rust\nlet ctx_pct = if self.context_window > 0 {\n    (input as f64 / self.context_window as f64 * 100.0) as u16\n} else { 0 };\n```\n\n**In `chat.rs`:**\n\n5. In `build_status_spans`, change from `self.agent().state().model.context_window` to `self.context_window`.\n\n6. Update `app_with_agent()` test helper to include `context_window: 128_000`.\n\n7. Update `App::with_entries_for_test()` to include `context_window: 0`.\n\nRun `cargo test -p pi-host-tui` to verify all 115+ tests pass.",
+      "status": "completed",
+      "activeForm": "Caching context_window on App",
+      "metadata": {
+        "agentType": "general-purpose",
+        "agentId": "8ead13a3-0e17-426",
+        "result": "All 117 tests pass. Here's a summary of the changes:\n\n**`app.rs`:**\n1. Added `pub(crate) context_window: u32` field to `App` struct (after `budget`)\n2. Captured `context_window` from `model` before the move into `AgentOptions`, then set it in the `Self { ... }` constructor\n3. Added comment in `/model` handler noting that `context_window` is preserved on model switch (no metadata available)\n4. Changed `/tokens` handler from `budget.max_context_tokens` to `self.context_window`\n5. Added `context_window: 0` to `with_entries_for_test()`\n\n**`chat.rs`:**\n6. Changed `build_status_spans` from `self.agent().state().model.context_window` to `self.context_window`\n7. Added `context_window: 128_000` to `app_with_agent()` test helper"
+      },
+      "blocks": [],
+      "blockedBy": [
+        "4"
+      ],
+      "createdAt": 1783273574936,
+      "updatedAt": 1783273983003,
+      "owner": "8ead13a3-0e17-426"
+    }
+  ]
+}

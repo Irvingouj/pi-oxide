@@ -4,8 +4,12 @@ use crate::host_state::HostState;
 
 mod app;
 mod config;
+#[cfg(all(test, unix))]
+mod e2e_tests;
 mod extension;
 mod host_state;
+#[cfg(test)]
+mod input_tests;
 mod llm;
 #[cfg(any(feature = "record", feature = "replay"))]
 mod llm_cassette;
@@ -107,7 +111,7 @@ fn home_dir() -> std::path::PathBuf {
         .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), app::TuiError> {
     let log_dir = home_dir().join(".pi-oxide").join("logs");
     std::fs::create_dir_all(&log_dir).ok();
     let log_file = std::fs::OpenOptions::new()

@@ -6,6 +6,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Text;
 use ratatui::widgets::ListState;
 use ratatui::Frame;
+use thiserror::Error;
 
 use pi_core::{
     AgentAction, AgentMessage, AgentOptions, AgentRuntime, ApiName, Artifacts,
@@ -22,6 +23,85 @@ use crate::llm::LlmProvider;
 use crate::llm::{LlmClient, WireFormat};
 use crate::session::FileSystemSessionBackend;
 use crate::session_log::{SessionEvent, SessionEventLogger};
+
+// ---------------------------------------------------------------------------
+// Error types
+// ---------------------------------------------------------------------------
+
+/// Concrete error type for TUI operations.
+#[derive(Debug, Error)]
+pub enum TuiError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+// ---------------------------------------------------------------------------
+// Kill ring (Emacs-style kill/yank)
+// ---------------------------------------------------------------------------
+
+/// Ring buffer for Emacs-style kill/yank operations.
+///
+/// Tracks killed (deleted) text entries. Consecutive kills accumulate
+/// into a single entry. Supports yank (paste most recent) and yank-pop
+/// (cycle through older entries).
+pub(crate) struct KillRing {
+    ring: Vec<String>,
+}
+
+impl KillRing {
+    pub(crate) fn new() -> Self {
+        Self { ring: Vec::new() }
+    }
+
+    /// Add text to the kill ring.
+    ///
+    /// - `prepend`: if accumulating, prepend (backward deletion) or append (forward deletion)
+    /// - `accumulate`: merge with the most recent entry instead of creating a new one
+    pub(crate) fn push(&mut self, text: String, prepend: bool, accumulate: bool) {
+        if text.is_empty() {
+            return;
+        }
+        if accumulate && !self.ring.is_empty() {
+            if let Some(last) = self.ring.pop() {
+                self.ring.push(if prepend {
+                    format!("{text}{last}")
+                } else {
+                    format!("{last}{text}")
+                });
+            }
+        } else {
+            self.ring.push(text);
+        }
+    }
+
+    /// Get most recent entry without modifying the ring.
+    pub(crate) fn peek(&self) -> Option<&str> {
+        self.ring.last().map(|s| s.as_str())
+    }
+
+    /// Move last entry to front (for yank-pop cycling).
+    pub(crate) fn rotate(&mut self) {
+        if self.ring.len() > 1 {
+            if let Some(last) = self.ring.pop() {
+                self.ring.insert(0, last);
+            }
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.ring.is_empty()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.ring.len()
+    }
+}
+
+impl Default for KillRing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Command palette
@@ -140,12 +220,7 @@ pub(crate) fn derive_scroll_intent(key: &KeyEvent) -> Option<ScrollIntent> {
         KeyCode::PageDown => Some(ScrollIntent::PageDown),
         KeyCode::Home => Some(ScrollIntent::Top),
         KeyCode::End => Some(ScrollIntent::Bottom),
-        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(ScrollIntent::PageUp)
-        }
-        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(ScrollIntent::PageDown)
-        }
+        // Note: Ctrl+B/F are now cursor movement (Emacs), not scroll
         _ => None,
     }
 }
@@ -291,6 +366,13 @@ pub struct App {
     /// Cached chat area from the last render frame.
     pub(crate) last_chat_area: Rect,
     pub(crate) resolved_config: ResolvedConfig,
+
+    // Kill ring for Emacs-style kill/yank
+    pub(crate) kill_ring: KillRing,
+    /// Last input action (for kill accumulation)
+    pub(crate) last_kill_action: bool,
+    /// Tracks the last yank (position, text) for yank-pop.
+    pub(crate) last_yank: Option<(usize, String)>,
 }
 
 pub(crate) struct RunningTask {
@@ -321,7 +403,7 @@ impl App {
         #[cfg(feature = "record")] record_to: Option<std::path::PathBuf>,
         #[cfg(feature = "replay")] replay_from: Option<std::path::PathBuf>,
         resolved_config: ResolvedConfig,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, TuiError> {
         let model = Model {
             id: ModelId::new(model_id),
             name: ModelName::new(model_id),
@@ -418,6 +500,9 @@ impl App {
             context_window,
             last_chat_area: ratatui::layout::Rect::ZERO,
             resolved_config,
+            kill_ring: KillRing::new(),
+            last_kill_action: false,
+            last_yank: None,
         })
     }
 
@@ -429,7 +514,7 @@ impl App {
         wire_format: WireFormat,
         #[cfg(feature = "record")] record_to: Option<std::path::PathBuf>,
         #[cfg(feature = "replay")] replay_from: Option<std::path::PathBuf>,
-    ) -> Result<crate::llm::LlmBackend, Box<dyn std::error::Error>> {
+    ) -> Result<crate::llm::LlmBackend, TuiError> {
         #[cfg(not(any(feature = "record", feature = "replay")))]
         {
             Ok(LlmClient::new(api_key, base_url, model_id, wire_format))
@@ -462,7 +547,7 @@ impl App {
         mut self,
         terminal: &mut ratatui::DefaultTerminal,
         _session_backend: &FileSystemSessionBackend,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), TuiError> {
         loop {
             terminal.draw(|f| self.render(f))?;
 
@@ -489,15 +574,22 @@ impl App {
 
     /// Handle keys that don't need the terminal. Returns `true` if the key was consumed.
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> bool {
-        // Ctrl+C: cancel running LLM
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        let is_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let is_alt = key.modifiers.contains(KeyModifiers::ALT);
+        let is_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
+        // Ctrl+C: cancel running LLM, or quit when idle
+        if key.code == KeyCode::Char('c') && is_ctrl {
             if self.running {
                 self.cancelled = true;
+            } else {
+                self.should_quit = true;
             }
             return true;
         }
 
-        // Scroll keys — handled before the main match
+        // Scroll keys — handled before the main match (only when NOT in input mode)
+        // Ctrl+B/F are now cursor movement, not scroll
         if let Some(intent) = derive_scroll_intent(&key) {
             let visible = self.last_chat_area.height.saturating_sub(2);
             let total_lines = self.wrapped_line_count(self.last_chat_area.width as usize);
@@ -518,8 +610,25 @@ impl App {
             return self.handle_model_picker_key(key);
         }
 
+        // Emacs-style editing keys (Ctrl+letter)
+        if is_ctrl {
+            return self.handle_ctrl_key(key);
+        }
+
+        // Alt-style editing keys
+        if is_alt {
+            return self.handle_alt_key(key);
+        }
+
         match key.code {
             KeyCode::Enter => {
+                // Shift+Enter: insert newline (multi-line input)
+                if is_shift {
+                    self.input.insert(self.cursor_pos, '\n');
+                    self.cursor_pos += 1;
+                    self.reset_kill_accumulation();
+                    return true;
+                }
                 if self.show_suggestions {
                     if let Some(idx) = self.suggestion_state.selected() {
                         if let Some(cmd) = self.suggestions.get(idx).cloned() {
@@ -537,10 +646,11 @@ impl App {
                 true
             }
             KeyCode::Tab => {
-                if self.input.starts_with('/') {
-                    self.update_suggestions();
-                } else if self.show_suggestions {
+                if self.show_suggestions {
+                    // Cycle through suggestions
                     self.suggestion_state.select_next();
+                } else if self.input.starts_with('/') {
+                    self.update_suggestions();
                 }
                 true
             }
@@ -574,6 +684,7 @@ impl App {
                     self.cursor_pos -= prev;
                     self.input.remove(self.cursor_pos);
                 }
+                self.reset_kill_accumulation();
                 if self.input.is_empty() || !self.input.starts_with('/') {
                     self.show_suggestions = false;
                 } else {
@@ -591,6 +702,7 @@ impl App {
                         .map(|(i, _)| i)
                         .unwrap_or(0);
                 }
+                self.reset_kill_accumulation();
                 true
             }
             KeyCode::Right => {
@@ -601,11 +713,15 @@ impl App {
                         .map(|c| self.cursor_pos + c.len_utf8())
                         .unwrap_or(self.input.len());
                 }
+                self.reset_kill_accumulation();
                 true
             }
             KeyCode::Esc => {
                 if self.show_suggestions {
                     self.show_suggestions = false;
+                } else if self.running {
+                    // Interrupt when running
+                    self.cancelled = true;
                 } else {
                     self.should_quit = true;
                 }
@@ -613,6 +729,333 @@ impl App {
             }
             _ => false,
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Ctrl+letter editing keys (Emacs-style)
+    // -----------------------------------------------------------------------
+
+    fn handle_ctrl_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            // Cursor movement
+            KeyCode::Char('a') => {
+                // Ctrl+A: move to line start
+                self.cursor_pos = 0;
+                self.reset_kill_accumulation();
+                true
+            }
+            KeyCode::Char('e') => {
+                // Ctrl+E: move to line end
+                self.cursor_pos = self.input.len();
+                self.reset_kill_accumulation();
+                true
+            }
+            KeyCode::Char('b') => {
+                // Ctrl+B: move cursor left one grapheme
+                if self.cursor_pos > 0 {
+                    let before = &self.input[..self.cursor_pos];
+                    let last_char_len = before.chars().last().map(|c| c.len_utf8()).unwrap_or(0);
+                    self.cursor_pos -= last_char_len;
+                }
+                self.reset_kill_accumulation();
+                true
+            }
+            KeyCode::Char('f') => {
+                // Ctrl+F: move cursor right one grapheme
+                if self.cursor_pos < self.input.len() {
+                    let after = &self.input[self.cursor_pos..];
+                    let first_char_len = after.chars().next().map(|c| c.len_utf8()).unwrap_or(0);
+                    self.cursor_pos += first_char_len;
+                }
+                self.reset_kill_accumulation();
+                true
+            }
+
+            // Deletion
+            KeyCode::Char('w') => {
+                // Ctrl+W: delete word backward
+                self.delete_word_backward();
+                true
+            }
+            KeyCode::Char('k') => {
+                // Ctrl+K: delete to line end
+                self.delete_to_line_end();
+                true
+            }
+            KeyCode::Char('u') => {
+                // Ctrl+U: delete to line start
+                self.delete_to_line_start();
+                true
+            }
+            KeyCode::Char('d') => {
+                // Ctrl+D: delete char forward
+                self.delete_char_forward();
+                true
+            }
+
+            // Yank
+            KeyCode::Char('y') => {
+                // Ctrl+Y: yank from kill ring
+                self.yank();
+                self.reset_kill_accumulation();
+                true
+            }
+
+            // Word navigation
+            KeyCode::Left => {
+                // Ctrl+Left: word left
+                self.move_word_backward();
+                self.reset_kill_accumulation();
+                true
+            }
+            KeyCode::Right => {
+                // Ctrl+Right: word right
+                self.move_word_forward();
+                self.reset_kill_accumulation();
+                true
+            }
+
+            _ => false,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Alt+key editing keys
+    // -----------------------------------------------------------------------
+
+    fn handle_alt_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            // Word navigation
+            KeyCode::Left => {
+                self.move_word_backward();
+                self.reset_kill_accumulation();
+                true
+            }
+            KeyCode::Right => {
+                self.move_word_forward();
+                self.reset_kill_accumulation();
+                true
+            }
+
+            // Word deletion
+            KeyCode::Backspace => {
+                // Alt+Backspace: delete word backward
+                self.delete_word_backward();
+                true
+            }
+            KeyCode::Delete => {
+                // Alt+Delete: delete word forward
+                self.delete_word_forward();
+                true
+            }
+
+            // Yank-pop
+            KeyCode::Char('y') => {
+                // Alt+Y: yank-pop
+                self.yank_pop();
+                self.reset_kill_accumulation();
+                true
+            }
+
+            _ => false,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Cursor movement helpers
+    // -----------------------------------------------------------------------
+
+    /// Move cursor to previous word boundary.
+    fn move_word_backward(&mut self) {
+        if self.cursor_pos == 0 {
+            return;
+        }
+        let mut byte_idx = self.cursor_pos;
+
+        // Skip whitespace backward; if only whitespace before cursor, go to start.
+        let mut found_non_ws = false;
+        for (i, c) in self.input.char_indices().rev() {
+            if i >= byte_idx {
+                continue;
+            }
+            if !c.is_whitespace() {
+                byte_idx = i;
+                found_non_ws = true;
+                break;
+            }
+        }
+        if !found_non_ws {
+            self.cursor_pos = 0;
+            return;
+        }
+        // Skip word characters backward
+        for (i, c) in self.input.char_indices().rev() {
+            if i >= byte_idx {
+                continue;
+            }
+            if c.is_whitespace() {
+                break;
+            }
+            byte_idx = i;
+        }
+        self.cursor_pos = byte_idx;
+    }
+
+    /// Move cursor to next word boundary.
+    fn move_word_forward(&mut self) {
+        if self.cursor_pos >= self.input.len() {
+            return;
+        }
+        let mut byte_idx = self.cursor_pos;
+
+        // Skip whitespace forward
+        for (i, c) in self.input.char_indices() {
+            if i < byte_idx {
+                continue;
+            }
+            if !c.is_whitespace() {
+                break;
+            }
+            byte_idx = i + c.len_utf8();
+        }
+        // Skip word characters forward
+        for (i, c) in self.input.char_indices() {
+            if i < byte_idx {
+                continue;
+            }
+            if c.is_whitespace() {
+                break;
+            }
+            byte_idx = i + c.len_utf8();
+        }
+        self.cursor_pos = byte_idx;
+    }
+
+    // -----------------------------------------------------------------------
+    // Deletion helpers (with kill ring)
+    // -----------------------------------------------------------------------
+
+    /// Push deleted text onto the kill ring and mark this as a kill action.
+    fn push_kill(&mut self, text: String, backward: bool) {
+        if text.is_empty() {
+            return;
+        }
+        self.kill_ring.push(text, backward, self.last_kill_action);
+        self.last_kill_action = true;
+    }
+
+    /// Reset the kill-accumulation flag after a non-kill action.
+    fn reset_kill_accumulation(&mut self) {
+        self.last_kill_action = false;
+    }
+
+    /// Delete character at cursor (forward).
+    fn delete_char_forward(&mut self) {
+        if self.cursor_pos >= self.input.len() {
+            return;
+        }
+        let deleted: String = self.input[self.cursor_pos..]
+            .chars()
+            .next()
+            .map(|c| c.to_string())
+            .unwrap_or_default();
+        if !deleted.is_empty() {
+            self.input
+                .drain(self.cursor_pos..self.cursor_pos + deleted.len());
+            self.push_kill(deleted, false /* forward */);
+        }
+    }
+
+    /// Delete from cursor to line end.
+    fn delete_to_line_end(&mut self) {
+        if self.cursor_pos >= self.input.len() {
+            return;
+        }
+        let deleted: String = self.input[self.cursor_pos..].chars().collect();
+        self.input.truncate(self.cursor_pos);
+        self.push_kill(deleted, false /* forward */);
+    }
+
+    /// Delete from line start to cursor.
+    fn delete_to_line_start(&mut self) {
+        if self.cursor_pos == 0 {
+            return;
+        }
+        let deleted = self.input[..self.cursor_pos].to_string();
+        self.input.drain(..self.cursor_pos);
+        self.cursor_pos = 0;
+        self.push_kill(deleted, true /* backward */);
+    }
+
+    /// Delete word backward from cursor.
+    fn delete_word_backward(&mut self) {
+        if self.cursor_pos == 0 {
+            return;
+        }
+        let old_pos = self.cursor_pos;
+        self.move_word_backward();
+        let deleted = self.input[self.cursor_pos..old_pos].to_string();
+        self.input.drain(self.cursor_pos..old_pos);
+        self.push_kill(deleted, true /* backward */);
+    }
+
+    /// Delete word forward from cursor.
+    fn delete_word_forward(&mut self) {
+        if self.cursor_pos >= self.input.len() {
+            return;
+        }
+        let old_pos = self.cursor_pos;
+        self.move_word_forward();
+        let deleted = self.input[old_pos..self.cursor_pos].to_string();
+        self.input.drain(old_pos..self.cursor_pos);
+        self.cursor_pos = old_pos;
+        self.push_kill(deleted, false /* forward */);
+    }
+
+    // -----------------------------------------------------------------------
+    // Yank helpers
+    // -----------------------------------------------------------------------
+
+    /// Yank (paste) the most recent kill ring entry at cursor.
+    fn yank(&mut self) {
+        if let Some(text) = self.kill_ring.peek() {
+            let text = text.to_string();
+            self.last_yank = Some((self.cursor_pos, text.clone()));
+            self.input.insert_str(self.cursor_pos, &text);
+            self.cursor_pos += text.len();
+        }
+    }
+
+    /// Yank-pop: rotate kill ring and re-yank.
+    ///
+    /// Removes the text from the last yank, rotates the ring, and yanks the new entry.
+    /// Only valid immediately after yank (cursor must still be at yank end).
+    fn yank_pop(&mut self) {
+        // Must have yanked something first
+        let (yank_start, old_text) = match &self.last_yank {
+            Some(pair) => pair,
+            None => return,
+        };
+
+        // Guard: cursor must still be at the yank end position.
+        // If the user typed or moved since yank, the byte offset is stale
+        // and draining would corrupt the buffer.
+        if self.cursor_pos != *yank_start + old_text.len() {
+            return;
+        }
+
+        // Need at least 2 entries to rotate meaningfully
+        if self.kill_ring.len() < 2 {
+            return;
+        }
+
+        // Remove the previously yanked text
+        self.input.drain(*yank_start..*yank_start + old_text.len());
+        self.cursor_pos = *yank_start;
+
+        // Rotate the ring and yank the new entry
+        self.kill_ring.rotate();
+        self.yank();
     }
 
     /// Handle keys that need the terminal (submit_prompt).
@@ -630,6 +1073,7 @@ impl App {
             KeyCode::Char(c) => {
                 self.input.insert(self.cursor_pos, c);
                 self.cursor_pos += c.len_utf8();
+                self.reset_kill_accumulation();
                 if self.show_suggestions && !self.input.starts_with('/') {
                     self.show_suggestions = false;
                 } else if self.input.starts_with('/') {
@@ -683,15 +1127,20 @@ impl App {
 
     fn open_model_picker(&mut self) {
         use crate::llm::ModelDiscovery;
+        // Guard: agent must be initialized
+        let agent = match self.agent.as_ref() {
+            Some(a) => a,
+            None => return,
+        };
         let models = self
             .llm_client
             .list_models()
             .map(|m| m.into_iter().map(|m| m.id).collect())
             .unwrap_or_else(|_| {
                 // Fallback: just the current model
-                vec![self.agent().state().model.id.as_str().to_string()]
+                vec![agent.state().model.id.as_str().to_string()]
             });
-        let current = self.agent().state().model.id.as_str().to_string();
+        let current = agent.state().model.id.as_str().to_string();
         if models.is_empty() {
             self.entries
                 .push(ChatEntry::System("No available models".into()));
@@ -1361,7 +1810,7 @@ impl App {
 #[cfg(test)]
 impl App {
     /// Build a minimal App for render/scroll E2E tests — no agent, no tools, dummy LLM.
-    fn with_entries_for_test(entries: Vec<ChatEntry>) -> Self {
+    pub(crate) fn with_entries_for_test(entries: Vec<ChatEntry>) -> Self {
         Self {
             agent: None,
             entries,
@@ -1404,6 +1853,9 @@ impl App {
                 base_url: "x".into(),
                 config_path: None,
             },
+            kill_ring: KillRing::new(),
+            last_kill_action: false,
+            last_yank: None,
         }
     }
 }
@@ -1461,15 +1913,17 @@ mod scroll_tests {
     }
 
     #[test]
-    fn derive_scroll_ctrl_b() {
+    fn derive_scroll_ctrl_b_not_scroll() {
+        // Ctrl+B is now cursor left (Emacs), not scroll
         let key = make_key(KeyCode::Char('b'), KeyModifiers::CONTROL);
-        assert_eq!(derive_scroll_intent(&key), Some(ScrollIntent::PageUp));
+        assert_eq!(derive_scroll_intent(&key), None);
     }
 
     #[test]
-    fn derive_scroll_ctrl_f() {
+    fn derive_scroll_ctrl_f_not_scroll() {
+        // Ctrl+F is now cursor right (Emacs), not scroll
         let key = make_key(KeyCode::Char('f'), KeyModifiers::CONTROL);
-        assert_eq!(derive_scroll_intent(&key), Some(ScrollIntent::PageDown));
+        assert_eq!(derive_scroll_intent(&key), None);
     }
 
     #[test]
@@ -1553,7 +2007,7 @@ mod scroll_tests {
     fn handle_key_scroll_end_rearms_auto() {
         let key = make_key(KeyCode::End, KeyModifiers::NONE);
         let intent = derive_scroll_intent(&key).expect("should be scroll key");
-        let (off, auto) = apply_scroll(intent, 100, 10, 0, false);
+        let (_off, auto) = apply_scroll(intent, 100, 10, 0, false);
         assert!(auto, "auto_scroll should be re-armed");
     }
 
@@ -1638,8 +2092,8 @@ mod scroll_tests {
             "start at bottom; got: {rendered}"
         );
 
-        // PageUp (Ctrl+B) → shift up one viewport
-        app.handle_key(make_key(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        // PageUp → shift up one viewport
+        app.handle_key(make_key(KeyCode::PageUp, KeyModifiers::NONE));
         let rendered = get_backend_render(&mut app, &mut terminal);
         assert!(
             !rendered.contains("Line 29"),
@@ -1647,9 +2101,9 @@ mod scroll_tests {
         );
         assert!(!app.auto_scroll, "PageUp should disengage auto_scroll");
 
-        // PageDown (Ctrl+F) twice → back to bottom
-        app.handle_key(make_key(KeyCode::Char('f'), KeyModifiers::CONTROL));
-        app.handle_key(make_key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        // PageDown twice → back to bottom
+        app.handle_key(make_key(KeyCode::PageDown, KeyModifiers::NONE));
+        app.handle_key(make_key(KeyCode::PageDown, KeyModifiers::NONE));
         let rendered = get_backend_render(&mut app, &mut terminal);
         assert!(
             rendered.contains("Line 29"),

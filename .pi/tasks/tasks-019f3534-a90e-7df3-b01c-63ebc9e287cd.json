@@ -1,0 +1,93 @@
+{
+  "nextId": 7,
+  "tasks": [
+    {
+      "id": "1",
+      "subject": "Strengthen e2e test assertions",
+      "description": "Fix all 13 e2e tests in src/e2e_tests.rs to verify actual behavior, not just presence:\n- Deletion tests must assert deleted text is ABSENT (e.g., `!output.contains(\"world\")` after Ctrl+W)\n- `e2e_esc_quits` must verify process termination via `is_alive()`\n- `e2e_slash_shows_commands` must verify command list content, not just non-empty\n- `e2e_shift_enter` must verify text is on separate lines\n- `e2e_ctrl_a` must verify prepend order, not just X exists\n- `e2e_ctrl_y` must verify yank restored text (no OR fallback)\n- `e2e_tui_starts` should have a single specific assertion\n- `e2e_type_text_and_delete` must verify text is gone after Ctrl+U",
+      "status": "in_progress",
+      "activeForm": "Strengthening e2e test assertions",
+      "metadata": {},
+      "blocks": [
+        "6"
+      ],
+      "blockedBy": [],
+      "createdAt": 1783367779612,
+      "updatedAt": 1783367806861
+    },
+    {
+      "id": "2",
+      "subject": "Replace Box<dyn Error> with thiserror enum",
+      "description": "Replace `Box<dyn std::error::Error>` in app.rs with a proper `thiserror` error enum.\nThree methods affected: `App::new()` (line ~175), `App::run()` (line ~297), `App::build_llm_client()` (line ~317).\nAlso check main.rs for `Box<dyn std::error::Error>` in `main()` return type.\nCreate a `TuiError` enum with concrete variants for each error source (IO, config, LLM, etc.).",
+      "status": "in_progress",
+      "activeForm": "Replacing Box<dyn Error> with thiserror enum",
+      "metadata": {},
+      "blocks": [
+        "6"
+      ],
+      "blockedBy": [],
+      "createdAt": 1783367784652,
+      "updatedAt": 1783367808828
+    },
+    {
+      "id": "3",
+      "subject": "Implement yank_pop() properly or remove binding",
+      "description": "Fix `yank_pop()` in app.rs (line ~560). Currently rotates the kill ring but doesn't re-yank the new entry.\nOptions:\nA) Implement properly: track the last yanked text, remove it, then yank the new entry after rotation.\nB) Remove the Alt+Y binding if proper implementation is too complex.\nRecommendation: Implement A — track `last_yank: Option<String>` on App, on yank_pop: remove last_yank from input, rotate ring, yank new entry.",
+      "status": "in_progress",
+      "activeForm": "Implementing yank_pop properly",
+      "metadata": {},
+      "blocks": [
+        "6"
+      ],
+      "blockedBy": [],
+      "createdAt": 1783367790262,
+      "updatedAt": 1783367810719
+    },
+    {
+      "id": "4",
+      "subject": "Fix word movement for multi-byte UTF-8",
+      "description": "Fix `move_word_backward` and `move_word_forward` in app.rs (lines ~478-520) to scan chars instead of bytes.\nCurrently uses `as_bytes()` for whitespace detection which breaks on multi-byte UTF-8.\nChange to `.chars()` iteration with proper char index tracking.",
+      "status": "in_progress",
+      "activeForm": "Fixing word movement for multi-byte UTF-8",
+      "metadata": {},
+      "blocks": [
+        "6"
+      ],
+      "blockedBy": [],
+      "createdAt": 1783367794016,
+      "updatedAt": 1783367812668
+    },
+    {
+      "id": "5",
+      "subject": "Guard open_model_picker() against None agent",
+      "description": "Fix `open_model_picker()` in app.rs (line ~630) to guard against `self.agent()` being None.\nCurrently calls `self.agent().state()` which unwraps an Option.\nAdd `if let Some(agent) = &self.agent` guard or use `if let` pattern.",
+      "status": "in_progress",
+      "activeForm": "Guarding open_model_picker against None agent",
+      "metadata": {},
+      "blocks": [
+        "6"
+      ],
+      "blockedBy": [],
+      "createdAt": 1783367797919,
+      "updatedAt": 1783367814518
+    },
+    {
+      "id": "6",
+      "subject": "Verify all fixes with tests + clippy + fmt",
+      "description": "After all fixes:\n1. Run `cargo fmt --all`\n2. Run `cargo clippy -p pi-host-tui`\n3. Run `cargo test -p pi-host-tui` — all 198+ tests must pass\n4. Verify no new warnings",
+      "status": "pending",
+      "activeForm": "Verifying all fixes with tests + clippy + fmt",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5"
+      ],
+      "createdAt": 1783367801619,
+      "updatedAt": 1783367804234
+    }
+  ]
+}

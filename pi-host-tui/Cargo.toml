@@ -39,3 +39,8 @@ default = []
 record = []
 replay = []
 
+[dev-dependencies]
+nix = { version = "0.30", features = ["process", "signal", "term"] }
+anyhow = "1.0"
+libc = "0.2"
+

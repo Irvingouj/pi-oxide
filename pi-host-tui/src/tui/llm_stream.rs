@@ -14,6 +14,7 @@ use crate::app::{App, ChatEntry};
 #[allow(unused_imports)]
 use crate::llm::{LlmProvider, LlmStreamState};
 use crate::markdown;
+use crate::session_log::SessionEvent;
 
 impl App {
     pub(crate) fn stream_llm(
@@ -23,6 +24,15 @@ impl App {
     ) {
         self.running = true;
         self.streaming_text.clear();
+
+        // Log LLM request
+        if let Some(ref logger) = self.session_logger {
+            let _ = logger.append(&SessionEvent::LlmRequest {
+                turn: self.turn_number,
+                model: self.llm_client.model_id().to_string(),
+                message_count: context.messages.len(),
+            });
+        }
 
         match self
             .llm_client
@@ -106,6 +116,12 @@ impl App {
                         LlmChunk::Error { message } => {
                             self.entries
                                 .push(ChatEntry::System(format!("LLM Error: {message}")));
+                            if let Some(ref logger) = self.session_logger {
+                                let _ = logger.append(&SessionEvent::Error {
+                                    turn: self.turn_number,
+                                    message: message.clone(),
+                                });
+                            }
                             break;
                         }
                         _ => {}
@@ -119,6 +135,14 @@ impl App {
                 }
 
                 let stop_reason = stream.stop_reason().unwrap_or("end_turn");
+
+                // Log LLM response
+                if let Some(ref logger) = self.session_logger {
+                    let _ = logger.append(&SessionEvent::LlmResponse {
+                        turn: self.turn_number,
+                        stop_reason: stop_reason.to_string(),
+                    });
+                }
 
                 let tool_use_blocks: Vec<Content> = stream
                     .tool_calls()
@@ -135,7 +159,7 @@ impl App {
                 tracing::debug!(
                     text_len = full_text.len(),
                     tool_calls = tool_use_blocks.len(),
-                    stop_reason,
+                    %stop_reason,
                     "LLM stream completed"
                 );
 
@@ -191,6 +215,13 @@ impl App {
                 self.handle_actions(terminal, actions);
             }
             Err(e) => {
+                tracing::error!(error = ?e, "LLM stream failed to start");
+                if let Some(ref logger) = self.session_logger {
+                    let _ = logger.append(&SessionEvent::Error {
+                        turn: self.turn_number,
+                        message: e.to_string(),
+                    });
+                }
                 let err_result = LlmResult::Err {
                     error: LlmError {
                         code: "call_failed".into(),

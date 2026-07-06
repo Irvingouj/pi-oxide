@@ -19,6 +19,7 @@ mod onboarding;
 #[cfg(test)]
 mod onboarding_test;
 mod session;
+mod session_log;
 mod smoke_test;
 mod tools;
 #[cfg(test)]
@@ -99,8 +100,29 @@ fn should_run_onboarding(cli: &Cli) -> bool {
     true
 }
 
+fn home_dir() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
+    let log_dir = home_dir().join(".pi-oxide").join("logs");
+    std::fs::create_dir_all(&log_dir).ok();
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("pio.log"))
+        .expect("failed to open log file");
+
+    tracing_subscriber::fmt()
+        .with_writer(log_file)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
     let cli = Cli::parse();
 
     // Run onboarding if no config exists and no API key is available

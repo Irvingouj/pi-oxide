@@ -337,7 +337,7 @@ impl LlmClient {
         };
         let body = self.build_body(system_prompt, messages, tools);
 
-        tracing::debug!(url, model = %self.model, messages = messages.len(), tools = tools.len(), "POST");
+        tracing::debug!(%url, model = %self.model, messages = messages.len(), tools = tools.len(), "POST");
 
         let mut req = self
             .client
@@ -362,6 +362,7 @@ impl LlmClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().unwrap_or_default();
+            tracing::error!(status = %status, url = %url, model = %self.model, body = %text, "Non-2xx API response");
             return Err(format!("API error {status}: {text}").into());
         }
 

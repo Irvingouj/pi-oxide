@@ -87,13 +87,13 @@ impl Drop for RecordingLlmClient {
         match serde_json::to_string_pretty(&*cassette) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&self.output_path, json) {
-                    tracing::error!(path = %self.output_path.display(), error = %e, "failed to write cassette");
+                    tracing::error!(path = %self.output_path.display(), error = ?e, "failed to write cassette");
                 } else {
                     info!(path = %self.output_path.display(), entries = cassette.entries.len(), "cassette written");
                 }
             }
             Err(e) => {
-                tracing::error!(error = %e, "failed to serialize cassette");
+                tracing::error!(error = ?e, "failed to serialize cassette");
             }
         }
     }

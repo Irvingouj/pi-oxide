@@ -21,6 +21,7 @@ use crate::host_state::{HostDirective, HostState};
 use crate::llm::LlmProvider;
 use crate::llm::{LlmClient, WireFormat};
 use crate::session::FileSystemSessionBackend;
+use crate::session_log::{SessionEvent, SessionEventLogger};
 
 // ---------------------------------------------------------------------------
 // Command palette
@@ -168,7 +169,7 @@ pub(crate) fn apply_scroll(
             total_lines,
             visible,
             scroll_offset,
-            auto_scroll,
+            auto_scroll_before = auto_scroll,
             offset = off,
             auto_scroll = auto,
             "apply_scroll: fits"
@@ -226,7 +227,7 @@ pub(crate) fn apply_scroll(
         total_lines,
         visible,
         scroll_offset,
-        auto_scroll,
+        auto_scroll_before = auto_scroll,
         offset = off,
         auto_scroll = auto,
         "apply_scroll"
@@ -277,6 +278,9 @@ pub struct App {
     // Extension-based tool execution
     pub(crate) extensions: Vec<Box<dyn Extension>>,
     pub(crate) running_tasks: Vec<RunningTask>,
+
+    // Session event logger
+    pub(crate) session_logger: Option<SessionEventLogger>,
 
     // New transcript/artifacts model
     pub(crate) transcript: Vec<TrimmedMessage>,
@@ -391,6 +395,9 @@ impl App {
             llm_client,
             host_state: Some(host_state.unwrap_or_else(|| HostState::new(system_prompt.to_string(), "Summarize the following conversation into a concise summary that preserves the key information, decisions, and context.".to_string()))),
             last_usage: None,
+            session_logger: session_id
+                .as_ref()
+                .and_then(|id| SessionEventLogger::new(id).ok()),
             session_id,
             session_backend: FileSystemSessionBackend::new(),
             cwd: cwd.to_path_buf(),
@@ -903,6 +910,11 @@ impl App {
         self.artifacts = artifacts;
         self.turn_number = turn_number;
         self.agent = Some(new_runtime);
+        if let Some(ref logger) = self.session_logger {
+            let _ = logger.append(&SessionEvent::TurnStart {
+                turn: self.turn_number,
+            });
+        }
         self.handle_actions(terminal, actions);
         self.save_session();
     }
@@ -961,6 +973,7 @@ impl App {
                                 self.turn_number = data.turn_number;
                                 self.host_state = Some(host_state);
                                 self.session_id = Some(id.to_string());
+                                self.session_logger = SessionEventLogger::new(id).ok();
                                 self.entries.clear();
                                 self.entries
                                     .push(ChatEntry::System(format!("Session '{id}' loaded.")));
@@ -980,6 +993,7 @@ impl App {
                         self.artifacts.clear();
                         self.turn_number = 0;
                         self.session_id = None;
+                        self.session_logger = None;
                         self.entries.clear();
                         self.entries
                             .push(ChatEntry::System("New session started.".into()));
@@ -1239,6 +1253,10 @@ impl App {
             })
             .collect();
         tracing::debug!(?directive_names, "handle_actions");
+
+        // Track whether TurnEnd has been emitted for this batch
+        let mut turn_ended = false;
+
         for directive in directives {
             if self.cancelled {
                 let runtime = self.agent.take().unwrap();
@@ -1290,10 +1308,27 @@ impl App {
                 HostDirective::Finished => {
                     self.entries.push(ChatEntry::System("Done.".into()));
                     self.running = false;
+                    if !turn_ended {
+                        if let Some(ref logger) = self.session_logger {
+                            let _ = logger.append(&SessionEvent::TurnEnd {
+                                turn: self.turn_number,
+                            });
+                            turn_ended = true;
+                        }
+                    }
                     let _ = terminal.draw(|f| self.render(f));
                 }
                 HostDirective::WaitForInput { .. } => {
                     self.running = false;
+                    if !turn_ended {
+                        if let Some(ref logger) = self.session_logger {
+                            let _ = logger.append(&SessionEvent::TurnEnd {
+                                turn: self.turn_number,
+                            });
+                            turn_ended = true;
+                        }
+                    }
+                    self.save_session();
                     let _ = terminal.draw(|f| self.render(f));
                 }
                 HostDirective::Persist => {
@@ -1355,6 +1390,7 @@ impl App {
             model_picker: None,
             extensions: Vec::new(),
             running_tasks: Vec::new(),
+            session_logger: None,
             transcript: Vec::new(),
             artifacts: Artifacts::new(),
             turn_number: 0,

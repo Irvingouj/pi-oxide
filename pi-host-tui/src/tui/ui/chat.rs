@@ -536,6 +536,7 @@ mod tests {
             model_picker: None,
             extensions: Vec::new(),
             running_tasks: Vec::new(),
+            session_logger: None,
             transcript: Vec::new(),
             artifacts: pi_core::Artifacts::new(),
             turn_number: 0,

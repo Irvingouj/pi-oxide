@@ -5,6 +5,7 @@
 //! and completion events without blocking the UI.
 
 use pi_core::{ToolCall, ToolDefinition, ToolError, ToolExecutionUpdate, ToolResult, ToolRunMode};
+use tracing::{debug, error};
 
 #[allow(dead_code)]
 pub trait Extension: Send + Sync {
@@ -135,6 +136,8 @@ impl Extension for BashExtension {
         let (tx, rx) = std::sync::mpsc::channel();
 
         std::thread::spawn(move || {
+            debug!(command = %command, "bash started");
+
             let mut child = match std::process::Command::new("sh")
                 .arg("-c")
                 .arg(&command)
@@ -145,6 +148,7 @@ impl Extension for BashExtension {
             {
                 Ok(c) => c,
                 Err(e) => {
+                    error!(command = %command, error = ?e, "bash failed");
                     let _ = tx.send(ToolEvent::Done(Err(ToolError::new(
                         "exec_failed",
                         e.to_string(),
@@ -234,9 +238,11 @@ impl Extension for BashExtension {
             // Wait for exit and build final result from accumulated raw bytes
             let result = match child.wait() {
                 Ok(status) => {
-                    let mut text = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
+                    let stdout_text =
+                        String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
                     let stderr_text =
                         String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
+                    let mut text = stdout_text;
                     if !stderr_text.is_empty() {
                         if !text.is_empty() {
                             text.push('\n');
@@ -249,9 +255,13 @@ impl Extension for BashExtension {
                         }
                         text.push_str(&format!("exit code: {}", status.code().unwrap_or(-1)));
                     }
+                    debug!(command = %command, exit_code = ?status.code(), "bash completed");
                     Ok(ToolResult::text(text))
                 }
-                Err(e) => Err(ToolError::new("wait_failed", e.to_string())),
+                Err(e) => {
+                    error!(command = %command, error = ?e, "bash failed");
+                    Err(ToolError::new("wait_failed", e.to_string()))
+                }
             };
             let _ = tx.send(ToolEvent::Done(result));
         });

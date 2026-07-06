@@ -3,6 +3,7 @@ use tracing::{debug, trace, warn};
 
 use crate::app::{App, ChatEntry};
 use crate::extension::{ExtensionContext, ExtensionOutcome, ToolEvent};
+use crate::session_log::SessionEvent;
 
 impl App {
     pub(crate) fn execute_tools(
@@ -17,6 +18,15 @@ impl App {
                 args_summary: args_summary.clone(),
             });
             let _ = terminal.draw(|f| self.render(f));
+
+            // Log tool call
+            if let Some(ref logger) = self.session_logger {
+                let _ = logger.append(&SessionEvent::ToolCall {
+                    turn: self.turn_number,
+                    tool_call_id: call.id.as_str().to_string(),
+                    tool_name: call.name.as_str().to_string(),
+                });
+            }
 
             // Find the extension that handles this tool
             let ext_idx = self
@@ -134,7 +144,8 @@ impl App {
             Err(err) => err.message.clone(),
         };
 
-        let display = if output_text.len() > 500 {
+        let truncated = output_text.len() > 500;
+        let display = if truncated {
             format!(
                 "{}...\n({} chars total)",
                 &output_text[..500],
@@ -143,6 +154,15 @@ impl App {
         } else {
             output_text
         };
+
+        // Log tool result
+        if let Some(ref logger) = self.session_logger {
+            let _ = logger.append(&SessionEvent::ToolResult {
+                turn: self.turn_number,
+                tool_call_id: tool_call_id.as_str().to_string(),
+                truncated,
+            });
+        }
 
         self.entries.push(ChatEntry::ToolResult {
             name: tool_call_id.as_str().to_string(),
@@ -261,6 +281,14 @@ impl App {
                     .join("\n"),
                 Err(e) => e.message.clone(),
             };
+            // Log async tool result
+            if let Some(ref logger) = self.session_logger {
+                let _ = logger.append(&SessionEvent::ToolResult {
+                    turn: self.turn_number,
+                    tool_call_id: tool_call_id.as_str().to_string(),
+                    truncated: false,
+                });
+            }
             self.entries.push(ChatEntry::ToolResult {
                 name: tool_call_id.as_str().to_string(),
                 output: output_text,

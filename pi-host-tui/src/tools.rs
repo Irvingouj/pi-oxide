@@ -9,6 +9,7 @@ use pi_core::{
     ExecutionMode, JsonSchema, ToolArguments, ToolCall, ToolDefinition, ToolError, ToolName,
     ToolRunMode,
 };
+use tracing::{debug, error};
 
 // --- Definitions ---
 
@@ -206,8 +207,12 @@ fn exec_read(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, To
         .and_then(|v| v.as_u64())
         .map(|l| l as usize);
 
-    let content = std::fs::read_to_string(&resolved)
-        .map_err(|e| ToolError::new("read_failed", format!("{resolved_str}: {e}")))?;
+    debug!(tool = "read", path = %resolved_str, "tool started");
+
+    let content = std::fs::read_to_string(&resolved).map_err(|e| {
+        error!(tool = "read", path = %resolved_str, error = ?e, "tool failed");
+        ToolError::new("read_failed", format!("{resolved_str}: {e}"))
+    })?;
 
     let lines: Vec<&str> = content.lines().collect();
     let start = offset.min(lines.len());
@@ -219,6 +224,7 @@ fn exec_read(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, To
     let selected: Vec<&str> = lines[start..end].to_vec();
     let result = selected.join("\n");
 
+    debug!(tool = "read", path = %resolved_str, lines = selected.len(), "tool completed");
     Ok(pi_core::ToolResult::text(result))
 }
 
@@ -228,14 +234,21 @@ fn exec_write(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, T
     let resolved_str = resolved.to_str().unwrap_or(path);
     let content = get_str(args, "content")?;
 
+    debug!(tool = "write", path = %resolved_str, "tool started");
+
     if let Some(parent) = resolved.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| ToolError::new("mkdir_failed", format!("{resolved_str}: {e}")))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            error!(tool = "write", path = %resolved_str, error = ?e, "tool failed");
+            ToolError::new("mkdir_failed", format!("{resolved_str}: {e}"))
+        })?;
     }
 
-    std::fs::write(&resolved, content)
-        .map_err(|e| ToolError::new("write_failed", format!("{resolved_str}: {e}")))?;
+    std::fs::write(&resolved, content).map_err(|e| {
+        error!(tool = "write", path = %resolved_str, error = ?e, "tool failed");
+        ToolError::new("write_failed", format!("{resolved_str}: {e}"))
+    })?;
 
+    debug!(tool = "write", path = %resolved_str, bytes = content.len(), "tool completed");
     Ok(pi_core::ToolResult::text(format!(
         "Wrote {} bytes to {path}",
         content.len()
@@ -249,17 +262,23 @@ fn exec_edit(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, To
     let old_string = get_str(args, "old_string")?;
     let new_string = get_str(args, "new_string")?;
 
-    let content = std::fs::read_to_string(&resolved)
-        .map_err(|e| ToolError::new("read_failed", format!("{resolved_str}: {e}")))?;
+    debug!(tool = "edit", path = %resolved_str, "tool started");
+
+    let content = std::fs::read_to_string(&resolved).map_err(|e| {
+        error!(tool = "edit", path = %resolved_str, error = ?e, "tool failed");
+        ToolError::new("read_failed", format!("{resolved_str}: {e}"))
+    })?;
 
     let count = content.matches(old_string).count();
     if count == 0 {
+        error!(tool = "edit", path = %resolved_str, "tool failed: old_string not found");
         return Err(ToolError::new(
             "not_found",
             format!("old_string not found in {resolved_str}"),
         ));
     }
     if count > 1 {
+        error!(tool = "edit", path = %resolved_str, matches = count, "tool failed: ambiguous match");
         return Err(ToolError::new(
             "ambiguous",
             format!(
@@ -269,16 +288,23 @@ fn exec_edit(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, To
     }
 
     let new_content = content.replacen(old_string, new_string, 1);
-    std::fs::write(&resolved, &new_content)
-        .map_err(|e| ToolError::new("write_failed", format!("{resolved_str}: {e}")))?;
+    std::fs::write(&resolved, &new_content).map_err(|e| {
+        error!(tool = "edit", path = %resolved_str, error = ?e, "tool failed");
+        ToolError::new("write_failed", format!("{resolved_str}: {e}"))
+    })?;
 
+    debug!(tool = "edit", path = %resolved_str, "tool completed");
     Ok(pi_core::ToolResult::text(format!("Edited {resolved_str}")))
 }
 
 fn exec_grep(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, ToolError> {
     let pattern = get_str(args, "pattern")?;
-    let re = regex::Regex::new(pattern)
-        .map_err(|e| ToolError::new("invalid_regex", format!("Invalid regex: {e}")))?;
+    let re = regex::Regex::new(pattern).map_err(|e| {
+        error!(tool = "grep", pattern = %pattern, error = ?e, "tool failed");
+        ToolError::new("invalid_regex", format!("Invalid regex: {e}"))
+    })?;
+
+    debug!(tool = "grep", pattern = %pattern, "tool started");
 
     let paths: Vec<String> = args
         .0
@@ -368,9 +394,11 @@ fn exec_grep(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, To
     }
 
     if results.is_empty() {
+        debug!(tool = "grep", pattern = %pattern, "tool completed: no matches");
         return Ok(pi_core::ToolResult::text("No matches found."));
     }
 
+    debug!(tool = "grep", pattern = %pattern, matches = results.len(), "tool completed");
     let file_count = results
         .iter()
         .map(|(f, _, _)| f)
@@ -396,24 +424,37 @@ fn exec_glob(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, To
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect()
         })
-        .ok_or_else(|| ToolError::new("missing_param", "Missing parameter: paths"))?;
+        .ok_or_else(|| {
+            error!(tool = "glob", "tool failed: missing paths parameter");
+            ToolError::new("missing_param", "Missing parameter: paths")
+        })?;
 
     if patterns.is_empty() {
+        error!(tool = "glob", "tool failed: paths array is empty");
         return Err(ToolError::new(
             "invalid_param",
             "paths array must not be empty",
         ));
     }
 
+    debug!(
+        tool = "glob",
+        patterns_count = patterns.len(),
+        "tool started"
+    );
+
     let mut builder = globset::GlobSetBuilder::new();
     for pattern in &patterns {
-        let g = globset::Glob::new(pattern)
-            .map_err(|e| ToolError::new("invalid_glob", format!("Invalid glob pattern: {e}")))?;
+        let g = globset::Glob::new(pattern).map_err(|e| {
+            error!(tool = "glob", pattern = %pattern, error = ?e, "tool failed");
+            ToolError::new("invalid_glob", format!("Invalid glob pattern: {e}"))
+        })?;
         builder.add(g);
     }
-    let glob_set = builder
-        .build()
-        .map_err(|e| ToolError::new("glob_build_error", format!("{e}")))?;
+    let glob_set = builder.build().map_err(|e| {
+        error!(tool = "glob", error = ?e, "tool failed");
+        ToolError::new("glob_build_error", format!("{e}"))
+    })?;
 
     let mut results: Vec<String> = Vec::new();
 
@@ -441,9 +482,11 @@ fn exec_glob(args: &ToolArguments, cwd: &Path) -> Result<pi_core::ToolResult, To
     results.dedup();
 
     if results.is_empty() {
+        debug!(tool = "glob", "tool completed: no matches");
         return Ok(pi_core::ToolResult::text("No matches found."));
     }
 
+    debug!(tool = "glob", matches = results.len(), "tool completed");
     Ok(pi_core::ToolResult::text(format!(
         "Found {} match{}:\n{}",
         results.len(),

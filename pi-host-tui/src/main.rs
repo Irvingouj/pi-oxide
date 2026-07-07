@@ -6,9 +6,9 @@ mod agent_host;
 mod app;
 mod commands;
 mod config;
-mod editor;
 #[cfg(all(test, unix))]
 mod e2e_tests;
+mod editor;
 mod extension;
 mod host_state;
 #[cfg(test)]
@@ -25,6 +25,8 @@ mod model_picker;
 mod onboarding;
 #[cfg(test)]
 mod onboarding_test;
+#[cfg(all(test, unix))]
+mod record_replay_test;
 mod scroll;
 mod session;
 mod session_log;

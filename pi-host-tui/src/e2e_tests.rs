@@ -340,14 +340,14 @@ impl Drop for E2EHarness {
     fn drop(&mut self) {
         // Kill the child process
         unsafe { libc::kill(self.child_pid, libc::SIGKILL) };
-        // Wait for child to avoid zombie
+        // Wait for child to avoid zombie (retry on EINTR)
         loop {
             let mut status: c_int = 0;
             match unsafe { libc::waitpid(self.child_pid, &mut status, 0) } {
                 -1 => {
                     let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-                    if err == libc::ECHILD || err == libc::EINTR {
-                        break;
+                    if err == libc::EINTR {
+                        continue;
                     }
                     break;
                 }

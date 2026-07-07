@@ -322,6 +322,8 @@ impl UserInputDuringTools {
 // ---------------------------------------------------------------------------
 
 pub enum AgentRuntime {
+    /// Temporary placeholder for `mem::replace` — should never be observed.
+    Uninitialized,
     Idle(IdleAgent),
     Streaming(StreamingAgent),
     Compacting(CompactingAgent),
@@ -364,6 +366,9 @@ impl AgentRuntime {
 
     fn as_agent(&self) -> &Agent {
         match self {
+            AgentRuntime::Uninitialized => {
+                panic!("AgentRuntime::Uninitialized should not be observed")
+            }
             AgentRuntime::Idle(a) => &a.agent,
             AgentRuntime::Streaming(a) => &a.agent,
             AgentRuntime::Compacting(a) => &a.agent,
@@ -377,6 +382,9 @@ impl AgentRuntime {
 
     fn as_agent_mut(&mut self) -> &mut Agent {
         match self {
+            AgentRuntime::Uninitialized => {
+                panic!("AgentRuntime::Uninitialized should not be observed")
+            }
             AgentRuntime::Idle(a) => &mut a.agent,
             AgentRuntime::Streaming(a) => &mut a.agent,
             AgentRuntime::Compacting(a) => &mut a.agent,
@@ -413,6 +421,9 @@ impl AgentRuntime {
     /// Consume the runtime and return the underlying agent.
     pub fn into_agent(self) -> Agent {
         match self {
+            AgentRuntime::Uninitialized => {
+                panic!("AgentRuntime::Uninitialized should not be observed")
+            }
             AgentRuntime::Idle(a) => a.agent,
             AgentRuntime::Streaming(a) => a.agent,
             AgentRuntime::Compacting(a) => a.agent,

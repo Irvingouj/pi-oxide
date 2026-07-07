@@ -1,0 +1,27 @@
+[package]
+name = "pi-record-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "HTTP recording/replay proxy server for LLM API streams. Capture real DeepSeek SSE streams and replay them for deterministic TUI tests."
+
+[[bin]]
+name = "pi-record-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1.44", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4.5", features = ["derive"] }
+base64 = "0.22"
+tokio-stream = "0.1"
+futures = "0.3"
+bytes = "1"

@@ -154,6 +154,7 @@ pub(crate) use try_conv;
 
 pub(crate) fn runtime_phase_name(runtime: &AgentRuntime) -> &'static str {
     match runtime {
+        AgentRuntime::Uninitialized => "Uninitialized",
         AgentRuntime::Idle(_) => "Idle",
         AgentRuntime::Streaming(_) => "Streaming",
         AgentRuntime::Compacting(_) => "Compacting",

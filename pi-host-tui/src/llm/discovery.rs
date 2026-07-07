@@ -1,4 +1,4 @@
-use super::{LlmClient, ModelInfo, ModelDiscovery, WireFormat};
+use super::{LlmClient, ModelDiscovery, ModelInfo, WireFormat};
 
 impl LlmClient {
     fn list_models_openai(&self) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error>> {

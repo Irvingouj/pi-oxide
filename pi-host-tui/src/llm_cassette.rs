@@ -1,6 +1,20 @@
 //! Cassette format for LLM recording/replay.
 //!
 //! Shared serialization types used by both the `record` and `replay` features.
+//!
+//! ## Relationship to `pi-record-server`
+//!
+//! This cassette system operates at the typed `pi_core` layer — it records
+//! `pi_core::LlmChunk` values produced by the SSE parser. It is used
+//! in-process via feature flags (`--features record`, `--features replay`).
+//!
+//! The separate `pi-record-server` crate operates at the raw HTTP layer —
+//! it records raw SSE bytes (base64-encoded) without parsing them. It is
+//! used as a standalone proxy process (no feature flags, no recompilation).
+//!
+//! Use `pi-record-server` for integration tests that need HTTP-level fidelity
+//! (e.g., catching wire-format bugs). Use the feature-gated system for
+//! fast in-process unit tests that don't need a separate server process.
 
 use serde::{Deserialize, Serialize};
 

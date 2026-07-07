@@ -13,7 +13,39 @@
 //! `AgentHost::transition()` handles steps 1 and 4, leaving the caller to
 //! express only the variant match and method call.
 
-use pi_core::{AgentAction, AgentEvent, AgentRuntime, Artifacts, ChangeMarker, TrimmedMessage};
+use pi_core::{
+    AgentAction, AgentEvent, AgentRuntime, Artifacts, ChangeMarker, StreamingAgent, TrimmedMessage,
+};
+
+/// Data collected from the LLM stream during the feed phase.
+///
+/// The feed closure accumulates this while iterating chunks, and the
+/// finish closure uses it to build the final `LlmResult`.
+pub struct CollectedStreamData {
+    /// Full text accumulated from `TextDelta` chunks.
+    pub text: String,
+    /// Token usage (input, output, total).
+    pub usage: Option<(u32, u32, u32)>,
+    /// Stop reason string from the provider.
+    pub stop_reason: String,
+    /// Tool calls collected from the stream.
+    pub tool_calls: Vec<CollectedToolCall>,
+}
+
+/// A tool call collected from the LLM stream.
+pub struct CollectedToolCall {
+    pub id: String,
+    pub name: String,
+    pub input: serde_json::Value,
+}
+
+/// Outcome of a streaming feed operation.
+pub enum StreamOutcome {
+    /// Stream completed normally — carries collected data for the finish closure.
+    Finished(CollectedStreamData),
+    /// User cancelled the stream.
+    Cancelled,
+}
 
 /// Result of an agent state transition.
 ///
@@ -30,9 +62,37 @@ pub struct TransitionParts {
     pub markers: Vec<ChangeMarker>,
 }
 
-impl From<(Vec<AgentEvent>, Vec<AgentAction>, AgentRuntime, Vec<TrimmedMessage>, Artifacts, u32, Vec<ChangeMarker>)> for TransitionParts {
-    fn from((events, actions, runtime, transcript, artifacts, turn_number, markers): (Vec<AgentEvent>, Vec<AgentAction>, AgentRuntime, Vec<TrimmedMessage>, Artifacts, u32, Vec<ChangeMarker>)) -> Self {
-        Self { events, actions, runtime, transcript, artifacts, turn_number, markers }
+impl
+    From<(
+        Vec<AgentEvent>,
+        Vec<AgentAction>,
+        AgentRuntime,
+        Vec<TrimmedMessage>,
+        Artifacts,
+        u32,
+        Vec<ChangeMarker>,
+    )> for TransitionParts
+{
+    fn from(
+        (events, actions, runtime, transcript, artifacts, turn_number, markers): (
+            Vec<AgentEvent>,
+            Vec<AgentAction>,
+            AgentRuntime,
+            Vec<TrimmedMessage>,
+            Artifacts,
+            u32,
+            Vec<ChangeMarker>,
+        ),
+    ) -> Self {
+        Self {
+            events,
+            actions,
+            runtime,
+            transcript,
+            artifacts,
+            turn_number,
+            markers,
+        }
     }
 }
 
@@ -41,11 +101,12 @@ pub type TransitionOutput = (Vec<AgentEvent>, Vec<AgentAction>);
 
 /// Owns the agent runtime and its associated host state.
 ///
-/// The runtime is `Option` because:
-/// - Tests may construct `App` without an agent
-/// - The transition pattern uses `take()` / put-back
+/// The runtime is stored directly (not `Option`).  Transitions use
+/// `std::mem::replace` with `AgentRuntime::Uninitialized` as a
+/// placeholder, so ownership can be moved out without ever producing
+/// a `None`.
 pub struct AgentHost {
-    runtime: Option<AgentRuntime>,
+    runtime: AgentRuntime,
     pub transcript: Vec<TrimmedMessage>,
     pub artifacts: Artifacts,
     pub turn_number: u32,
@@ -55,7 +116,7 @@ impl AgentHost {
     /// Create a new AgentHost with the given runtime and empty state.
     pub fn new(runtime: AgentRuntime) -> Self {
         Self {
-            runtime: Some(runtime),
+            runtime,
             transcript: Vec::new(),
             artifacts: Artifacts::new(),
             turn_number: 0,
@@ -63,6 +124,7 @@ impl AgentHost {
     }
 
     /// Restore from persisted state.
+    #[allow(dead_code)]
     pub fn restore(
         runtime: AgentRuntime,
         transcript: Vec<TrimmedMessage>,
@@ -70,7 +132,7 @@ impl AgentHost {
         turn_number: u32,
     ) -> Self {
         Self {
-            runtime: Some(runtime),
+            runtime,
             transcript,
             artifacts,
             turn_number,
@@ -79,23 +141,12 @@ impl AgentHost {
 
     /// Get a reference to the current runtime.
     pub fn runtime(&self) -> &AgentRuntime {
-        self.runtime.as_ref().expect("agent runtime not set")
+        &self.runtime
     }
 
     /// Get a mutable reference to the current runtime.
     pub fn runtime_mut(&mut self) -> &mut AgentRuntime {
-        self.runtime.as_mut().expect("agent runtime not set")
-    }
-
-    /// Take the runtime out, leaving `None`. Use when you need to consume
-    /// the runtime for a non-transition operation (e.g., `reset()`).
-    pub fn take_runtime(&mut self) -> AgentRuntime {
-        self.runtime.take().expect("agent runtime not set")
-    }
-
-    /// Put a runtime back.
-    pub fn set_runtime(&mut self, runtime: AgentRuntime) {
-        self.runtime = Some(runtime);
+        &mut self.runtime
     }
 
     /// Execute a state transition, replacing host state with the result.
@@ -103,22 +154,28 @@ impl AgentHost {
     /// The closure receives the current runtime and state, and must return
     /// a `TransitionParts` (the result of `.into_parts()` converted via `From`).
     ///
+    /// Uses `std::mem::replace` with `AgentRuntime::Uninitialized` as a
+    /// placeholder so ownership can move out safely without `Option`.
+    ///
     /// Returns the events and actions for the host to handle.
     pub fn transition(
         &mut self,
         f: impl FnOnce(AgentRuntime, Vec<TrimmedMessage>, Artifacts, u32) -> TransitionParts,
     ) -> TransitionOutput {
-        let runtime = self.runtime.take().expect("agent runtime not set");
+        let runtime = std::mem::replace(&mut self.runtime, AgentRuntime::Uninitialized);
         let transcript = std::mem::take(&mut self.transcript);
         let artifacts = std::mem::take(&mut self.artifacts);
         let turn_number = self.turn_number;
 
         let parts = f(runtime, transcript, artifacts, turn_number);
         if !parts.markers.is_empty() {
-            tracing::debug!(marker_count = parts.markers.len(), "transition produced change markers");
+            tracing::debug!(
+                marker_count = parts.markers.len(),
+                "transition produced change markers"
+            );
         }
 
-        self.runtime = Some(parts.runtime);
+        self.runtime = parts.runtime;
         self.transcript = parts.transcript;
         self.artifacts = parts.artifacts;
         self.turn_number = parts.turn_number;
@@ -136,13 +193,14 @@ impl AgentHost {
     ) -> TransitionParts {
         match runtime {
             AgentRuntime::Compacting(compacting) => {
-                let (ev, act, state, transcript, artifacts, tn, m) = compacting
-                    .abort(transcript, artifacts, turn)
-                    .into_parts();
+                let (ev, act, state, transcript, artifacts, tn, m) =
+                    compacting.abort(transcript, artifacts, turn).into_parts();
                 TransitionParts::from((ev, act, state.into_runtime(), transcript, artifacts, tn, m))
             }
             other => {
-                tracing::debug!("abort_compacting_or_pass_through: non-Compacting runtime, passing through");
+                tracing::debug!(
+                    "abort_compacting_or_pass_through: non-Compacting runtime, passing through"
+                );
                 TransitionParts::from((vec![], vec![], other, transcript, artifacts, turn, vec![]))
             }
         }
@@ -150,11 +208,84 @@ impl AgentHost {
 
     /// Reset the agent to Idle, clearing transcript and artifacts.
     pub fn reset(&mut self) {
-        let runtime = self.take_runtime().reset();
+        let runtime = std::mem::replace(&mut self.runtime, AgentRuntime::Uninitialized).reset();
         self.transcript.clear();
         self.artifacts.clear();
         self.turn_number = 0;
-        self.set_runtime(runtime);
+        self.runtime = runtime;
+    }
+
+    /// Borrow-mutable access to the runtime. Use for non-consuming operations
+    /// like `on_tool_started`, `on_tool_update` that don't transition state.
+    pub fn with_runtime_mut(&mut self, f: impl FnOnce(&mut AgentRuntime)) {
+        f(&mut self.runtime);
+    }
+
+    /// Execute the full streaming lifecycle: extract StreamingAgent, feed chunks,
+    /// and transition — all without the take/set/take dance.
+    ///
+    /// The `feed` closure receives `&mut StreamingAgent` and `&mut S` (the stream
+    /// iterator). It should iterate chunks, feed them to the agent, and return
+    /// `StreamOutcome::Finished(data)` with collected stream data, or
+    /// `StreamOutcome::Cancelled` if the user cancelled.
+    ///
+    /// On `Finished`, the `finish` closure receives the collected data and
+    /// performs the final transition.
+    ///
+    /// On `Cancelled`, the streaming agent is aborted and transitioned to Aborted.
+    pub fn stream_and_transition<S>(
+        &mut self,
+        stream: S,
+        feed: impl FnOnce(&mut StreamingAgent, &mut S) -> StreamOutcome,
+        finish: impl FnOnce(
+            AgentRuntime,
+            CollectedStreamData,
+            Vec<TrimmedMessage>,
+            Artifacts,
+            u32,
+        ) -> TransitionParts,
+    ) -> TransitionOutput
+    where
+        S: Iterator<Item = pi_core::LlmChunk>,
+    {
+        let runtime = std::mem::replace(&mut self.runtime, AgentRuntime::Uninitialized);
+        let AgentRuntime::Streaming(mut streaming) = runtime else {
+            // Not in Streaming state — put back and return empty
+            self.runtime = runtime;
+            return (vec![], vec![]);
+        };
+
+        let mut stream = stream;
+        let outcome = feed(&mut streaming, &mut stream);
+
+        let transcript = std::mem::take(&mut self.transcript);
+        let artifacts = std::mem::take(&mut self.artifacts);
+        let turn_number = self.turn_number;
+
+        match outcome {
+            StreamOutcome::Finished(data) => {
+                // Re-wrap as Streaming so finish closure can match it
+                let runtime = AgentRuntime::Streaming(streaming);
+                let parts = finish(runtime, data, transcript, artifacts, turn_number);
+                self.runtime = parts.runtime;
+                self.transcript = parts.transcript;
+                self.artifacts = parts.artifacts;
+                self.turn_number = parts.turn_number;
+                (parts.events, parts.actions)
+            }
+            StreamOutcome::Cancelled => {
+                let (events, actions, new_runtime, transcript, artifacts, turn_number, markers) =
+                    streaming
+                        .abort(transcript, artifacts, turn_number)
+                        .into_parts();
+                self.runtime = new_runtime.into_runtime();
+                self.transcript = transcript;
+                self.artifacts = artifacts;
+                self.turn_number = turn_number;
+                let _ = (events, actions, markers);
+                (vec![], vec![])
+            }
+        }
     }
 }
 

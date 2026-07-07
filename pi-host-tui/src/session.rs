@@ -59,5 +59,3 @@ impl FileSystemSessionBackend {
         self.dir.join(format!("{}.json", session_id))
     }
 }
-
-

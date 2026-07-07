@@ -59,6 +59,7 @@ fn isolate_home(home: &PathBuf) -> EnvGuard {
     EnvGuard(old_home, _lock)
 }
 
+#[allow(dead_code)]
 struct EnvGuard(Option<OsString>, std::sync::MutexGuard<'static, ()>);
 impl Drop for EnvGuard {
     fn drop(&mut self) {

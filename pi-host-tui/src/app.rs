@@ -8,10 +8,10 @@ use ratatui::Frame;
 use thiserror::Error;
 
 use pi_core::{
-    AgentAction, AgentMessage, AgentOptions, AgentRuntime, ApiName,
-    ContextProjectionBudget, ExecutionMode, Model, ModelId, ModelName, ProviderName, QueueMode,
-    SessionId, ThinkingLevel, ToolCallId, ToolCallPermission, ToolCallPreparation,
-    ToolCallTransform, ToolDefinition, WaitMode,
+    AgentAction, AgentMessage, AgentOptions, AgentRuntime, ApiName, ContextProjectionBudget,
+    ExecutionMode, Model, ModelId, ModelName, ProviderName, QueueMode, SessionId, ThinkingLevel,
+    ToolCallId, ToolCallPermission, ToolCallPreparation, ToolCallTransform, ToolDefinition,
+    WaitMode,
 };
 
 use crate::agent_host::TransitionParts;
@@ -32,8 +32,6 @@ pub enum TuiError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
-
-
 
 // ---------------------------------------------------------------------------
 // Chat line types
@@ -537,10 +535,11 @@ impl App {
             .unwrap_or_default();
         let budget = self.budget.clone();
 
-        let (_events, actions) = self.agent_host.transition(|runtime, transcript, artifacts, turn| {
-                match runtime {
-                    AgentRuntime::Idle(idle) => TransitionParts::from(idle
-                        .start_turn(
+        let (_events, actions) =
+            self.agent_host
+                .transition(|runtime, transcript, artifacts, turn| match runtime {
+                    AgentRuntime::Idle(idle) => TransitionParts::from(
+                        idle.start_turn(
                             AgentMessage::user(text),
                             tool_defs,
                             transcript,
@@ -549,44 +548,56 @@ impl App {
                             &budget,
                             &compaction_prompt,
                         )
-                        .into_parts()),
+                        .into_parts(),
+                    ),
                     AgentRuntime::ReadyToContinue(ready) => {
-                        let (_ev, _act, idle, transcript, artifacts, turn, _m) = ready.wait_for_input(transcript, artifacts, turn).into_parts();
-                        TransitionParts::from(idle.start_turn(
-                            AgentMessage::user(text),
-                            tool_defs,
-                            transcript,
-                            artifacts,
-                            turn,
-                            &budget,
-                            &compaction_prompt,
-                        ).into_parts())
+                        let (_ev, _act, idle, transcript, artifacts, turn, _m) = ready
+                            .wait_for_input(transcript, artifacts, turn)
+                            .into_parts();
+                        TransitionParts::from(
+                            idle.start_turn(
+                                AgentMessage::user(text),
+                                tool_defs,
+                                transcript,
+                                artifacts,
+                                turn,
+                                &budget,
+                                &compaction_prompt,
+                            )
+                            .into_parts(),
+                        )
                     }
                     AgentRuntime::Finished(finished) => {
                         let (idle, transcript, artifacts, turn) =
                             finished.into_idle(transcript, artifacts, turn);
-                        TransitionParts::from(idle.start_turn(
-                            AgentMessage::user(text),
-                            tool_defs,
-                            transcript,
-                            artifacts,
-                            turn,
-                            &budget,
-                            &compaction_prompt,
-                        ).into_parts())
+                        TransitionParts::from(
+                            idle.start_turn(
+                                AgentMessage::user(text),
+                                tool_defs,
+                                transcript,
+                                artifacts,
+                                turn,
+                                &budget,
+                                &compaction_prompt,
+                            )
+                            .into_parts(),
+                        )
                     }
                     AgentRuntime::Aborted(aborted) => {
                         let (idle, transcript, artifacts, turn) =
                             aborted.into_idle(transcript, artifacts, turn);
-                        TransitionParts::from(idle.start_turn(
-                            AgentMessage::user(text),
-                            tool_defs,
-                            transcript,
-                            artifacts,
-                            turn,
-                            &budget,
-                            &compaction_prompt,
-                        ).into_parts())
+                        TransitionParts::from(
+                            idle.start_turn(
+                                AgentMessage::user(text),
+                                tool_defs,
+                                transcript,
+                                artifacts,
+                                turn,
+                                &budget,
+                                &compaction_prompt,
+                            )
+                            .into_parts(),
+                        )
                     }
                     AgentRuntime::PreToolCall(mut pre) => {
                         let disposition = pre.submit_user_message(AgentMessage::user(text));
@@ -636,8 +647,7 @@ impl App {
                         turn,
                         vec![],
                     )),
-                }
-            });
+                });
 
         if let Some(ref logger) = self.session_logger {
             let _ = logger.append(&SessionEvent::TurnStart {
@@ -670,14 +680,32 @@ impl App {
                             permission: ToolCallPermission::Allow,
                         })
                         .collect();
-                    let (_events, new_actions) = self.agent_host.transition(|runtime, transcript, artifacts, turn| {
-                            if let AgentRuntime::PreToolCall(pre) = runtime {
-                                TransitionParts::from(pre.prepare_tool_calls(preps.clone(), transcript, artifacts, turn).into_parts())
-                            } else {
-                                // Not in PreToolCall state — pass through unchanged
-                                TransitionParts::from((vec![], vec![], runtime, transcript, artifacts, turn, vec![]))
-                            }
-                        });
+                    let (_events, new_actions) =
+                        self.agent_host
+                            .transition(|runtime, transcript, artifacts, turn| {
+                                if let AgentRuntime::PreToolCall(pre) = runtime {
+                                    TransitionParts::from(
+                                        pre.prepare_tool_calls(
+                                            preps.clone(),
+                                            transcript,
+                                            artifacts,
+                                            turn,
+                                        )
+                                        .into_parts(),
+                                    )
+                                } else {
+                                    // Not in PreToolCall state — pass through unchanged
+                                    TransitionParts::from((
+                                        vec![],
+                                        vec![],
+                                        runtime,
+                                        transcript,
+                                        artifacts,
+                                        turn,
+                                        vec![],
+                                    ))
+                                }
+                            });
                     for action in new_actions {
                         if let AgentAction::ExecuteTools { calls } = action {
                             directives.push(HostDirective::ExecuteTools { calls });
@@ -732,31 +760,52 @@ impl App {
                     }
                 }
                 let budget = self.budget.clone();
-                let (_events, actions) = self.agent_host.transition(|runtime, transcript, artifacts, turn| {
-                        let AgentRuntime::Compacting(compacting) = runtime else {
-                            return TransitionParts::from((vec![], vec![], runtime, transcript, artifacts, turn, vec![]));
-                        };
-                        let (events, actions, state, transcript, artifacts, turn, markers) = compacting
-                            .accept_summary(summary_text.clone(), transcript, artifacts, turn, &budget)
-                            .into_parts();
-                        TransitionParts::from((
-                            events,
-                            actions,
-                            state.into_runtime(),
-                            transcript,
-                            artifacts,
-                            turn,
-                            markers,
-                        ))
-                    });
+                let (_events, actions) =
+                    self.agent_host
+                        .transition(|runtime, transcript, artifacts, turn| {
+                            let AgentRuntime::Compacting(compacting) = runtime else {
+                                return TransitionParts::from((
+                                    vec![],
+                                    vec![],
+                                    runtime,
+                                    transcript,
+                                    artifacts,
+                                    turn,
+                                    vec![],
+                                ));
+                            };
+                            let (events, actions, state, transcript, artifacts, turn, markers) =
+                                compacting
+                                    .accept_summary(
+                                        summary_text.clone(),
+                                        transcript,
+                                        artifacts,
+                                        turn,
+                                        &budget,
+                                    )
+                                    .into_parts();
+                            TransitionParts::from((
+                                events,
+                                actions,
+                                state.into_runtime(),
+                                transcript,
+                                artifacts,
+                                turn,
+                                markers,
+                            ))
+                        });
                 self.handle_actions(terminal, actions);
             }
             Err(e) => {
                 self.entries
                     .push(ChatEntry::System(format!("Summary LLM Error: {e}")));
-                let (_events, _actions) = self.agent_host.transition(|runtime, transcript, artifacts, turn| {
-                        crate::agent_host::AgentHost::abort_compacting_or_pass_through(runtime, transcript, artifacts, turn)
-                    });
+                let (_events, _actions) =
+                    self.agent_host
+                        .transition(|runtime, transcript, artifacts, turn| {
+                            crate::agent_host::AgentHost::abort_compacting_or_pass_through(
+                                runtime, transcript, artifacts, turn,
+                            )
+                        });
                 self.running = false;
                 self.streaming_start = None;
             }
@@ -788,19 +837,26 @@ impl App {
 
         for directive in directives {
             if self.cancelled {
-                let (_events, _actions) = self.agent_host.transition(|runtime, transcript, artifacts, turn| {
-                        match runtime {
-                            AgentRuntime::Streaming(streaming) => {
-                                let (ev, act, state, transcript, artifacts, tn, m) = streaming
-                                    .abort(transcript, artifacts, turn)
-                                    .into_parts();
-                                TransitionParts::from((ev, act, state.into_runtime(), transcript, artifacts, tn, m))
-                            }
-                            other => crate::agent_host::AgentHost::abort_compacting_or_pass_through(
-                                other, transcript, artifacts, turn,
-                            ),
+                let (_events, _actions) = self.agent_host.transition(
+                    |runtime, transcript, artifacts, turn| match runtime {
+                        AgentRuntime::Streaming(streaming) => {
+                            let (ev, act, state, transcript, artifacts, tn, m) =
+                                streaming.abort(transcript, artifacts, turn).into_parts();
+                            TransitionParts::from((
+                                ev,
+                                act,
+                                state.into_runtime(),
+                                transcript,
+                                artifacts,
+                                tn,
+                                m,
+                            ))
                         }
-                    });
+                        other => crate::agent_host::AgentHost::abort_compacting_or_pass_through(
+                            other, transcript, artifacts, turn,
+                        ),
+                    },
+                );
                 self.running = false;
                 self.streaming_start = None;
                 self.entries.push(ChatEntry::System("Cancelled.".into()));
@@ -914,5 +970,3 @@ impl App {
         }
     }
 }
-
-

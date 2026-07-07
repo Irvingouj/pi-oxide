@@ -1,6 +1,6 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 #[cfg(test)]
 use crossterm::event::KeyEventKind;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 // ---------------------------------------------------------------------------
 // Scroll key handling

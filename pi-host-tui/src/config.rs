@@ -75,9 +75,7 @@ pub fn project_config_path() -> PathBuf {
 
 /// Return the path to the global config file: `~/.pi-oxide/config.toml`.
 pub fn global_config_path() -> PathBuf {
-    home_dir()
-        .join(CONFIG_DIR)
-        .join(CONFIG_FILE)
+    home_dir().join(CONFIG_DIR).join(CONFIG_FILE)
 }
 
 /// Discover and load the config file.

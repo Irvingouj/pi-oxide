@@ -103,7 +103,10 @@ fn ctrl_b_at_start_stays() {
 fn ctrl_f_moves_cursor_right() {
     let mut app = build_app("hello", 2);
     app.handle_key(ctrl(KeyCode::Char('f')));
-    assert_eq!(app.editor.cursor_pos, 3, "Ctrl+F should move right one char");
+    assert_eq!(
+        app.editor.cursor_pos, 3,
+        "Ctrl+F should move right one char"
+    );
 }
 
 #[test]
@@ -155,7 +158,10 @@ fn ctrl_w_consecutive_accumulates_in_kill_ring() {
 fn ctrl_k_deletes_to_line_end() {
     let mut app = build_app("hello world", 3); // cursor at 'l'
     app.handle_key(ctrl(KeyCode::Char('k')));
-    assert_eq!(app.editor.input, "hel", "Ctrl+K should delete from cursor to end");
+    assert_eq!(
+        app.editor.input, "hel",
+        "Ctrl+K should delete from cursor to end"
+    );
     assert_eq!(app.editor.cursor_pos, 3);
     assert_eq!(app.editor.kill_ring.peek(), Some("lo world"));
 }
@@ -200,7 +206,10 @@ fn ctrl_u_at_start_is_noop() {
 fn ctrl_d_deletes_char_forward() {
     let mut app = build_app("hello", 2);
     app.handle_key(ctrl(KeyCode::Char('d')));
-    assert_eq!(app.editor.input, "helo", "Ctrl+D should delete char at cursor");
+    assert_eq!(
+        app.editor.input, "helo",
+        "Ctrl+D should delete char at cursor"
+    );
     assert_eq!(app.editor.cursor_pos, 2);
 }
 
@@ -221,7 +230,10 @@ fn ctrl_y_yanks_from_kill_ring() {
     app.handle_key(ctrl(KeyCode::Char('w'))); // kill "world"
     assert_eq!(app.editor.input, "hello ");
     app.handle_key(ctrl(KeyCode::Char('y'))); // yank
-    assert_eq!(app.editor.input, "hello world", "Ctrl+Y should yank 'world'");
+    assert_eq!(
+        app.editor.input, "hello world",
+        "Ctrl+Y should yank 'world'"
+    );
     assert_eq!(app.editor.cursor_pos, 11);
 }
 
@@ -248,7 +260,10 @@ fn alt_y_yank_pop_noop_with_single_entry() {
     let after_yank = app.editor.input.clone();
     app.handle_key(alt(KeyCode::Char('y'))); // yank-pop (no-op with 1 entry)
                                              // With single entry, yank-pop shouldn't crash and input stays same
-    assert_eq!(app.editor.input, after_yank, "Yank-pop with single entry is no-op");
+    assert_eq!(
+        app.editor.input, after_yank,
+        "Yank-pop with single entry is no-op"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +274,10 @@ fn alt_y_yank_pop_noop_with_single_entry() {
 fn alt_backspace_deletes_word_backward() {
     let mut app = build_app("hello world", 11);
     app.handle_key(alt(KeyCode::Backspace));
-    assert_eq!(app.editor.input, "hello ", "Alt+Backspace should delete 'world'");
+    assert_eq!(
+        app.editor.input, "hello ",
+        "Alt+Backspace should delete 'world'"
+    );
     assert_eq!(app.editor.cursor_pos, 6);
 }
 
@@ -267,7 +285,10 @@ fn alt_backspace_deletes_word_backward() {
 fn alt_delete_deletes_word_forward() {
     let mut app = build_app("hello world", 6); // cursor at 'w'
     app.handle_key(alt(KeyCode::Delete));
-    assert_eq!(app.editor.input, "hello ", "Alt+Delete should delete 'world'");
+    assert_eq!(
+        app.editor.input, "hello ",
+        "Alt+Delete should delete 'world'"
+    );
     assert_eq!(app.editor.cursor_pos, 6);
 }
 
@@ -286,7 +307,10 @@ fn ctrl_left_moves_word_left() {
 fn ctrl_right_moves_word_right() {
     let mut app = build_app("hello world", 0);
     app.handle_key(ctrl(KeyCode::Right));
-    assert!(app.editor.cursor_pos > 0, "Ctrl+Right should move forward by word");
+    assert!(
+        app.editor.cursor_pos > 0,
+        "Ctrl+Right should move forward by word"
+    );
     assert!(
         app.editor.cursor_pos < 11,
         "Ctrl+Right should not jump to end in one step"
@@ -319,7 +343,10 @@ fn esc_dismisses_suggestions_first() {
     app.editor.show_suggestions = true;
     app.editor.suggestions = vec!["/help".to_string()];
     app.handle_key(plain(KeyCode::Esc));
-    assert!(!app.editor.show_suggestions, "Esc should dismiss suggestions");
+    assert!(
+        !app.editor.show_suggestions,
+        "Esc should dismiss suggestions"
+    );
     assert!(
         !app.should_quit,
         "Esc should not quit when suggestions shown"
@@ -332,7 +359,10 @@ fn esc_clears_input_when_idle() {
     app.running = false;
     app.editor.show_suggestions = false;
     app.handle_key(plain(KeyCode::Esc));
-    assert!(app.editor.input.is_empty(), "Esc when idle should clear input");
+    assert!(
+        app.editor.input.is_empty(),
+        "Esc when idle should clear input"
+    );
     assert!(!app.should_quit, "Esc when idle should NOT quit");
     assert!(!app.cancelled, "Esc when idle should not cancel");
 }
@@ -353,7 +383,10 @@ fn esc_when_running_clears_input_not_cancels() {
     let mut app = build_app("hello", 5);
     app.running = true;
     app.handle_key(plain(KeyCode::Esc));
-    assert!(!app.cancelled, "Esc should no longer cancel even when running");
+    assert!(
+        !app.cancelled,
+        "Esc should no longer cancel even when running"
+    );
     assert!(!app.should_quit, "Esc when running should not quit");
     assert!(app.editor.input.is_empty(), "Esc should clear input");
 }
@@ -396,11 +429,20 @@ fn ctrl_c_double_press_quits() {
     app.running = false;
     // First press with already-empty input sets pending_quit
     app.handle_key(ctrl(KeyCode::Char('c')));
-    assert!(!app.should_quit, "First Ctrl+C with empty input should not quit");
-    assert!(app.pending_quit, "First Ctrl+C with empty input should set pending_quit");
+    assert!(
+        !app.should_quit,
+        "First Ctrl+C with empty input should not quit"
+    );
+    assert!(
+        app.pending_quit,
+        "First Ctrl+C with empty input should set pending_quit"
+    );
     // Second press while pending_quit is set should quit
     app.handle_key(ctrl(KeyCode::Char('c')));
-    assert!(app.should_quit, "Second Ctrl+C with empty input should quit");
+    assert!(
+        app.should_quit,
+        "Second Ctrl+C with empty input should quit"
+    );
 }
 
 #[test]
@@ -410,7 +452,10 @@ fn ctrl_c_clears_input_resets_pending_quit() {
     // First Ctrl+C clears the input
     app.handle_key(ctrl(KeyCode::Char('c')));
     assert!(app.editor.input.is_empty());
-    assert!(!app.pending_quit, "pending_quit should be reset when input was non-empty");
+    assert!(
+        !app.pending_quit,
+        "pending_quit should be reset when input was non-empty"
+    );
 }
 
 #[test]
@@ -443,13 +488,20 @@ fn kill_ring_rotate_with_two_entries() {
     app.handle_key(ctrl(KeyCode::Char('b')));
     app.handle_key(ctrl(KeyCode::Char('w'))); // kills "bar" (new entry, not accumulated)
     assert_eq!(app.editor.kill_ring.len(), 2, "Should have 2 entries");
-    assert_eq!(app.editor.kill_ring.peek(), Some("bar"), "Most recent is 'bar'");
+    assert_eq!(
+        app.editor.kill_ring.peek(),
+        Some("bar"),
+        "Most recent is 'bar'"
+    );
 
     // Yank and yank-pop should rotate
     app.handle_key(ctrl(KeyCode::Char('y'))); // yank "bar"
     assert_eq!(app.editor.input, "foo bar ");
     app.handle_key(alt(KeyCode::Char('y'))); // yank-pop → "baz"
-    assert_eq!(app.editor.input, "foo baz ", "Yank-pop should rotate to 'baz'");
+    assert_eq!(
+        app.editor.input, "foo baz ",
+        "Yank-pop should rotate to 'baz'"
+    );
 }
 
 #[test]
@@ -513,7 +565,10 @@ fn ctrl_f_moves_right_multi_byte() {
 fn ctrl_d_deletes_multi_byte_char() {
     let mut app = build_app("日本", 0);
     app.handle_key(ctrl(KeyCode::Char('d')));
-    assert_eq!(app.editor.input, "本", "Ctrl+D should delete one multi-byte char");
+    assert_eq!(
+        app.editor.input, "本",
+        "Ctrl+D should delete one multi-byte char"
+    );
     assert_eq!(app.editor.cursor_pos, 0);
 }
 
@@ -566,7 +621,10 @@ fn ctrl_left_leading_whitespace() {
         "Ctrl+Left should jump to start of 'hello'"
     );
     app.handle_key(ctrl(KeyCode::Left)); // skip whitespace, land at start
-    assert_eq!(app.editor.cursor_pos, 0, "Second Ctrl+Left should jump to start");
+    assert_eq!(
+        app.editor.cursor_pos, 0,
+        "Second Ctrl+Left should jump to start"
+    );
 }
 
 #[test]
@@ -583,7 +641,10 @@ fn ctrl_right_no_whitespace() {
 fn ctrl_right_all_whitespace() {
     let mut app = build_app("   ", 0);
     app.handle_key(ctrl(KeyCode::Right));
-    assert_eq!(app.editor.cursor_pos, 3, "Ctrl+Right should skip all whitespace");
+    assert_eq!(
+        app.editor.cursor_pos, 3,
+        "Ctrl+Right should skip all whitespace"
+    );
 }
 
 // ---------------------------------------------------------------------------

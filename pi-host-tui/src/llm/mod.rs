@@ -8,10 +8,6 @@ mod messages;
 mod request;
 mod stream;
 
-// Re-export message conversion functions for tests
-#[cfg(test)]
-use messages::{convert_messages, convert_messages_openai};
-
 #[cfg(test)]
 mod tests;
 

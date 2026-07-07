@@ -1,5 +1,5 @@
+use super::{LlmStream, PartialToolCall, WireFormat};
 use std::io::Read;
-use super::{LlmStream, WireFormat, PartialToolCall};
 
 // --- SSE stream iterator ---
 

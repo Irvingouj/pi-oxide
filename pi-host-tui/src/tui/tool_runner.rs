@@ -23,7 +23,7 @@ impl App {
 
             // Log tool call
             if let Some(ref logger) = self.session_logger {
-                let turn = self.agent_host.as_ref().expect("agent").turn_number;
+                let turn = self.agent_host.turn_number;
                 let _ = logger.append(&SessionEvent::ToolCall {
                     turn,
                     tool_call_id: call.id.as_str().to_string(),
@@ -45,13 +45,20 @@ impl App {
                 let outcome = self.extensions[idx].execute(&call, &ctx);
                 match outcome {
                     ExtensionOutcome::Complete(result) => {
-                        self.on_tool_result(terminal, call.id.clone(), call.name.as_str().to_string(), result);
+                        self.on_tool_result(
+                            terminal,
+                            call.id.clone(),
+                            call.name.as_str().to_string(),
+                            result,
+                        );
                     }
                     ExtensionOutcome::Running(stream) => {
                         // Notify the agent that the tool started (mutable, non-consuming)
-                        if let AgentRuntime::ExecutingTools(exec) = self.agent_host.as_mut().expect("agent").runtime_mut() {
-                            let _events = exec.on_tool_started(call.id.clone());
-                        }
+                        self.agent_host.with_runtime_mut(|runtime| {
+                            if let AgentRuntime::ExecutingTools(exec) = runtime {
+                                let _events = exec.on_tool_started(call.id.clone());
+                            }
+                        });
                         self.running_tasks.push(crate::app::RunningTask {
                             tool_call_id: call.id.clone(),
                             tool_name: call.name.as_str().to_string(),
@@ -110,7 +117,7 @@ impl App {
 
         // Log tool result
         if let Some(ref logger) = self.session_logger {
-            let turn = self.agent_host.as_ref().expect("agent").turn_number;
+            let turn = self.agent_host.turn_number;
             let _ = logger.append(&SessionEvent::ToolResult {
                 turn,
                 tool_call_id: tool_call_id.as_str().to_string(),
@@ -125,21 +132,20 @@ impl App {
         });
         let _ = terminal.draw(|f| self.render(f));
 
-        let (_events, actions) = self
-            .agent_host
-            .as_mut()
-            .expect("agent")
-            .transition(|runtime, transcript, artifacts, turn| {
-                match runtime {
+        let (_events, actions) =
+            self.agent_host
+                .transition(|runtime, transcript, artifacts, turn| match runtime {
                     AgentRuntime::ExecutingTools(exec) => {
                         debug!(tool_call_id = tool_call_id.as_str(), "on_tool_done (sync)");
-                        TransitionParts::from(exec.on_tool_done(tool_call_id, result, transcript, artifacts, turn).into_parts())
+                        TransitionParts::from(
+                            exec.on_tool_done(tool_call_id, result, transcript, artifacts, turn)
+                                .into_parts(),
+                        )
                     }
                     other => crate::agent_host::AgentHost::abort_compacting_or_pass_through(
                         other, transcript, artifacts, turn,
                     ),
-                }
-            });
+                });
         self.handle_actions(terminal, actions);
     }
 
@@ -149,7 +155,8 @@ impl App {
         }
         trace!(running = self.running_tasks.len(), "polling async tasks");
         let mut remaining = Vec::new();
-        let mut just_completed: Vec<(ToolCallId, String, Result<ToolResult, ToolError>)> = Vec::new();
+        let mut just_completed: Vec<(ToolCallId, String, Result<ToolResult, ToolError>)> =
+            Vec::new();
 
         for mut task in std::mem::take(&mut self.running_tasks) {
             let mut done = false;
@@ -157,9 +164,11 @@ impl App {
                 match event {
                     ToolEvent::Update(update) => {
                         // Notify the agent of the update (mutable, non-consuming)
-                        if let AgentRuntime::ExecutingTools(exec) = self.agent_host.as_mut().expect("agent").runtime_mut() {
-                            let _events = exec.on_tool_update(update);
-                        }
+                        self.agent_host.with_runtime_mut(|runtime| {
+                            if let AgentRuntime::ExecutingTools(exec) = runtime {
+                                let _events = exec.on_tool_update(update);
+                            }
+                        });
                     }
                     ToolEvent::Done(result) => {
                         debug!(
@@ -167,7 +176,11 @@ impl App {
                             ok = result.is_ok(),
                             "async tool completed"
                         );
-                        just_completed.push((task.tool_call_id.clone(), task.tool_name.clone(), result));
+                        just_completed.push((
+                            task.tool_call_id.clone(),
+                            task.tool_name.clone(),
+                            result,
+                        ));
                         done = true;
                         break;
                     }
@@ -194,7 +207,7 @@ impl App {
 
             // Log async tool result
             if let Some(ref logger) = self.session_logger {
-                let turn = self.agent_host.as_ref().expect("agent").turn_number;
+                let turn = self.agent_host.turn_number;
                 let _ = logger.append(&SessionEvent::ToolResult {
                     turn,
                     tool_call_id: tool_call_id.as_str().to_string(),
@@ -208,21 +221,26 @@ impl App {
             });
             let _ = terminal.draw(|f| self.render(f));
 
-            let (_events, actions) = self
-                .agent_host
-                .as_mut()
-                .expect("agent")
-                .transition(|runtime, transcript, artifacts, turn| {
-                    match runtime {
+            let (_events, actions) =
+                self.agent_host
+                    .transition(|runtime, transcript, artifacts, turn| match runtime {
                         AgentRuntime::ExecutingTools(exec) => {
                             debug!(tool_call_id = tool_call_id.as_str(), "on_tool_done (async)");
-                            TransitionParts::from(exec.on_tool_done(tool_call_id, result, transcript, artifacts, turn).into_parts())
+                            TransitionParts::from(
+                                exec.on_tool_done(
+                                    tool_call_id,
+                                    result,
+                                    transcript,
+                                    artifacts,
+                                    turn,
+                                )
+                                .into_parts(),
+                            )
                         }
                         other => crate::agent_host::AgentHost::abort_compacting_or_pass_through(
                             other, transcript, artifacts, turn,
                         ),
-                    }
-                });
+                    });
             all_actions.extend(actions);
         }
 
@@ -256,24 +274,24 @@ impl App {
             .map(|h| h.compaction_prompt.clone())
             .unwrap_or_default();
         let budget = self.budget.clone();
-        let (_events, actions) = self
-            .agent_host
-            .as_mut()
-            .expect("agent")
-            .transition(|runtime, transcript, artifacts, turn| {
-                match runtime {
-                    AgentRuntime::ReadyToContinue(ready) => TransitionParts::from(ready
-                        .continue_turn(
-                            transcript,
-                            artifacts,
-                            turn,
-                            &budget,
-                            &compaction_prompt,
-                        )
-                        .into_parts()),
-                    other => TransitionParts::from((vec![], vec![], other, transcript, artifacts, turn, vec![])),
-                }
-            });
+        let (_events, actions) =
+            self.agent_host
+                .transition(|runtime, transcript, artifacts, turn| match runtime {
+                    AgentRuntime::ReadyToContinue(ready) => TransitionParts::from(
+                        ready
+                            .continue_turn(transcript, artifacts, turn, &budget, &compaction_prompt)
+                            .into_parts(),
+                    ),
+                    other => TransitionParts::from((
+                        vec![],
+                        vec![],
+                        other,
+                        transcript,
+                        artifacts,
+                        turn,
+                        vec![],
+                    )),
+                });
         self.handle_actions(terminal, actions);
     }
 }

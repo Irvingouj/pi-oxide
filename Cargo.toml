@@ -4,6 +4,7 @@ members = [
     "pi-llm",
     "pi-host-tui",
     "pi-host-web",
+    "pi-record-server",
 ]
 resolver = "3"
 

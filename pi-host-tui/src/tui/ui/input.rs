@@ -53,7 +53,11 @@ impl App {
         // Cursor position: computed from display width of prefix + text before cursor.
         // cursor_pos is a byte index — slice by bytes, then measure display width.
         if !self.running {
-            let before = self.editor.input.get(..self.editor.cursor_pos).unwrap_or("");
+            let before = self
+                .editor
+                .input
+                .get(..self.editor.cursor_pos)
+                .unwrap_or("");
             let cursor_x = (area.x
                 + 1 // left border
                 + prefix.width() as u16

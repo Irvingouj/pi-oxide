@@ -10,11 +10,7 @@ impl App {
 
     fn open_model_picker(&mut self) {
         use crate::llm::ModelDiscovery;
-        // Guard: agent must be initialized
-        let agent_host = match self.agent_host.as_ref() {
-            Some(h) => h,
-            None => return,
-        };
+        let agent_host = &self.agent_host;
         let models = self
             .llm_client
             .list_models()
@@ -36,8 +32,9 @@ impl App {
         self.llm_client.set_model(model_id);
         self.agent_mut().state_mut().model.id = pi_core::ModelId::new(model_id);
         self.agent_mut().state_mut().model.name = pi_core::ModelName::new(model_id);
-        self.entries
-            .push(crate::app::ChatEntry::System(format!("Model switched to {model_id}")));
+        self.entries.push(crate::app::ChatEntry::System(format!(
+            "Model switched to {model_id}"
+        )));
     }
 
     pub(crate) fn handle_model_picker_key(&mut self, key: KeyEvent) -> bool {
@@ -86,9 +83,10 @@ impl App {
 
         match cmd {
             "/clear" => {
-                self.agent_host.as_mut().expect("agent").reset();
+                self.agent_host.reset();
                 self.entries.clear();
-                self.entries.push(crate::app::ChatEntry::System("Chat cleared.".into()));
+                self.entries
+                    .push(crate::app::ChatEntry::System("Chat cleared.".into()));
             }
             "/help" => {
                 let list = crate::editor::COMMANDS.join("  ");
@@ -122,37 +120,33 @@ impl App {
                     "load" => {
                         if let Some(id) = parts.get(2) {
                             if let Some(data) = self.session_backend.load(id) {
-                                let host_state = crate::host_state::HostState::restore(data.clone());
-                                let agent = self
-                                    .agent_host
-                                    .as_mut()
-                                    .expect("agent")
-                                    .take_runtime()
-                                    .reset();
-                                let agent_host = crate::agent_host::AgentHost::restore(
-                                    agent,
-                                    data.transcript,
-                                    data.artifacts,
-                                    data.turn_number,
-                                );
-                                self.agent_host = Some(agent_host);
+                                let host_state =
+                                    crate::host_state::HostState::restore(data.clone());
+                                self.agent_host.reset();
+                                self.agent_host.transcript = data.transcript;
+                                self.agent_host.artifacts = data.artifacts;
+                                self.agent_host.turn_number = data.turn_number;
                                 self.host_state = Some(host_state);
                                 self.session_id = Some(id.to_string());
-                                self.session_logger = crate::session_log::SessionEventLogger::new(id).ok();
+                                self.session_logger =
+                                    crate::session_log::SessionEventLogger::new(id).ok();
                                 self.entries.clear();
-                                self.entries
-                                    .push(crate::app::ChatEntry::System(format!("Session '{id}' loaded.")));
+                                self.entries.push(crate::app::ChatEntry::System(format!(
+                                    "Session '{id}' loaded."
+                                )));
                             } else {
-                                self.entries
-                                    .push(crate::app::ChatEntry::System(format!("Session '{id}' not found.")));
+                                self.entries.push(crate::app::ChatEntry::System(format!(
+                                    "Session '{id}' not found."
+                                )));
                             }
                         } else {
-                            self.entries
-                                .push(crate::app::ChatEntry::System("Usage: /session load <id>".into()));
+                            self.entries.push(crate::app::ChatEntry::System(
+                                "Usage: /session load <id>".into(),
+                            ));
                         }
                     }
                     "new" => {
-                        self.agent_host.as_mut().expect("agent").reset();
+                        self.agent_host.reset();
                         self.session_id = None;
                         self.session_logger = None;
                         self.entries.clear();
@@ -177,12 +171,13 @@ impl App {
                         "Tokens: in={input} out={output} total={total} ctx={ctx_pct}%"
                     )));
                 } else {
-                    self.entries
-                        .push(crate::app::ChatEntry::System("No token usage recorded yet.".into()));
+                    self.entries.push(crate::app::ChatEntry::System(
+                        "No token usage recorded yet.".into(),
+                    ));
                 }
             }
             "/undo" => {
-                let host = self.agent_host.as_mut().expect("agent");
+                let host = &mut self.agent_host;
                 if let Some(last_user_idx) = host
                     .transcript
                     .iter()

@@ -226,14 +226,15 @@ impl Editor {
         false
     }
 
-    /// Handle Tab key — accept suggestion or cycle / show suggestions.
+    /// Handle Tab key — show or cycle through suggestions.
     pub(crate) fn handle_tab(&mut self) {
         if self.show_suggestions {
+            // Cycle to next suggestion
+            self.suggestion_state.select_next();
             if let Some(idx) = self.suggestion_state.selected() {
                 if let Some(cmd) = self.suggestions.get(idx).cloned() {
                     self.input = cmd;
                     self.cursor_pos = self.input.len();
-                    self.show_suggestions = false;
                 }
             }
         } else if self.input.starts_with('/') {

@@ -1,7 +1,7 @@
+use super::messages::{convert_messages, convert_messages_openai};
+use super::{LlmClient, WireFormat};
 use pi_core::ToolDefinition;
 use serde::Serialize;
-use super::{LlmClient, WireFormat};
-use super::messages::{convert_messages, convert_messages_openai};
 
 // ---------------------------------------------------------------------------
 // Wire-format request types

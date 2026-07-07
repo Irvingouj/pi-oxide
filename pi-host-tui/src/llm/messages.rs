@@ -5,12 +5,11 @@ use serde::Serialize;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicContentBlock<'a> {
     Text {
         text: &'a str,
     },
-    #[serde(rename = "tool_use")]
     ToolUse {
         id: &'a str,
         name: &'a str,
@@ -31,9 +30,8 @@ struct AnthropicAssistantMessage<'a> {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicToolResultBlock {
-    #[serde(rename = "tool_result")]
     ToolResult {
         #[serde(rename = "tool_use_id")]
         tool_use_id: String,
@@ -63,7 +61,8 @@ struct OpenAIUserMessage<'a> {
 #[derive(Debug, Serialize)]
 struct OpenAIFunctionCall<'a> {
     name: &'a str,
-    arguments: &'a serde_json::Value,
+    /// DeepSeek requires arguments as a JSON-encoded string, not an object.
+    arguments: &'a str,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,7 +76,8 @@ struct OpenAIToolCall<'a> {
 #[derive(Debug, Serialize)]
 struct OpenAIAssistantMessage<'a> {
     role: &'a str,
-    content: &'a str,
+    /// DeepSeek requires `null` (not empty string) when tool_calls is present.
+    content: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<OpenAIToolCall<'a>>>,
 }
@@ -255,39 +255,49 @@ pub(crate) fn convert_messages_openai(
             pi_core::AgentMessage::Assistant(asst_msg) => {
                 let mut content = String::new();
                 let mut tool_calls: Vec<OpenAIToolCall> = Vec::new();
+                let mut arguments_json_strings: Vec<String> = Vec::new();
                 for c in &asst_msg.content {
                     match c {
                         pi_core::Content::Text(t) => {
                             content.push_str(&t.text);
                         }
                         pi_core::Content::ToolCall(tc) => {
+                            // DeepSeek requires arguments as a JSON-encoded string
+                            let args_str = serde_json::to_string(&tc.arguments.0)
+                                .unwrap_or_else(|_| "{}".to_string());
+                            arguments_json_strings.push(args_str);
                             tool_calls.push(OpenAIToolCall {
                                 id: tc.id.as_str(),
                                 tool_type: "function",
                                 function: OpenAIFunctionCall {
                                     name: tc.name.as_str(),
-                                    arguments: &tc.arguments.0,
+                                    // Placeholder — will set below after strings are stable
+                                    arguments: "",
                                 },
                             });
                         }
                         _ => {}
                     }
                 }
-                // OpenAI requires non-empty content; use " " if empty
-                let content_val = if content.is_empty() {
-                    " "
+                // Patch in the pre-serialized argument strings
+                for (tc, args_str) in tool_calls.iter_mut().zip(arguments_json_strings.iter()) {
+                    tc.function.arguments = args_str.as_str();
+                }
+
+                let has_tools = !tool_calls.is_empty();
+                // DeepSeek: content must be null when tool_calls is present
+                let content_val: Option<&str> = if has_tools {
+                    None
+                } else if content.is_empty() {
+                    Some(" ")
                 } else {
-                    content.as_str()
+                    Some(content.as_str())
                 };
                 result.push(
                     serde_json::to_value(OpenAIAssistantMessage {
                         role: "assistant",
                         content: content_val,
-                        tool_calls: if tool_calls.is_empty() {
-                            None
-                        } else {
-                            Some(tool_calls)
-                        },
+                        tool_calls: if has_tools { Some(tool_calls) } else { None },
                     })
                     .expect("serialize assistant message"),
                 );
@@ -308,4 +318,3 @@ pub(crate) fn convert_messages_openai(
 
     result
 }
-

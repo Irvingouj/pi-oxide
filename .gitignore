@@ -8,3 +8,6 @@ dist/
 test-results/
 pi-core/bindings/
 .pi-oxide/config.toml
+
+.pi/tasks/
+REFACTOR-*.md

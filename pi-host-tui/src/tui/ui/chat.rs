@@ -577,6 +577,8 @@ mod tests {
                 config_path: None,
             },
             thinking_level: pi_core::events::ThinkingLevel::Off,
+            needs_render: true,
+            last_spinner_frame: "",
         }
     }
 

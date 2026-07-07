@@ -392,18 +392,156 @@ fn esc_when_running_clears_input_not_cancels() {
 }
 
 // ---------------------------------------------------------------------------
-// Tab — cycle suggestions
+// Tab — command completion
 // ---------------------------------------------------------------------------
 
+/// Typing partial command + Tab fills the first matching suggestion.
 #[test]
-fn tab_cycles_suggestions() {
-    let mut app = build_app("/", 1);
-    app.handle_key(plain(KeyCode::Tab)); // show suggestions
-    assert!(app.editor.show_suggestions);
-    // Tab again should cycle to next
+fn tab_fills_partial_command() {
+    let mut app = build_app("/he", 3);
+    // Simulate what push_char did: update_suggestions was called on each keystroke
+    app.editor.show_suggestions = true;
+    app.editor.suggestions = vec!["/help".to_string()];
+    app.editor.suggestion_state.select(Some(0));
+
     app.handle_key(plain(KeyCode::Tab));
-    // Should still show suggestions (cycling, not submitting)
-    assert!(app.editor.show_suggestions, "Tab should cycle suggestions");
+    assert_eq!(app.editor.input, "/help ", "Tab should fill /help with trailing space");
+    assert_eq!(app.editor.cursor_pos, 6);
+}
+
+/// Typing / + Tab fills the first command in the list.
+#[test]
+fn tab_slash_fills_first_command() {
+    let mut app = build_app("/", 1);
+    app.handle_key(plain(KeyCode::Tab));
+    assert!(
+        app.editor.input.starts_with("/"),
+        "Tab should fill a command; got: {}",
+        app.editor.input
+    );
+    assert!(app.editor.show_suggestions);
+}
+
+/// Tab cycles through suggestions.
+#[test]
+fn tab_cycles_through_commands() {
+    let mut app = build_app("/ses", 4);
+    app.handle_key(plain(KeyCode::Tab)); // fill first: /session list
+    let first = app.editor.input.clone();
+
+    app.handle_key(plain(KeyCode::Tab)); // cycle to next
+    let second = app.editor.input.clone();
+    assert!(
+        second != first,
+        "Second Tab should cycle to different command; got: {}",
+        second
+    );
+}
+
+/// Tab on non-command input is a no-op.
+#[test]
+fn tab_on_plain_text_is_noop() {
+    let mut app = build_app("hello world", 11);
+    app.handle_key(plain(KeyCode::Tab));
+    assert_eq!(app.editor.input, "hello world");
+    assert!(!app.editor.show_suggestions);
+}
+
+/// Tab on empty input is a no-op.
+#[test]
+fn tab_on_empty_input_is_noop() {
+    let mut app = build_app("", 0);
+    app.handle_key(plain(KeyCode::Tab));
+    assert_eq!(app.editor.input, "");
+    assert!(!app.editor.show_suggestions);
+}
+
+/// Single-suggestion cycling wraps (Tab doesn't lose the fill).
+#[test]
+fn tab_single_suggestion_wraps() {
+    let mut app = build_app("/he", 3);
+    app.editor.show_suggestions = true;
+    app.editor.suggestions = vec!["/help".to_string()];
+    app.editor.suggestion_state.select(Some(0));
+
+    // Multiple Tabs on a single suggestion should keep it filled
+    app.handle_key(plain(KeyCode::Tab));
+    assert_eq!(app.editor.input, "/help ");
+    app.handle_key(plain(KeyCode::Tab));
+    assert_eq!(app.editor.input, "/help ", "Second Tab should still show /help ");
+    app.handle_key(plain(KeyCode::Tab));
+    assert_eq!(app.editor.input, "/help ", "Third Tab should still show /help ");
+}
+
+/// Backspace after Tab-filled completion works correctly.
+#[test]
+fn backspace_after_tab_fill() {
+    let mut app = build_app("/he", 3);
+    app.editor.show_suggestions = true;
+    app.editor.suggestions = vec!["/help".to_string()];
+    app.editor.suggestion_state.select(Some(0));
+
+    app.handle_key(plain(KeyCode::Tab)); // fills /help 
+    assert_eq!(app.editor.input, "/help ");
+
+    app.handle_key(plain(KeyCode::Backspace)); // delete trailing space
+    assert_eq!(app.editor.input, "/help");
+    assert_eq!(app.editor.cursor_pos, 5);
+
+    app.handle_key(plain(KeyCode::Backspace)); // delete 'p'
+    assert_eq!(app.editor.input, "/hel");
+    assert_eq!(app.editor.cursor_pos, 4);
+}
+
+/// Tab + Tab + Backspace cycles then deletes.
+#[test]
+fn tab_cycle_then_backspace() {
+    let mut app = build_app("/ses", 4);
+    app.handle_key(plain(KeyCode::Tab));
+    let first = app.editor.input.clone();
+    assert!(first.starts_with("/ses"));
+
+    app.handle_key(plain(KeyCode::Tab));
+    let second = app.editor.input.clone();
+    assert!(second != first, "Should cycle to different command");
+
+    app.handle_key(plain(KeyCode::Backspace));
+    assert_eq!(
+        app.editor.input,
+        second[..second.len() - 1],
+        "Backspace should delete last char of cycled command"
+    );
+}
+
+/// Enter while suggestions shown accepts selection and returns false (submit).
+#[test]
+fn enter_accepts_suggestion_and_submits() {
+    let mut app = build_app("/he", 3);
+    app.editor.show_suggestions = true;
+    app.editor.suggestions = vec!["/help".to_string()];
+    app.editor.suggestion_state.select(Some(0));
+
+    let consumed = app.handle_key(plain(KeyCode::Enter));
+    assert_eq!(app.editor.input, "/help ", "Enter should fill with trailing space");
+    assert!(!app.editor.show_suggestions, "Enter should dismiss suggestions");
+    assert!(!consumed, "Enter should return false so caller submits");
+}
+
+/// Enter while suggestions shown cycles to next then accepts.
+#[test]
+fn enter_after_tab_cycle_accepts_correct_command() {
+    let mut app = build_app("/ses", 4);
+    app.handle_key(plain(KeyCode::Tab)); // fill first
+    let first = app.editor.input.clone();
+
+    app.handle_key(plain(KeyCode::Tab)); // cycle to second
+    let second = app.editor.input.clone();
+    assert!(second != first);
+
+    let consumed = app.handle_key(plain(KeyCode::Enter));
+    assert_eq!(app.editor.input, second, "Enter should keep the cycled command");
+    assert!(!app.editor.show_suggestions);
+    assert!(!consumed, "Enter should return false so caller submits");
 }
 
 // ---------------------------------------------------------------------------

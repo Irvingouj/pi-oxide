@@ -203,7 +203,7 @@ impl Editor {
 
     /// Handle Enter key. Returns `true` if the key was consumed.
     /// Returns `true` for Shift+Enter (newline inserted) and for plain Enter
-    /// when suggestions are shown or when running/input empty.
+    /// when running/input empty.
     /// Returns `false` for plain Enter when ready to submit (non-empty, not running).
     pub(crate) fn handle_enter(&mut self, is_shift: bool) -> bool {
         if is_shift {
@@ -213,14 +213,10 @@ impl Editor {
             return true;
         }
         if self.show_suggestions {
-            if let Some(idx) = self.suggestion_state.selected() {
-                if let Some(cmd) = self.suggestions.get(idx).cloned() {
-                    self.input = cmd;
-                    self.cursor_pos = self.input.len();
-                    self.show_suggestions = false;
-                    return true;
-                }
-            }
+            // Accept selected suggestion (with trailing space) and submit
+            self.apply_selected_suggestion();
+            self.show_suggestions = false;
+            // Fall through — return false so caller submits
         }
         // Return false to signal caller should submit
         false
@@ -229,23 +225,34 @@ impl Editor {
     /// Handle Tab key — show or cycle through suggestions.
     pub(crate) fn handle_tab(&mut self) {
         if self.show_suggestions {
-            // Cycle to next suggestion
-            self.suggestion_state.select_next();
+            // Cycle with wrapping: don't go past the last suggestion
+            let count = self.suggestions.len();
             if let Some(idx) = self.suggestion_state.selected() {
-                if let Some(cmd) = self.suggestions.get(idx).cloned() {
-                    self.input = cmd;
-                    self.cursor_pos = self.input.len();
+                if idx + 1 < count {
+                    self.suggestion_state.select(Some(idx + 1));
+                } else if count > 1 {
+                    self.suggestion_state.select(Some(0));
                 }
+                // else: single suggestion, stay at 0
             }
         } else if self.input.starts_with('/') {
             self.update_suggestions();
         }
+        self.apply_selected_suggestion();
     }
 
     /// Handle Up key — navigate suggestions or history.
     pub(crate) fn handle_up(&mut self) {
         if self.show_suggestions {
-            self.suggestion_state.select_previous();
+            let count = self.suggestions.len();
+            if let Some(idx) = self.suggestion_state.selected() {
+                if idx > 0 {
+                    self.suggestion_state.select(Some(idx - 1));
+                } else if count > 1 {
+                    self.suggestion_state.select(Some(count - 1));
+                }
+            }
+            self.apply_selected_suggestion();
         } else {
             self.history_recall_previous();
         }
@@ -254,9 +261,27 @@ impl Editor {
     /// Handle Down key — navigate suggestions or history.
     pub(crate) fn handle_down(&mut self) {
         if self.show_suggestions {
-            self.suggestion_state.select_next();
+            let count = self.suggestions.len();
+            if let Some(idx) = self.suggestion_state.selected() {
+                if idx + 1 < count {
+                    self.suggestion_state.select(Some(idx + 1));
+                } else if count > 1 {
+                    self.suggestion_state.select(Some(0));
+                }
+            }
+            self.apply_selected_suggestion();
         } else {
             self.history_recall_next();
+        }
+    }
+
+    /// Apply the currently selected suggestion to the input, trailing space included.
+    fn apply_selected_suggestion(&mut self) {
+        if let Some(idx) = self.suggestion_state.selected() {
+            if let Some(cmd) = self.suggestions.get(idx).cloned() {
+                self.input = format!("{} ", cmd);
+                self.cursor_pos = self.input.len();
+            }
         }
     }
 

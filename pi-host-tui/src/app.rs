@@ -169,6 +169,11 @@ pub struct App {
 
     // Thinking level for input border coloring
     pub(crate) thinking_level: ThinkingLevel,
+
+    // Render optimization: only re-render when something changed
+    pub(crate) needs_render: bool,
+    /// Last spinner frame rendered; used to detect when the animation advanced.
+    pub(crate) last_spinner_frame: &'static str,
 }
 
 pub(crate) struct RunningTask {
@@ -302,6 +307,8 @@ impl App {
             last_chat_area: ratatui::layout::Rect::ZERO,
             resolved_config,
             thinking_level: ThinkingLevel::Off,
+            needs_render: true,
+            last_spinner_frame: "",
         })
     }
 
@@ -348,7 +355,18 @@ impl App {
         _session_backend: &FileSystemSessionBackend,
     ) -> Result<(), TuiError> {
         loop {
-            terminal.draw(|f| self.render(f))?;
+            // Only render when something changed: content updated, or spinner frame advanced.
+            let spinner_frame = self.get_spinner_frame();
+            let spinner_changed = self.running
+                && self.streaming_text.is_empty()
+                && self.running_tasks.is_empty()
+                && self.last_spinner_frame != spinner_frame;
+
+            if self.needs_render || spinner_changed {
+                self.last_spinner_frame = spinner_frame;
+                terminal.draw(|f| self.render(f))?;
+                self.needs_render = false;
+            }
 
             if crossterm::event::poll(Duration::from_millis(33))? {
                 let event = crossterm::event::read()?;
@@ -387,10 +405,12 @@ impl App {
                         self.should_quit = true;
                     } else {
                         self.pending_quit = true;
+                        self.needs_render = true;
                     }
                 } else {
                     self.editor.clear_input();
                     self.pending_quit = false;
+                    self.needs_render = true;
                 }
             }
             return true;
@@ -441,14 +461,17 @@ impl App {
             }
             KeyCode::Tab => {
                 self.editor.handle_tab();
+                self.needs_render = true;
                 true
             }
             KeyCode::Up => {
                 self.editor.handle_up();
+                self.needs_render = true;
                 true
             }
             KeyCode::Down => {
                 self.editor.handle_down();
+                self.needs_render = true;
                 true
             }
             KeyCode::Char(_) => {
@@ -457,33 +480,40 @@ impl App {
             }
             KeyCode::Backspace => {
                 self.editor.handle_backspace();
+                self.needs_render = true;
                 true
             }
             KeyCode::Left => {
                 self.editor.move_left();
+                self.needs_render = true;
                 true
             }
             KeyCode::Right => {
                 self.editor.move_right();
+                self.needs_render = true;
                 true
             }
             KeyCode::Home => {
                 self.editor.move_home();
+                self.needs_render = true;
                 true
             }
             KeyCode::End => {
                 self.editor.move_end();
+                self.needs_render = true;
                 true
             }
             KeyCode::Esc => {
                 // Esc: dismiss suggestions or clear input. Never exits TUI.
                 if self.editor.dismiss_suggestions() {
+                    self.needs_render = true;
                     return true;
                 }
                 if !self.editor.input.is_empty() {
                     self.editor.clear_input();
                 }
                 self.pending_quit = false;
+                self.needs_render = true;
                 true
             }
             _ => false,
@@ -502,6 +532,7 @@ impl App {
             }
             KeyCode::Char(c) => {
                 self.editor.push_char(c);
+                self.needs_render = true;
             }
             _ => {}
         }
@@ -967,6 +998,8 @@ impl App {
                 config_path: None,
             },
             thinking_level: ThinkingLevel::Off,
+            needs_render: true,
+            last_spinner_frame: "",
         }
     }
 }

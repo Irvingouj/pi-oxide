@@ -27,6 +27,8 @@ mod onboarding;
 mod onboarding_test;
 #[cfg(all(test, unix))]
 mod record_replay_test;
+#[cfg(all(test, unix))]
+mod replay_e2e_test;
 mod scroll;
 mod session;
 mod session_log;

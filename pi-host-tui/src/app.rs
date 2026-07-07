@@ -127,7 +127,7 @@ impl ChatEntry {
 
 pub struct App {
     /// Host-side agent mediator — owns runtime, transcript, artifacts, turn_number.
-    pub(crate) agent_host: Option<crate::agent_host::AgentHost>,
+    pub(crate) agent_host: crate::agent_host::AgentHost,
     pub(crate) entries: Vec<ChatEntry>,
     pub(crate) editor: crate::editor::Editor,
     pub(crate) scroll_offset: u16,
@@ -148,6 +148,9 @@ pub struct App {
 
     // Cancellation
     pub(crate) cancelled: bool,
+
+    // Double-press Ctrl+C protection
+    pub(crate) pending_quit: bool,
 
     // Model picker
     pub(crate) model_picker: Option<crate::model_picker::ModelPicker>,
@@ -188,11 +191,11 @@ impl App {
     }
 
     pub(crate) fn agent(&self) -> &AgentRuntime {
-        self.agent_host.as_ref().expect("agent").runtime()
+        self.agent_host.runtime()
     }
 
     pub(crate) fn agent_mut(&mut self) -> &mut AgentRuntime {
-        self.agent_host.as_mut().expect("agent").runtime_mut()
+        self.agent_host.runtime_mut()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -271,7 +274,7 @@ impl App {
         let agent_host = crate::agent_host::AgentHost::new(agent);
 
         Ok(Self {
-            agent_host: Some(agent_host),
+            agent_host,
             entries: init_entries,
             editor: crate::editor::Editor::new(),
             scroll_offset: 0,
@@ -292,6 +295,7 @@ impl App {
             session_backend: FileSystemSessionBackend::new(),
             cwd: cwd.to_path_buf(),
             cancelled: false,
+            pending_quit: false,
             model_picker: None,
             extensions,
             running_tasks: Vec::new(),
@@ -375,12 +379,21 @@ impl App {
         let is_alt = key.modifiers.contains(KeyModifiers::ALT);
         let is_shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
-        // Ctrl+C: cancel running LLM, or quit when idle
+        // Ctrl+C: cancel running LLM, or clear input / double-press to quit
         if key.code == KeyCode::Char('c') && is_ctrl {
             if self.running {
                 self.cancelled = true;
             } else {
-                self.should_quit = true;
+                if self.editor.input.is_empty() {
+                    if self.pending_quit {
+                        self.should_quit = true;
+                    } else {
+                        self.pending_quit = true;
+                    }
+                } else {
+                    self.editor.clear_input();
+                    self.pending_quit = false;
+                }
             }
             return true;
         }
@@ -465,14 +478,14 @@ impl App {
                 true
             }
             KeyCode::Esc => {
+                // Esc: dismiss suggestions or clear input. Never exits TUI.
                 if self.editor.dismiss_suggestions() {
                     return true;
                 }
-                if self.running {
-                    self.cancelled = true;
-                } else {
-                    self.should_quit = true;
+                if !self.editor.input.is_empty() {
+                    self.editor.clear_input();
                 }
+                self.pending_quit = false;
                 true
             }
             _ => false,
@@ -524,11 +537,7 @@ impl App {
             .unwrap_or_default();
         let budget = self.budget.clone();
 
-        let (_events, actions) = self
-            .agent_host
-            .as_mut()
-            .expect("agent")
-            .transition(|runtime, transcript, artifacts, turn| {
+        let (_events, actions) = self.agent_host.transition(|runtime, transcript, artifacts, turn| {
                 match runtime {
                     AgentRuntime::Idle(idle) => TransitionParts::from(idle
                         .start_turn(
@@ -632,7 +641,7 @@ impl App {
 
         if let Some(ref logger) = self.session_logger {
             let _ = logger.append(&SessionEvent::TurnStart {
-                turn: self.agent_host.as_ref().expect("agent").turn_number,
+                turn: self.agent_host.turn_number,
             });
         }
         self.handle_actions(terminal, actions);
@@ -661,11 +670,7 @@ impl App {
                             permission: ToolCallPermission::Allow,
                         })
                         .collect();
-                    let (_events, new_actions) = self
-                        .agent_host
-                        .as_mut()
-                        .expect("agent")
-                        .transition(|runtime, transcript, artifacts, turn| {
+                    let (_events, new_actions) = self.agent_host.transition(|runtime, transcript, artifacts, turn| {
                             if let AgentRuntime::PreToolCall(pre) = runtime {
                                 TransitionParts::from(pre.prepare_tool_calls(preps.clone(), transcript, artifacts, turn).into_parts())
                             } else {
@@ -727,11 +732,7 @@ impl App {
                     }
                 }
                 let budget = self.budget.clone();
-                let (_events, actions) = self
-                    .agent_host
-                    .as_mut()
-                    .expect("agent")
-                    .transition(|runtime, transcript, artifacts, turn| {
+                let (_events, actions) = self.agent_host.transition(|runtime, transcript, artifacts, turn| {
                         let AgentRuntime::Compacting(compacting) = runtime else {
                             return TransitionParts::from((vec![], vec![], runtime, transcript, artifacts, turn, vec![]));
                         };
@@ -753,11 +754,7 @@ impl App {
             Err(e) => {
                 self.entries
                     .push(ChatEntry::System(format!("Summary LLM Error: {e}")));
-                let (_events, _actions) = self
-                    .agent_host
-                    .as_mut()
-                    .expect("agent")
-                    .transition(|runtime, transcript, artifacts, turn| {
+                let (_events, _actions) = self.agent_host.transition(|runtime, transcript, artifacts, turn| {
                         crate::agent_host::AgentHost::abort_compacting_or_pass_through(runtime, transcript, artifacts, turn)
                     });
                 self.running = false;
@@ -791,11 +788,7 @@ impl App {
 
         for directive in directives {
             if self.cancelled {
-                let (_events, _actions) = self
-                    .agent_host
-                    .as_mut()
-                    .expect("agent")
-                    .transition(|runtime, transcript, artifacts, turn| {
+                let (_events, _actions) = self.agent_host.transition(|runtime, transcript, artifacts, turn| {
                         match runtime {
                             AgentRuntime::Streaming(streaming) => {
                                 let (ev, act, state, transcript, artifacts, tn, m) = streaming
@@ -831,7 +824,7 @@ impl App {
                     if !turn_ended {
                         if let Some(ref logger) = self.session_logger {
                             let _ = logger.append(&SessionEvent::TurnEnd {
-                                turn: self.agent_host.as_ref().expect("agent").turn_number,
+                                turn: self.agent_host.turn_number,
                             });
                             turn_ended = true;
                         }
@@ -844,7 +837,7 @@ impl App {
                     if !turn_ended {
                         if let Some(ref logger) = self.session_logger {
                             let _ = logger.append(&SessionEvent::TurnEnd {
-                                turn: self.agent_host.as_ref().expect("agent").turn_number,
+                                turn: self.agent_host.turn_number,
                             });
                             turn_ended = true;
                         }
@@ -884,7 +877,7 @@ impl App {
     /// Build a minimal App for render/scroll E2E tests — no agent, no tools, dummy LLM.
     pub(crate) fn with_entries_for_test(entries: Vec<ChatEntry>) -> Self {
         Self {
-            agent_host: None,
+            agent_host: crate::agent_host::AgentHost::new(pi_core::AgentRuntime::Uninitialized),
             entries,
             editor: crate::editor::Editor::new(),
             scroll_offset: 0,
@@ -902,6 +895,7 @@ impl App {
             session_backend: FileSystemSessionBackend::new(),
             cwd: std::path::PathBuf::from("."),
             cancelled: false,
+            pending_quit: false,
             model_picker: None,
             extensions: Vec::new(),
             running_tasks: Vec::new(),

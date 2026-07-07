@@ -538,7 +538,7 @@ mod tests {
             session_id: None,
         });
         App {
-            agent_host: Some(crate::agent_host::AgentHost::new(runtime)),
+            agent_host: crate::agent_host::AgentHost::new(runtime),
             entries: Vec::new(),
             editor: crate::editor::Editor::new(),
             scroll_offset: 0,
@@ -561,6 +561,7 @@ mod tests {
             session_backend: crate::session::FileSystemSessionBackend::new(),
             cwd: std::path::PathBuf::from("."),
             cancelled: false,
+            pending_quit: false,
             model_picker: None,
             extensions: Vec::new(),
             running_tasks: Vec::new(),

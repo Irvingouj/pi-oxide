@@ -310,27 +310,8 @@ fn shift_enter_inserts_newline() {
 }
 
 // ---------------------------------------------------------------------------
-// Esc — interrupt when running, quit when idle
+// Esc — dismiss suggestions, clear input, never quit or cancel
 // ---------------------------------------------------------------------------
-
-#[test]
-fn esc_when_running_interrupts_not_quits() {
-    let mut app = build_app("hello", 5);
-    app.running = true;
-    app.handle_key(plain(KeyCode::Esc));
-    assert!(app.cancelled, "Esc when running should set cancelled");
-    assert!(!app.should_quit, "Esc when running should NOT quit");
-}
-
-#[test]
-fn esc_when_idle_quits() {
-    let mut app = build_app("", 0);
-    app.running = false;
-    app.editor.show_suggestions = false;
-    app.handle_key(plain(KeyCode::Esc));
-    assert!(app.should_quit, "Esc when idle should quit");
-    assert!(!app.cancelled, "Esc when idle should not cancel");
-}
 
 #[test]
 fn esc_dismisses_suggestions_first() {
@@ -343,6 +324,38 @@ fn esc_dismisses_suggestions_first() {
         !app.should_quit,
         "Esc should not quit when suggestions shown"
     );
+}
+
+#[test]
+fn esc_clears_input_when_idle() {
+    let mut app = build_app("hello", 5);
+    app.running = false;
+    app.editor.show_suggestions = false;
+    app.handle_key(plain(KeyCode::Esc));
+    assert!(app.editor.input.is_empty(), "Esc when idle should clear input");
+    assert!(!app.should_quit, "Esc when idle should NOT quit");
+    assert!(!app.cancelled, "Esc when idle should not cancel");
+}
+
+#[test]
+fn esc_empty_input_noop_does_not_quit() {
+    let mut app = build_app("", 0);
+    app.running = false;
+    app.editor.show_suggestions = false;
+    app.handle_key(plain(KeyCode::Esc));
+    assert!(!app.should_quit, "Esc with empty input should NOT quit");
+    assert!(!app.cancelled, "Esc should not cancel");
+    assert!(app.editor.input.is_empty(), "Input should remain empty");
+}
+
+#[test]
+fn esc_when_running_clears_input_not_cancels() {
+    let mut app = build_app("hello", 5);
+    app.running = true;
+    app.handle_key(plain(KeyCode::Esc));
+    assert!(!app.cancelled, "Esc should no longer cancel even when running");
+    assert!(!app.should_quit, "Esc when running should not quit");
+    assert!(app.editor.input.is_empty(), "Esc should clear input");
 }
 
 // ---------------------------------------------------------------------------
@@ -361,16 +374,43 @@ fn tab_cycles_suggestions() {
 }
 
 // ---------------------------------------------------------------------------
-// Ctrl+C — quit when idle, cancel when running
+// Ctrl+C — clear input when idle (double-press to quit), cancel when running
 // ---------------------------------------------------------------------------
 
 #[test]
-fn ctrl_c_quits_when_idle() {
+fn ctrl_c_clears_input_when_idle() {
     let mut app = build_app("hello", 5);
     app.running = false;
     app.handle_key(ctrl(KeyCode::Char('c')));
-    assert!(app.should_quit, "Ctrl+C when idle should quit");
+    assert!(
+        app.editor.input.is_empty(),
+        "First Ctrl+C when idle should clear input"
+    );
+    assert!(!app.should_quit, "First Ctrl+C should not quit");
     assert!(!app.cancelled, "Ctrl+C when idle should not cancel");
+}
+
+#[test]
+fn ctrl_c_double_press_quits() {
+    let mut app = build_app("", 0);
+    app.running = false;
+    // First press with already-empty input sets pending_quit
+    app.handle_key(ctrl(KeyCode::Char('c')));
+    assert!(!app.should_quit, "First Ctrl+C with empty input should not quit");
+    assert!(app.pending_quit, "First Ctrl+C with empty input should set pending_quit");
+    // Second press while pending_quit is set should quit
+    app.handle_key(ctrl(KeyCode::Char('c')));
+    assert!(app.should_quit, "Second Ctrl+C with empty input should quit");
+}
+
+#[test]
+fn ctrl_c_clears_input_resets_pending_quit() {
+    let mut app = build_app("hello", 5);
+    app.running = false;
+    // First Ctrl+C clears the input
+    app.handle_key(ctrl(KeyCode::Char('c')));
+    assert!(app.editor.input.is_empty());
+    assert!(!app.pending_quit, "pending_quit should be reset when input was non-empty");
 }
 
 #[test]

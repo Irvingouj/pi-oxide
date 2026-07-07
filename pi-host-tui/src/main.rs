@@ -25,6 +25,7 @@ mod onboarding_test;
 mod session;
 mod session_log;
 mod smoke_test;
+mod theme;
 mod tools;
 #[cfg(test)]
 mod tools_test;
@@ -190,6 +191,8 @@ fn main() -> Result<(), app::TuiError> {
     let cwd = std::env::current_dir()?;
 
     let mut terminal = ratatui::init();
+    // Set cursor to steady block — matches the ▌ accent bar visually.
+    print!("\x1b[2 q"); // ANSI: steady block cursor
     let app = app::App::new(
         &system_prompt,
         &resolved.model,
@@ -208,5 +211,7 @@ fn main() -> Result<(), app::TuiError> {
     )?;
     let result = app.run(&mut terminal, &session_backend);
     ratatui::restore();
+    // Reset cursor to default on exit
+    print!("\x1b[0 q");
     result
 }

@@ -23,6 +23,7 @@ impl App {
         context: pi_core::LlmContext,
     ) {
         self.running = true;
+        self.streaming_start = Some(std::time::Instant::now());
         self.streaming_text.clear();
 
         // Log LLM request
@@ -95,6 +96,7 @@ impl App {
                         self.turn_number = turn_number;
                         self.agent = Some(runtime.into_runtime());
                         self.running = false;
+                        self.streaming_start = None;
                         self.entries.push(ChatEntry::System("Cancelled.".into()));
                         let _ = terminal.draw(|f| self.render(f));
                         return;
@@ -271,6 +273,7 @@ impl App {
         }
 
         self.cancelled = false;
+        self.streaming_start = None;
         self.streaming_text.clear();
     }
 }

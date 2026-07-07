@@ -1,51 +1,66 @@
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::style::{Modifier, Style};
+use ratatui::symbols;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
+use crate::theme::Theme;
 
 impl App {
     pub(crate) fn render_input(&mut self, frame: &mut Frame, area: Rect) {
-        let style = if self.running {
-            Style::default().fg(Color::DarkGray)
+        let border_style = if self.show_suggestions {
+            Style::default().fg(Theme::YELLOW)
         } else {
-            Style::default().fg(Color::White)
+            Theme::input_border_style(self.running, self.thinking_level)
         };
 
-        let input = Paragraph::new(self.input.as_str())
-            .style(style)
+        let title = if self.running {
+            Span::styled(" \u{2809} thinking ", Style::default().fg(Theme::YELLOW))
+        } else if self.show_suggestions {
+            Span::styled(" commands ", Style::default().fg(Theme::YELLOW))
+        } else {
+            Span::styled(" pio ", border_style)
+        };
+
+        let text_style = if self.running {
+            Style::default().fg(Theme::DIM_GRAY)
+        } else {
+            Style::default().fg(Theme::TEXT_LIGHT)
+        };
+
+        // Build the full input line: prefix + typed text
+        let prefix = "\u{258c} ";
+        let input_spans: Vec<Span> = vec![
+            Span::styled(prefix, Style::default().fg(Theme::ACCENT)),
+            Span::styled(&self.input, text_style),
+        ];
+
+        let input = Paragraph::new(Line::from(input_spans))
             .block(
-                Block::new()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(if self.running {
-                        Color::DarkGray
-                    } else if self.show_suggestions {
-                        Color::Yellow
-                    } else {
-                        Color::Cyan
-                    }))
-                    .title(if self.running {
-                        " thinking... "
-                    } else if self.show_suggestions {
-                        " commands "
-                    } else {
-                        " > "
-                    })
-                    .title_style(
-                        Style::default().fg(if self.running || self.show_suggestions {
-                            Color::Yellow
-                        } else {
-                            Color::Cyan
-                        }),
-                    ),
+                Block::default()
+                    .border_set(symbols::border::ROUNDED)
+                    .border_style(border_style)
+                    .title(title)
+                    .title_style(border_style),
             )
             .wrap(Wrap { trim: false });
 
         frame.render_widget(input, area);
 
+        // Cursor position: computed from display width of prefix + text before cursor.
+        // cursor_pos is a byte index — slice by bytes, then measure display width.
         if !self.running {
-            let cursor_x = area.x + 1 + (self.cursor_pos as u16).min(area.width.saturating_sub(3));
+            let before = self.input.get(..self.cursor_pos).unwrap_or("");
+            let cursor_x = (area.x
+                + 1 // left border
+                + prefix.width() as u16
+                + before.width() as u16
+                - 1)
+            .max(area.x + 1)
+            .min(area.x + area.width - 1);
             let cursor_y = area.y + 1;
             frame.set_cursor_position((cursor_x, cursor_y));
         }
@@ -78,11 +93,15 @@ impl App {
                 .collect();
 
             let list = List::new(items)
-                .block(Block::bordered().title(" commands "))
+                .block(
+                    Block::bordered()
+                        .border_set(symbols::border::ROUNDED)
+                        .title(" commands "),
+                )
                 .highlight_style(
                     Style::new()
                         .add_modifier(Modifier::REVERSED)
-                        .fg(Color::Cyan),
+                        .fg(Theme::ACCENT),
                 )
                 .highlight_symbol("> ");
 
@@ -118,21 +137,32 @@ impl App {
         let items: Vec<ListItem> = filtered
             .iter()
             .map(|m| {
-                let prefix = if *m == current { "★ " } else { "  " };
-                ListItem::new(format!("{}{}", prefix, m))
+                if *m == current {
+                    let line = Line::from(vec![
+                        Span::styled("★ ", Style::default().fg(Theme::ACCENT)),
+                        Span::raw(*m),
+                    ]);
+                    ListItem::new(line)
+                } else {
+                    ListItem::new(format!("  {}", m))
+                }
             })
             .collect();
 
         let list = List::new(items)
-            .block(Block::bordered().title(format!(
-                " models ({} of {})",
-                filtered.len(),
-                picker.total_count()
-            )))
+            .block(
+                Block::bordered()
+                    .border_set(symbols::border::ROUNDED)
+                    .title(format!(
+                        " models ({} of {})",
+                        filtered.len(),
+                        picker.total_count()
+                    )),
+            )
             .highlight_style(
                 Style::new()
                     .add_modifier(Modifier::REVERSED)
-                    .fg(Color::Cyan),
+                    .fg(Theme::ACCENT),
             );
 
         // Render list
@@ -155,7 +185,7 @@ impl App {
             height: 1,
         };
         let filter_text = format!("filter: {}", filter_text);
-        let filter = Paragraph::new(filter_text).style(Style::default().fg(Color::Yellow));
+        let filter = Paragraph::new(filter_text).style(Style::default().fg(Theme::YELLOW));
         frame.render_widget(filter, filter_area);
     }
 }

@@ -1,0 +1,16 @@
+{
+  "nextId": 2,
+  "tasks": [
+    {
+      "id": "1",
+      "subject": "Add streaming_start field and spinner to App",
+      "description": "Add streaming_start field, get_spinner_frame method, timer start/reset, and update all test helpers",
+      "status": "completed",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1783375671137,
+      "updatedAt": 1783375867030
+    }
+  ]
+}

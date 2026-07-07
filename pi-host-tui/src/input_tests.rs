@@ -399,7 +399,7 @@ fn kill_ring_rotate_with_two_entries() {
     // Create two independent entries by breaking accumulation with cursor move
     let mut app = build_app("foo bar baz", 11);
     app.handle_key(ctrl(KeyCode::Char('w'))); // kills "baz"
-    // Break accumulation with a cursor move
+                                              // Break accumulation with a cursor move
     app.handle_key(ctrl(KeyCode::Char('b')));
     app.handle_key(ctrl(KeyCode::Char('w'))); // kills "bar" (new entry, not accumulated)
     assert_eq!(app.kill_ring.len(), 2, "Should have 2 entries");
@@ -418,7 +418,11 @@ fn kill_ring_forward_deletion_accumulates() {
     let mut app = build_app("abc", 0);
     app.handle_key(ctrl(KeyCode::Char('d'))); // kills "a"
     app.handle_key(ctrl(KeyCode::Char('d'))); // kills "b" (accumulated)
-    assert_eq!(app.kill_ring.peek(), Some("ab"), "Forward kills accumulate left-to-right");
+    assert_eq!(
+        app.kill_ring.peek(),
+        Some("ab"),
+        "Forward kills accumulate left-to-right"
+    );
 }
 
 #[test]
@@ -426,10 +430,14 @@ fn kill_ring_backward_then_forward_accumulates() {
     // Ctrl+W (backward) then Ctrl+D (forward) with accumulation
     let mut app = build_app("hello world", 11);
     app.handle_key(ctrl(KeyCode::Char('w'))); // kills "world" (backward)
-    // Break accumulation with cursor move
+                                              // Break accumulation with cursor move
     app.handle_key(ctrl(KeyCode::Char('a')));
     app.handle_key(ctrl(KeyCode::Char('d'))); // kills "h" (forward)
-    assert_eq!(app.kill_ring.len(), 2, "Non-consecutive kills create separate entries");
+    assert_eq!(
+        app.kill_ring.len(),
+        2,
+        "Non-consecutive kills create separate entries"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -441,7 +449,10 @@ fn ctrl_b_moves_left_multi_byte() {
     // "日本" = 6 bytes (3 each), cursor at end (6)
     let mut app = build_app("日本", 6);
     app.handle_key(ctrl(KeyCode::Char('b')));
-    assert_eq!(app.cursor_pos, 3, "Ctrl+B should move left by one multi-byte char");
+    assert_eq!(
+        app.cursor_pos, 3,
+        "Ctrl+B should move left by one multi-byte char"
+    );
     app.handle_key(ctrl(KeyCode::Char('b')));
     assert_eq!(app.cursor_pos, 0, "Ctrl+B should reach start");
 }
@@ -450,7 +461,10 @@ fn ctrl_b_moves_left_multi_byte() {
 fn ctrl_f_moves_right_multi_byte() {
     let mut app = build_app("日本", 0);
     app.handle_key(ctrl(KeyCode::Char('f')));
-    assert_eq!(app.cursor_pos, 3, "Ctrl+F should move right by one multi-byte char");
+    assert_eq!(
+        app.cursor_pos, 3,
+        "Ctrl+F should move right by one multi-byte char"
+    );
     app.handle_key(ctrl(KeyCode::Char('f')));
     assert_eq!(app.cursor_pos, 6, "Ctrl+F should reach end");
 }
@@ -507,7 +521,10 @@ fn ctrl_left_leading_whitespace() {
     // "  hello" = ' '(0) ' '(1) h(2) e(3) l(4) l(5) o(6)
     let mut app = build_app("  hello", 7); // cursor at end
     app.handle_key(ctrl(KeyCode::Left)); // skip word 'hello', land at start of 'hello'
-    assert_eq!(app.cursor_pos, 2, "Ctrl+Left should jump to start of 'hello'");
+    assert_eq!(
+        app.cursor_pos, 2,
+        "Ctrl+Left should jump to start of 'hello'"
+    );
     app.handle_key(ctrl(KeyCode::Left)); // skip whitespace, land at start
     assert_eq!(app.cursor_pos, 0, "Second Ctrl+Left should jump to start");
 }
@@ -516,7 +533,10 @@ fn ctrl_left_leading_whitespace() {
 fn ctrl_right_no_whitespace() {
     let mut app = build_app("hello", 0);
     app.handle_key(ctrl(KeyCode::Right));
-    assert_eq!(app.cursor_pos, 5, "Ctrl+Right on single word should jump to end");
+    assert_eq!(
+        app.cursor_pos, 5,
+        "Ctrl+Right on single word should jump to end"
+    );
 }
 
 #[test]
@@ -564,7 +584,11 @@ fn cursor_move_breaks_kill_accumulation() {
     app.handle_key(ctrl(KeyCode::Char('w'))); // kills "baz"
     app.handle_key(ctrl(KeyCode::Char('b'))); // cursor move → breaks accumulation
     app.handle_key(ctrl(KeyCode::Char('w'))); // kills "bar "
-    assert_eq!(app.kill_ring.len(), 2, "Cursor move should break accumulation");
+    assert_eq!(
+        app.kill_ring.len(),
+        2,
+        "Cursor move should break accumulation"
+    );
 }
 
 #[test]
@@ -574,5 +598,9 @@ fn char_insertion_breaks_kill_accumulation() {
     app.handle_key(ctrl(KeyCode::Char('w'))); // kills "world"
     app.handle_key(ctrl(KeyCode::Char('b'))); // cursor move → breaks accumulation
     app.handle_key(ctrl(KeyCode::Char('w'))); // kills "hello "
-    assert_eq!(app.kill_ring.len(), 2, "Cursor move should break accumulation");
+    assert_eq!(
+        app.kill_ring.len(),
+        2,
+        "Cursor move should break accumulation"
+    );
 }

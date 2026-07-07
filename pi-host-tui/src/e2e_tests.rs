@@ -376,8 +376,8 @@ fn e2e_tui_starts_and_shows_prompt() -> Result<()> {
     let output = h.run(|_| Ok(()))?;
 
     assert!(
-        output.contains("Ready") && output.contains(">"),
-        "TUI should render header and prompt; got: {}",
+        output.contains("Ready") && output.contains("pio"),
+        "TUI should render system message and status bar; got: {}",
         output.chars().take(500).collect::<String>()
     );
     Ok(())
@@ -421,10 +421,7 @@ fn e2e_ctrl_u_no_crash() -> Result<()> {
         Ok(())
     })?;
 
-    assert!(
-        is_alive(h.child_pid),
-        "TUI should not crash after Ctrl+U"
-    );
+    assert!(is_alive(h.child_pid), "TUI should not crash after Ctrl+U");
     Ok(())
 }
 
@@ -440,10 +437,7 @@ fn e2e_ctrl_w_no_crash() -> Result<()> {
         Ok(())
     })?;
 
-    assert!(
-        is_alive(h.child_pid),
-        "TUI should not crash after Ctrl+W"
-    );
+    assert!(is_alive(h.child_pid), "TUI should not crash after Ctrl+W");
     Ok(())
 }
 
@@ -461,10 +455,7 @@ fn e2e_ctrl_y_no_crash() -> Result<()> {
         Ok(())
     })?;
 
-    assert!(
-        is_alive(h.child_pid),
-        "TUI should not crash after Ctrl+Y"
-    );
+    assert!(is_alive(h.child_pid), "TUI should not crash after Ctrl+Y");
     Ok(())
 }
 
@@ -558,10 +549,7 @@ fn e2e_ctrl_d_no_crash() -> Result<()> {
         Ok(())
     })?;
 
-    assert!(
-        is_alive(h.child_pid),
-        "TUI should not crash after Ctrl+D"
-    );
+    assert!(is_alive(h.child_pid), "TUI should not crash after Ctrl+D");
     Ok(())
 }
 
@@ -599,10 +587,7 @@ fn e2e_ctrl_a_no_crash() -> Result<()> {
         Ok(())
     })?;
 
-    assert!(
-        is_alive(h.child_pid),
-        "TUI should not crash after Ctrl+A"
-    );
+    assert!(is_alive(h.child_pid), "TUI should not crash after Ctrl+A");
     Ok(())
 }
 
@@ -621,10 +606,7 @@ fn e2e_ctrl_e_no_crash() -> Result<()> {
         Ok(())
     })?;
 
-    assert!(
-        is_alive(h.child_pid),
-        "TUI should not crash after Ctrl+E"
-    );
+    assert!(is_alive(h.child_pid), "TUI should not crash after Ctrl+E");
     Ok(())
 }
 
@@ -647,9 +629,6 @@ fn e2e_ctrl_k_no_crash() -> Result<()> {
         Ok(())
     })?;
 
-    assert!(
-        is_alive(h.child_pid),
-        "TUI should not crash after Ctrl+K"
-    );
+    assert!(is_alive(h.child_pid), "TUI should not crash after Ctrl+K");
     Ok(())
 }

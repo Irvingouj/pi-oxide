@@ -141,12 +141,14 @@ pub(crate) enum ChatEntry {
     System(String),
 }
 
+/// Approximate wrapped line count using Unicode display width.
+/// Wide characters (CJK, emoji) count as 2 columns.
 fn wrapped_lines(text: &str, width: usize) -> usize {
     if text.is_empty() {
         return 1;
     }
     let width = width.max(1);
-    let display_len = text.chars().count();
+    let display_len = unicode_width::UnicodeWidthStr::width(text);
     (display_len.saturating_add(width.saturating_sub(1))) / width
 }
 
@@ -155,40 +157,50 @@ impl ChatEntry {
     pub(crate) fn line_count(&self, width: usize) -> u16 {
         match self {
             ChatEntry::User(text) => {
-                let mut count: u16 = 2; // header "You: " + blank
+                let mut count: u16 = 2; // header "▌ You:" + blank
+                                        // Accent bar "▌ " (2 chars) prepended to each content line
+                let eff = width.saturating_sub(2);
                 for line in text.lines() {
-                    count += wrapped_lines(line, width) as u16;
+                    count += wrapped_lines(line, eff.max(1)) as u16;
                 }
                 count
             }
             ChatEntry::Assistant(text) => {
                 let mut count: u16 = 0;
+                // Accent bar "▌ " (2 chars) prepended to each line
+                let eff = width.saturating_sub(2);
                 for line in &text.lines {
                     let s: String = line
                         .spans
                         .iter()
                         .map(|s| (*s.content).to_string())
                         .collect();
-                    count += wrapped_lines(&s, width).max(1) as u16;
+                    count += wrapped_lines(&s, eff.max(1)).max(1) as u16;
                 }
                 count + 1 // blank
             }
             ChatEntry::ToolStart { name, args_summary } => {
-                let full = format!(" ┌─ {} {}", name, args_summary);
+                // Must match emit_entry: " ╭─ {name} {args}"
+                let full = format!(" ╭─ {} {}", name, args_summary);
                 wrapped_lines(&full, width) as u16
             }
             ChatEntry::ToolResult {
-                output, is_error, ..
+                output,
+                is_error: _,
+                ..
             } => {
                 let mut count: u16 = 0;
                 for line in output.lines() {
-                    let full = format!("{}{}", if *is_error { " ┃ " } else { " │ " }, line);
+                    // Must match emit_entry: " │ {line}"
+                    let full = format!(" │ {}", line);
                     count += wrapped_lines(&full, width) as u16;
                 }
-                count + 2 // footer + blank
+                // Footer: " ╰─✓" or " ╰─✗", plus blank line
+                count + 2
             }
             ChatEntry::System(text) => {
-                let full = format!("  {}", text);
+                // Must match emit_entry: "◇ {text}"
+                let full = format!("◇ {}", text);
                 wrapped_lines(&full, width) as u16 + 1 // + blank
             }
         }
@@ -324,6 +336,7 @@ pub struct App {
     pub(crate) should_quit: bool,
     pub(crate) running: bool,
     pub(crate) streaming_text: String,
+    pub(crate) streaming_start: Option<std::time::Instant>,
     #[allow(dead_code)]
     pub(crate) current_tools: Vec<(String, String)>,
     pub(crate) tool_definitions: Vec<ToolDefinition>,
@@ -367,6 +380,9 @@ pub struct App {
     pub(crate) last_chat_area: Rect,
     pub(crate) resolved_config: ResolvedConfig,
 
+    // Thinking level for input border coloring
+    pub(crate) thinking_level: ThinkingLevel,
+
     // Kill ring for Emacs-style kill/yank
     pub(crate) kill_ring: KillRing,
     /// Last input action (for kill accumulation)
@@ -381,6 +397,16 @@ pub(crate) struct RunningTask {
 }
 
 impl App {
+    /// Get the current Braille spinner frame based on elapsed time.
+    pub(crate) fn get_spinner_frame(&self) -> &'static str {
+        const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+        let elapsed_ms = self
+            .streaming_start
+            .map(|start| start.elapsed().as_millis() as usize)
+            .unwrap_or(0);
+        FRAMES[(elapsed_ms / 120) % FRAMES.len()]
+    }
+
     pub(crate) fn agent(&self) -> &AgentRuntime {
         self.agent.as_ref().unwrap()
     }
@@ -472,6 +498,7 @@ impl App {
             should_quit: false,
             running: false,
             streaming_text: String::new(),
+            streaming_start: None,
             current_tools: Vec::new(),
             tool_definitions: tool_defs,
             llm_client,
@@ -500,6 +527,7 @@ impl App {
             context_window,
             last_chat_area: ratatui::layout::Rect::ZERO,
             resolved_config,
+            thinking_level: ThinkingLevel::Off,
             kill_ring: KillRing::new(),
             last_kill_action: false,
             last_yank: None,
@@ -647,8 +675,14 @@ impl App {
             }
             KeyCode::Tab => {
                 if self.show_suggestions {
-                    // Cycle through suggestions
-                    self.suggestion_state.select_next();
+                    if let Some(idx) = self.suggestion_state.selected() {
+                        if let Some(cmd) = self.suggestions.get(idx).cloned() {
+                            self.input = cmd;
+                            self.cursor_pos = self.input.len();
+                            self.show_suggestions = false;
+                            return true;
+                        }
+                    }
                 } else if self.input.starts_with('/') {
                     self.update_suggestions();
                 }
@@ -1230,6 +1264,7 @@ impl App {
         }
 
         self.running = true;
+        self.streaming_start = Some(std::time::Instant::now());
         self.auto_scroll = true;
         self.cancelled = false;
         self.entries.push(ChatEntry::User(text.to_string()));
@@ -1623,6 +1658,7 @@ impl App {
         context: pi_core::LlmContext,
     ) {
         self.running = true;
+        self.streaming_start = Some(std::time::Instant::now());
         let mut summary_text = String::new();
 
         match self
@@ -1679,6 +1715,7 @@ impl App {
                     self.agent = Some(runtime);
                 }
                 self.running = false;
+                self.streaming_start = None;
             }
         }
     }
@@ -1740,6 +1777,7 @@ impl App {
                 self.turn_number = turn_number;
                 self.agent = Some(new_runtime);
                 self.running = false;
+                self.streaming_start = None;
                 self.entries.push(ChatEntry::System("Cancelled.".into()));
                 let _ = terminal.draw(|f| self.render(f));
                 return;
@@ -1757,6 +1795,7 @@ impl App {
                 HostDirective::Finished => {
                     self.entries.push(ChatEntry::System("Done.".into()));
                     self.running = false;
+                    self.streaming_start = None;
                     if !turn_ended {
                         if let Some(ref logger) = self.session_logger {
                             let _ = logger.append(&SessionEvent::TurnEnd {
@@ -1769,6 +1808,7 @@ impl App {
                 }
                 HostDirective::WaitForInput { .. } => {
                     self.running = false;
+                    self.streaming_start = None;
                     if !turn_ended {
                         if let Some(ref logger) = self.session_logger {
                             let _ = logger.append(&SessionEvent::TurnEnd {
@@ -1821,6 +1861,7 @@ impl App {
             should_quit: false,
             running: false,
             streaming_text: String::new(),
+            streaming_start: None,
             current_tools: Vec::new(),
             tool_definitions: Vec::new(),
             llm_client: LlmClient::new("x", "x", "test", WireFormat::OpenAI),
@@ -1853,6 +1894,7 @@ impl App {
                 base_url: "x".into(),
                 config_path: None,
             },
+            thinking_level: ThinkingLevel::Off,
             kill_ring: KillRing::new(),
             last_kill_action: false,
             last_yank: None,

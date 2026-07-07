@@ -9,6 +9,7 @@ use ratatui::Frame;
 use crate::app::{App, ChatEntry};
 #[allow(unused_imports)]
 use crate::llm::LlmProvider;
+use crate::theme::Theme;
 
 /// Pure scroll-position computation. Returns the row offset to pass to
 /// `Paragraph::scroll((offset, 0))`.
@@ -49,62 +50,78 @@ fn emit_entry(entry: &ChatEntry, lines: &mut Vec<Line<'static>>) {
     match entry {
         ChatEntry::User(text) => {
             lines.push(Line::from(vec![
+                Span::styled("\u{258c} ", Style::default().fg(Theme::ACCENT)),
                 Span::styled(
                     "You",
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(Theme::ACCENT)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(": "),
             ]));
             for line in text.lines() {
-                lines.push(Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default().fg(Color::White),
-                )));
+                lines.push(Line::from(vec![
+                    Span::styled("\u{258c} ", Style::default().fg(Theme::ACCENT)),
+                    Span::styled(line.to_string(), Style::default().fg(Theme::TEXT_LIGHT)),
+                ]));
             }
             lines.push(Line::raw(""));
         }
         ChatEntry::Assistant(text) => {
             for line in text.lines.iter().cloned() {
-                lines.push(line);
+                // Skip accent bar on blank lines (markdown trailing separators)
+                let is_blank =
+                    line.spans.is_empty() || line.spans.iter().all(|s| s.content.is_empty());
+                if is_blank {
+                    lines.push(Line::raw(""));
+                } else {
+                    let mut spans = vec![Span::styled(
+                        "\u{258c} ",
+                        Style::default().fg(Theme::ACCENT),
+                    )];
+                    spans.extend(line.spans);
+                    lines.push(Line::from(spans));
+                }
             }
             lines.push(Line::raw(""));
         }
         ChatEntry::ToolStart { name, args_summary } => {
             lines.push(Line::from(vec![
-                Span::styled(" ┌─ ", Style::default().fg(Color::Yellow)),
+                Span::styled(" \u{256d}\u{2500} ", Style::default().fg(Theme::DARK_GRAY)),
                 Span::styled(
                     name.clone(),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(Theme::BLUE)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!(" {args_summary}"),
-                    Style::default().fg(Color::DarkGray),
+                    format!(" {}", args_summary),
+                    Style::default().fg(Theme::DIM_GRAY),
                 ),
             ]));
         }
         ChatEntry::ToolResult {
             output, is_error, ..
         } => {
-            let color = if *is_error { Color::Red } else { Color::Green };
-            let border = if *is_error { " ┃ " } else { " │ " };
+            let color = Theme::tool_border_color(false, *is_error);
+            let footer_icon = if *is_error { "\u{2717}" } else { "\u{2713}" };
             for line in output.lines() {
                 lines.push(Line::from(vec![
-                    Span::styled(border, Style::default().fg(color)),
-                    Span::styled(line.to_string(), Style::default().fg(color)),
+                    Span::styled(" \u{2502} ", Style::default().fg(color)),
+                    Span::styled(line.to_string(), Style::default().fg(Theme::TEXT_MID)),
                 ]));
             }
-            lines.push(Line::styled(" └──", Style::default().fg(color)));
+            lines.push(Line::styled(
+                format!(" \u{2570}\u{2500}{}", footer_icon),
+                Style::default().fg(color),
+            ));
             lines.push(Line::raw(""));
         }
         ChatEntry::System(text) => {
-            lines.push(Line::styled(
-                format!("  {text}"),
-                Style::default().fg(Color::DarkGray),
-            ));
+            lines.push(Line::from(vec![
+                Span::styled("\u{25c7} ", Style::default().fg(Theme::DIM_GRAY)),
+                Span::styled(text.to_string(), Style::default().fg(Theme::GRAY)),
+            ]));
             lines.push(Line::raw(""));
         }
     }
@@ -184,8 +201,9 @@ impl App {
             entry_line_counts.push(1); // "Thinking..." is one line
         }
 
-        // Total wrapped lines
-        let total_lines: u16 = entry_line_counts.iter().sum();
+        // Total wrapped lines (+1 for top padding line)
+        const TOP_PAD: u16 = 1;
+        let total_lines: u16 = entry_line_counts.iter().sum::<u16>() + TOP_PAD;
 
         // Compute scroll position and visible range
         let scroll = compute_scroll(total_lines, visible, self.auto_scroll, self.scroll_offset);
@@ -205,9 +223,10 @@ impl App {
         }
 
         // Pass 2: materialize only visible rows
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        let mut current_row: u16 = 0;
-        let mut first_emitted_row: u16 = 0;
+        // Prepend a blank line for top padding
+        let mut lines: Vec<Line<'static>> = vec![Line::raw("")];
+        let mut current_row: u16 = TOP_PAD;
+        let mut first_emitted_row: u16 = TOP_PAD;
 
         for (idx, entry) in self.entries.iter().enumerate() {
             let entry_len = entry_line_counts[idx];
@@ -224,8 +243,9 @@ impl App {
                 break;
             }
 
-            // Track the first row emitted (for paragraph scroll adjustment)
-            if lines.is_empty() {
+            // Track the first content row emitted (for paragraph scroll adjustment)
+            // lines[0] is the padding line, so check len == 1 (padding only)
+            if lines.len() == 1 {
                 first_emitted_row = entry_start;
             }
 
@@ -238,13 +258,20 @@ impl App {
         if has_streaming {
             let stream_row = current_row;
             if stream_row < end && stream_row + 1 > start {
-                lines.push(Line::styled(
-                    "  ● Thinking...",
-                    Style::default().fg(Color::DarkGray),
-                ));
+                let frame = self.get_spinner_frame();
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {} ", frame), Style::default().fg(Theme::YELLOW)),
+                    Span::styled(
+                        "Thinking",
+                        Style::default()
+                            .fg(Theme::DIM_GRAY)
+                            .add_modifier(Modifier::ITALIC),
+                    ),
+                ]));
             }
         }
-        let paragraph_scroll = scroll.saturating_sub(first_emitted_row);
+        // Paragraph includes padding line at index 0, so add 1 to skip it
+        let paragraph_scroll = scroll.saturating_sub(first_emitted_row) + 1;
         let paragraph = Paragraph::new(ratatui::text::Text::from(lines))
             .scroll((paragraph_scroll, 0))
             .block(Block::new().borders(Borders::NONE))
@@ -266,25 +293,33 @@ impl App {
     /// Build the status-bar spans. Extracted so the formatting logic is testable.
     fn build_status_spans(&self) -> Vec<Span<'static>> {
         let model_name = self.llm_client.model_id();
-        let mut spans = vec![Span::styled(
-            format!(" {model_name}"),
-            Style::default().fg(Color::DarkGray),
-        )];
+        let mut spans = vec![
+            Span::styled(
+                " pio",
+                Style::default()
+                    .fg(Theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" · {}", model_name),
+                Style::default().fg(Theme::GRAY),
+            ),
+        ];
 
         if let Some((input, output, _total)) = self.last_usage {
             let context_window = self.context_window;
             let auto_compact = self.budget.compaction_threshold > 0.0;
             let (ctx_text, ctx_color) = format_ctx_usage(input, context_window, auto_compact);
 
-            spans.push(Span::raw(" │ "));
+            spans.push(Span::raw("  "));
             spans.push(Span::styled(
                 format!("in:{:.1}k", input as f64 / 1000.0),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Theme::DIM_GRAY),
             ));
             spans.push(Span::raw(" "));
             spans.push(Span::styled(
                 format!("out:{:.1}k", output as f64 / 1000.0),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Theme::DIM_GRAY),
             ));
             spans.push(Span::raw(" "));
             spans.push(Span::styled(ctx_text, Style::default().fg(ctx_color)));
@@ -293,11 +328,11 @@ impl App {
         if !self.running_tasks.is_empty() {
             let count = self.running_tasks.len();
             spans.push(Span::styled(
-                format!(" ● {count} tools"),
-                Style::default().fg(Color::Yellow),
+                format!("  ⠋ {} tools", count),
+                Style::default().fg(Theme::BLUE),
             ));
         } else if self.running {
-            spans.push(Span::styled(" ●", Style::default().fg(Color::Yellow)));
+            spans.push(Span::styled("  ⠋", Style::default().fg(Theme::YELLOW)));
         }
 
         spans
@@ -305,7 +340,8 @@ impl App {
 
     pub(crate) fn render_status(&self, frame: &mut Frame, area: Rect) {
         let spans = self.build_status_spans();
-        let status = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::DarkGray));
+        let status = Paragraph::new(Line::from(spans))
+            .style(Style::default().bg(Theme::BG_STATUS).fg(Theme::GRAY));
         frame.render_widget(status, area);
     }
 }
@@ -513,6 +549,7 @@ mod tests {
             should_quit: false,
             running: false,
             streaming_text: String::new(),
+            streaming_start: None,
             current_tools: Vec::new(),
             tool_definitions: Vec::new(),
             llm_client: crate::llm::LlmClient::new(
@@ -550,6 +587,7 @@ mod tests {
                 base_url: "x".into(),
                 config_path: None,
             },
+            thinking_level: pi_core::events::ThinkingLevel::Off,
             kill_ring: crate::app::KillRing::new(),
             last_kill_action: false,
             last_yank: None,
@@ -565,8 +603,9 @@ mod tests {
     fn build_status_spans_no_usage_shows_model_only() {
         let app = app_with_agent();
         let spans = app.build_status_spans();
-        assert_eq!(spans.len(), 1);
-        assert_eq!(span_text(&spans[0]), " test-model");
+        assert_eq!(spans.len(), 2);
+        assert_eq!(span_text(&spans[0]), " pio");
+        assert_eq!(span_text(&spans[1]), " · test-model");
     }
 
     #[test]
@@ -575,21 +614,22 @@ mod tests {
         app.last_usage = Some((1280, 500, 1780));
         let spans = app.build_status_spans();
 
-        // Model name
-        assert_eq!(span_text(&spans[0]), " test-model");
+        // Brand + model
+        assert_eq!(span_text(&spans[0]), " pio");
+        assert_eq!(span_text(&spans[1]), " · test-model");
         // Separator
-        assert_eq!(span_text(&spans[1]), " │ ");
+        assert_eq!(span_text(&spans[2]), "  ");
         // in:1.3k
-        assert_eq!(span_text(&spans[2]), "in:1.3k");
+        assert_eq!(span_text(&spans[3]), "in:1.3k");
         // space
-        assert_eq!(span_text(&spans[3]), " ");
+        assert_eq!(span_text(&spans[4]), " ");
         // out:0.5k
-        assert_eq!(span_text(&spans[4]), "out:0.5k");
+        assert_eq!(span_text(&spans[5]), "out:0.5k");
         // space
-        assert_eq!(span_text(&spans[5]), " ");
+        assert_eq!(span_text(&spans[6]), " ");
         // ctx usage: "1.0%/128k (auto)" with Green
-        assert_eq!(span_text(&spans[6]), "1.0%/128k (auto)");
-        assert_eq!(spans[6].style.fg, Some(Color::Green));
+        assert_eq!(span_text(&spans[7]), "1.0%/128k (auto)");
+        assert_eq!(spans[7].style.fg, Some(Color::Green));
     }
 
     #[test]
@@ -598,8 +638,8 @@ mod tests {
         app.running = true;
         let spans = app.build_status_spans();
         // Last span should be the running indicator
-        assert_eq!(span_text(spans.last().unwrap()), " ●");
-        assert_eq!(spans.last().unwrap().style.fg, Some(Color::Yellow));
+        assert_eq!(span_text(spans.last().unwrap()), "  ⠋");
+        assert_eq!(spans.last().unwrap().style.fg, Some(Theme::YELLOW));
     }
 
     #[test]
@@ -612,8 +652,8 @@ mod tests {
         });
         let spans = app.build_status_spans();
         // Last span should be the tools indicator
-        assert_eq!(span_text(spans.last().unwrap()), " ● 1 tools");
-        assert_eq!(spans.last().unwrap().style.fg, Some(Color::Yellow));
+        assert_eq!(span_text(spans.last().unwrap()), "  ⠋ 1 tools");
+        assert_eq!(spans.last().unwrap().style.fg, Some(Theme::BLUE));
     }
 
     #[test]
@@ -670,9 +710,9 @@ mod tests {
             stream: Box::new(rx),
         });
         let spans = app.build_status_spans();
-        // Should show tools indicator, not bare running dot
-        assert_eq!(span_text(spans.last().unwrap()), " ● 1 tools");
-        // Should NOT have a bare " ●" running indicator
-        assert!(!spans.iter().any(|s| s.content.as_ref() == " ●"));
+        // Should show tools indicator, not bare running spinner
+        assert_eq!(span_text(spans.last().unwrap()), "  ⠋ 1 tools");
+        // Should NOT have a bare "  ⠋" running indicator
+        assert!(!spans.iter().any(|s| s.content.as_ref() == "  ⠋"));
     }
 }

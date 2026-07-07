@@ -2,6 +2,7 @@
 //!
 //! Uses pulldown-cmark to parse markdown and produces styled ratatui Text.
 
+use crate::theme::Theme;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use std::sync::OnceLock;
@@ -18,6 +19,7 @@ pub fn render(input: &str, _width: u16) -> Text<'static> {
     let mut code_lines: Vec<String> = Vec::new();
     let mut current_spans: Vec<Span<'static>> = Vec::new();
     let mut list_depth: usize = 0;
+    let mut in_heading = false;
 
     for event in parser {
         match event {
@@ -45,7 +47,7 @@ pub fn render(input: &str, _width: u16) -> Text<'static> {
                 let indent = "  ".repeat(list_depth.saturating_sub(1));
                 current_spans.push(Span::styled(
                     format!("{indent}• "),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Theme::ACCENT),
                 ));
             }
             pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Item) => {
@@ -53,16 +55,14 @@ pub fn render(input: &str, _width: u16) -> Text<'static> {
             }
             pulldown_cmark::Event::Start(pulldown_cmark::Tag::Heading { level, .. }) => {
                 flush_spans(&mut current_spans, &mut lines);
-                let prefix = "#".repeat(level as usize) + " ";
-                current_spans.push(Span::styled(
-                    prefix,
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ));
+                if (level as usize) <= 2 {
+                    lines.push(Line::styled(" ", Style::default().fg(Theme::DARK_GRAY)));
+                }
+                in_heading = true;
             }
             pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Heading(_)) => {
                 flush_spans(&mut current_spans, &mut lines);
+                in_heading = false;
                 lines.push(Line::raw(""));
             }
             pulldown_cmark::Event::Start(pulldown_cmark::Tag::Paragraph) => {}
@@ -77,21 +77,20 @@ pub fn render(input: &str, _width: u16) -> Text<'static> {
             pulldown_cmark::Event::Code(code) => {
                 current_spans.push(Span::styled(
                     code.to_string(),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(Theme::ACCENT),
                 ));
             }
             pulldown_cmark::Event::Start(pulldown_cmark::Tag::Link { dest_url, .. }) => {
                 let url = dest_url.to_string();
-                current_spans.push(Span::raw("["));
-                // Store URL for the End event
+                current_spans.push(Span::styled("[", Style::default().fg(Theme::BLUE)));
                 let _ = url;
             }
             pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Link) => {
-                current_spans.push(Span::raw("]"));
+                current_spans.push(Span::styled("]", Style::default().fg(Theme::BLUE)));
             }
             pulldown_cmark::Event::Start(pulldown_cmark::Tag::BlockQuote(_)) => {
                 flush_spans(&mut current_spans, &mut lines);
-                current_spans.push(Span::styled("│ ", Style::default().fg(Color::DarkGray)));
+                current_spans.push(Span::styled("│ ", Style::default().fg(Theme::DIM_GRAY)));
             }
             pulldown_cmark::Event::End(pulldown_cmark::TagEnd::BlockQuote(_)) => {
                 flush_spans(&mut current_spans, &mut lines);
@@ -99,6 +98,13 @@ pub fn render(input: &str, _width: u16) -> Text<'static> {
             pulldown_cmark::Event::Text(text) => {
                 if in_code_block {
                     code_lines.push(text.to_string());
+                } else if in_heading {
+                    current_spans.push(Span::styled(
+                        text.to_string(),
+                        Style::default()
+                            .fg(Theme::YELLOW)
+                            .add_modifier(Modifier::BOLD),
+                    ));
                 } else {
                     current_spans.push(Span::raw(text.to_string()));
                 }
@@ -128,6 +134,9 @@ fn render_code_block(lang: &str, code_lines: &[String], lines: &mut Vec<Line<'st
         return;
     }
 
+    // Top rail
+    lines.push(Line::styled(" ", Style::default().fg(Theme::DARK_GRAY)));
+
     static SS: OnceLock<SyntaxSet> = OnceLock::new();
     static TS: OnceLock<ThemeSet> = OnceLock::new();
 
@@ -142,7 +151,7 @@ fn render_code_block(lang: &str, code_lines: &[String], lines: &mut Vec<Line<'st
     for line in LinesWithEndings::from(trimmed) {
         let highlighted = highlighter.highlight_line(line, ss).unwrap_or_default();
         let mut spans: Vec<Span<'static>> =
-            vec![Span::styled("  ", Style::default().fg(Color::DarkGray))];
+            vec![Span::styled("  ", Style::default().fg(Theme::DARK_GRAY))];
         for (style, text) in highlighted {
             let text = text.trim_end_matches('\n');
             if text.is_empty() {
@@ -156,6 +165,9 @@ fn render_code_block(lang: &str, code_lines: &[String], lines: &mut Vec<Line<'st
         }
         lines.push(Line::from(spans));
     }
+
+    // Bottom rail
+    lines.push(Line::styled(" ", Style::default().fg(Theme::DARK_GRAY)));
     lines.push(Line::raw(""));
 }
 
@@ -176,15 +188,20 @@ mod tests {
     fn test_render_heading() {
         let text = render("# Title\nSome text", 80);
         assert!(text.lines.len() >= 2);
-        // First line should be heading with cyan style
+        // H1 gets a top rail (line 0), heading text on line 1 with YELLOW+BOLD
+        let heading_line = &text.lines[1];
+        let has_yellow_bold = heading_line.spans.iter().any(|s| {
+            s.style.fg == Some(Theme::YELLOW) && s.style.add_modifier.contains(Modifier::BOLD)
+        });
+        assert!(has_yellow_bold);
     }
 
     #[test]
     fn test_render_code_block() {
         let text = render("```rust\nfn main() {}\n```", 80);
-        assert!(text.lines.len() >= 2);
-        // Code line should be indented
-        let code_line = &text.lines[0];
+        assert!(text.lines.len() >= 3);
+        // Line 0 is top rail, line 1 is code with gutter indent
+        let code_line = &text.lines[1];
         assert!(code_line.spans[0].content.starts_with("  "));
     }
 
@@ -192,12 +209,12 @@ mod tests {
     fn test_render_inline_code() {
         let text = render("Use `cargo build` to compile", 80);
         assert!(!text.lines.is_empty());
-        // Should contain yellow-styled code span
-        let has_yellow = text
+        // Should contain ACCENT-styled code span (teal)
+        let has_accent = text
             .lines
             .iter()
-            .any(|l| l.spans.iter().any(|s| s.style.fg == Some(Color::Yellow)));
-        assert!(has_yellow);
+            .any(|l| l.spans.iter().any(|s| s.style.fg == Some(Theme::ACCENT)));
+        assert!(has_accent);
     }
 
     #[test]

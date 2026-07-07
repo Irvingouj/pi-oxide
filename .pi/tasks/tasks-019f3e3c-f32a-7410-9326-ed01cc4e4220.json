@@ -1,0 +1,137 @@
+{
+  "nextId": 12,
+  "tasks": [
+    {
+      "id": "1",
+      "subject": "Build real DeepSeek HTTP recording server for TUI tests",
+      "description": "Create a real HTTP proxy/recording server that forwards requests to DeepSeek's API, records the full SSE stream, and can replay for deterministic TUI tests. This lets us pin TUI streaming behavior against real LLM output.",
+      "status": "in_progress",
+      "activeForm": "Building DeepSeek recording server",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1783456436717,
+      "updatedAt": 1783456439169
+    },
+    {
+      "id": "2",
+      "subject": "Create pi-record-server crate scaffold",
+      "description": "Create new workspace crate pi-record-server with Cargo.toml and dependencies (axum, reqwest async, tokio, base64, clap, serde_json)",
+      "status": "completed",
+      "activeForm": "Creating pi-record-server crate",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1783456531257,
+      "updatedAt": 1783456553134
+    },
+    {
+      "id": "3",
+      "subject": "Define cassette format types",
+      "description": "Define CassetteEntry, Cassette types: request (method, url, headers, body_json) + response (status, headers, body_base64). Serialize/deserialize with serde.",
+      "status": "completed",
+      "activeForm": "Defining cassette format",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1783456531258,
+      "updatedAt": 1783456553135
+    },
+    {
+      "id": "4",
+      "subject": "Implement record mode (proxy + capture)",
+      "description": "Record mode: axum server that accepts POST /v1/chat/completions, proxies to target DeepSeek URL, tees the SSE response stream to client + recorder buffer, saves cassette on exit (SIGINT handler).",
+      "status": "completed",
+      "activeForm": "Implementing record mode",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1783456531258,
+      "updatedAt": 1783456596033
+    },
+    {
+      "id": "5",
+      "subject": "Implement replay mode (serve cassette)",
+      "description": "Replay mode: axum server that loads a cassette file, serves recorded SSE responses sequentially via POST /v1/chat/completions. Returns 503 when exhausted.",
+      "status": "completed",
+      "activeForm": "Implementing replay mode",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1783456531258,
+      "updatedAt": 1783456655610
+    },
+    {
+      "id": "6",
+      "subject": "Wire up CLI and main entry point",
+      "description": "CLI with clap: subcommands `record` (--target, --port, --output) and `replay` (--cassette, --port, --delay-ms). Wire everything together in main.rs.",
+      "status": "completed",
+      "activeForm": "Wiring CLI and main",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1783456531258,
+      "updatedAt": 1783456733819
+    },
+    {
+      "id": "7",
+      "subject": "Integrate into workspace and document",
+      "description": "Add pi-record-server to workspace Cargo.toml members. Write a README with usage examples. Add a fixture cassette for TUI tests.",
+      "status": "completed",
+      "activeForm": "Integrating into workspace",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1783456531259,
+      "updatedAt": 1783456848840
+    },
+    {
+      "id": "8",
+      "subject": "Record multi-turn TUI session with real DeepSeek",
+      "description": "Start pi-record-server in background, run TUI via PTY, send real prompts to DeepSeek through the proxy, capture the full SSE stream into a cassette file for later replay testing.",
+      "status": "completed",
+      "activeForm": "Recording multi-turn conversation",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1783456956086,
+      "updatedAt": 1783457271330
+    },
+    {
+      "id": "9",
+      "subject": "Write integration test: record → replay → compare TUI output",
+      "description": "Write an integration test that: (1) launches record server as child process, (2) spawns pio in PTY pointing at the proxy, (3) submits multi-turn prompts, (4) captures rendered output, (5) launches replay server with saved cassette, (6) spawns pio again, (7) compares assistant text between record and replay runs to verify byte-identical behavior.",
+      "status": "completed",
+      "activeForm": "Writing replay integration test",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1783456956087,
+      "updatedAt": 1783457271331
+    },
+    {
+      "id": "10",
+      "subject": "Replay and diagnose any TUI behavior issues",
+      "description": "Run the integration test, replay the cassette through the TUI, and diagnose any behavioral differences between the live recording and replay. Look for SSE parsing issues, rendering differences, tool call handling problems, or stream completion bugs.",
+      "status": "completed",
+      "activeForm": "Running and diagnosing replay",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1783456956087,
+      "updatedAt": 1783457286200
+    },
+    {
+      "id": "11",
+      "subject": "Fix review findings before commit",
+      "description": "Fix review issues before commit: (1) extract shared models_handler, (2) document cassette relationship, (3) fix non-asserting test comparison, (4) extract shared PTY helpers, (5) enum for RecordMode, (6) complete:fals for partial entries, (7) SIGTERM in replay, (8) validate cassette in integration test",
+      "status": "completed",
+      "activeForm": "Fixing review issues",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1783459002345,
+      "updatedAt": 1783459225169
+    }
+  ]
+}

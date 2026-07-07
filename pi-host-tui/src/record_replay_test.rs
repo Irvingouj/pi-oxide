@@ -446,7 +446,7 @@ fn extract_assistant_lines(output: &str) -> Vec<String> {
 }
 
 #[test]
-#[cfg_attr(target_os = "windows", ignore)]
+#[ignore = "requires DEEPSEEK_API_KEY and network — run with `cargo test -- --ignored`"]
 fn record_and_replay_single_turn() -> Result<()> {
     let cassette = std::env::temp_dir().join("pi_test_record_replay.cassette.json");
     let _ = std::fs::remove_file(&cassette);
@@ -579,7 +579,7 @@ fn record_and_replay_single_turn() -> Result<()> {
 }
 
 #[test]
-#[cfg_attr(target_os = "windows", ignore)]
+#[ignore = "requires DEEPSEEK_API_KEY and network — run with `cargo test -- --ignored`"]
 fn record_and_replay_multi_turn() -> Result<()> {
     let cassette = std::env::temp_dir().join("pi_test_multi_turn.cassette.json");
     let _ = std::fs::remove_file(&cassette);

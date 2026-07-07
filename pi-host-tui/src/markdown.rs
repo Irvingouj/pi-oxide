@@ -11,7 +11,7 @@ use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
-pub fn render(input: &str, _width: u16) -> Text<'static> {
+pub fn render(input: &str) -> Text<'static> {
     let parser = pulldown_cmark::Parser::new(input);
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
@@ -20,6 +20,8 @@ pub fn render(input: &str, _width: u16) -> Text<'static> {
     let mut current_spans: Vec<Span<'static>> = Vec::new();
     let mut list_depth: usize = 0;
     let mut in_heading = false;
+    let mut in_strong = false;
+    let mut in_emphasis = false;
 
     for event in parser {
         match event {
@@ -70,10 +72,18 @@ pub fn render(input: &str, _width: u16) -> Text<'static> {
                 flush_spans(&mut current_spans, &mut lines);
                 lines.push(Line::raw(""));
             }
-            pulldown_cmark::Event::Start(pulldown_cmark::Tag::Strong) => {}
-            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Strong) => {}
-            pulldown_cmark::Event::Start(pulldown_cmark::Tag::Emphasis) => {}
-            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Emphasis) => {}
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::Strong) => {
+                in_strong = true;
+            }
+            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Strong) => {
+                in_strong = false;
+            }
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::Emphasis) => {
+                in_emphasis = true;
+            }
+            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Emphasis) => {
+                in_emphasis = false;
+            }
             pulldown_cmark::Event::Code(code) => {
                 current_spans.push(Span::styled(
                     code.to_string(),
@@ -106,7 +116,18 @@ pub fn render(input: &str, _width: u16) -> Text<'static> {
                             .add_modifier(Modifier::BOLD),
                     ));
                 } else {
-                    current_spans.push(Span::raw(text.to_string()));
+                    let mut style = Style::default();
+                    if in_strong {
+                        style = style.add_modifier(Modifier::BOLD);
+                    }
+                    if in_emphasis {
+                        style = style.add_modifier(Modifier::ITALIC);
+                    }
+                    if in_strong || in_emphasis {
+                        current_spans.push(Span::styled(text.to_string(), style));
+                    } else {
+                        current_spans.push(Span::raw(text.to_string()));
+                    }
                 }
             }
             pulldown_cmark::Event::SoftBreak | pulldown_cmark::Event::HardBreak => {
@@ -177,7 +198,7 @@ mod tests {
 
     #[test]
     fn test_render_paragraph() {
-        let text = render("Hello world", 80);
+        let text = render("Hello world");
         assert!(!text.lines.is_empty());
         // Should have the text line + empty line after paragraph
         let first_line = &text.lines[0];
@@ -186,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_render_heading() {
-        let text = render("# Title\nSome text", 80);
+        let text = render("# Title\nSome text");
         assert!(text.lines.len() >= 2);
         // H1 gets a top rail (line 0), heading text on line 1 with YELLOW+BOLD
         let heading_line = &text.lines[1];
@@ -198,7 +219,7 @@ mod tests {
 
     #[test]
     fn test_render_code_block() {
-        let text = render("```rust\nfn main() {}\n```", 80);
+        let text = render("```rust\nfn main() {}\n```");
         assert!(text.lines.len() >= 3);
         // Line 0 is top rail, line 1 is code with gutter indent
         let code_line = &text.lines[1];
@@ -207,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_render_inline_code() {
-        let text = render("Use `cargo build` to compile", 80);
+        let text = render("Use `cargo build` to compile");
         assert!(!text.lines.is_empty());
         // Should contain ACCENT-styled code span (teal)
         let has_accent = text
@@ -219,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_render_list() {
-        let text = render("- item 1\n- item 2\n- item 3", 80);
+        let text = render("- item 1\n- item 2\n- item 3");
         // Should have bullet markers
         let bullet_count = text
             .lines
@@ -231,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_render_empty() {
-        let text = render("", 80);
+        let text = render("");
         assert!(text.lines.is_empty());
     }
 }

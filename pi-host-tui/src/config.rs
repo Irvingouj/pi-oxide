@@ -54,6 +54,17 @@ pub struct Config {
 const CONFIG_DIR: &str = ".pi-oxide";
 const CONFIG_FILE: &str = "config.toml";
 
+/// Return the user's home directory.
+///
+/// Checks `$HOME`, then `$USERPROFILE` (Windows), then falls back to the
+/// current directory.
+pub(crate) fn home_dir() -> PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
+}
+
 /// Return the path to the project config file: `<cwd>/.pi-oxide/config.toml`.
 pub fn project_config_path() -> PathBuf {
     std::env::current_dir()
@@ -64,8 +75,7 @@ pub fn project_config_path() -> PathBuf {
 
 /// Return the path to the global config file: `~/.pi-oxide/config.toml`.
 pub fn global_config_path() -> PathBuf {
-    std::env::home_dir()
-        .unwrap_or_default()
+    home_dir()
         .join(CONFIG_DIR)
         .join(CONFIG_FILE)
 }

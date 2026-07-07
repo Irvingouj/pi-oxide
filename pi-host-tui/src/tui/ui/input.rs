@@ -11,7 +11,7 @@ use crate::theme::Theme;
 
 impl App {
     pub(crate) fn render_input(&mut self, frame: &mut Frame, area: Rect) {
-        let border_style = if self.show_suggestions {
+        let border_style = if self.editor.show_suggestions {
             Style::default().fg(Theme::YELLOW)
         } else {
             Theme::input_border_style(self.running, self.thinking_level)
@@ -19,7 +19,7 @@ impl App {
 
         let title = if self.running {
             Span::styled(" \u{2809} thinking ", Style::default().fg(Theme::YELLOW))
-        } else if self.show_suggestions {
+        } else if self.editor.show_suggestions {
             Span::styled(" commands ", Style::default().fg(Theme::YELLOW))
         } else {
             Span::styled(" pio ", border_style)
@@ -35,7 +35,7 @@ impl App {
         let prefix = "\u{258c} ";
         let input_spans: Vec<Span> = vec![
             Span::styled(prefix, Style::default().fg(Theme::ACCENT)),
-            Span::styled(&self.input, text_style),
+            Span::styled(&self.editor.input, text_style),
         ];
 
         let input = Paragraph::new(Line::from(input_spans))
@@ -53,7 +53,7 @@ impl App {
         // Cursor position: computed from display width of prefix + text before cursor.
         // cursor_pos is a byte index — slice by bytes, then measure display width.
         if !self.running {
-            let before = self.input.get(..self.cursor_pos).unwrap_or("");
+            let before = self.editor.input.get(..self.editor.cursor_pos).unwrap_or("");
             let cursor_x = (area.x
                 + 1 // left border
                 + prefix.width() as u16
@@ -72,9 +72,9 @@ impl App {
         }
 
         // Suggestion popup
-        if self.show_suggestions && !self.suggestions.is_empty() {
+        if self.editor.show_suggestions && !self.editor.suggestions.is_empty() {
             let max_visible = 5u16;
-            let list_height = (self.suggestions.len() as u16).min(max_visible);
+            let list_height = (self.editor.suggestions.len() as u16).min(max_visible);
             let popup_height = list_height + 2;
 
             let popup_area = Rect {
@@ -87,6 +87,7 @@ impl App {
             frame.render_widget(Clear, popup_area);
 
             let items: Vec<ListItem> = self
+                .editor
                 .suggestions
                 .iter()
                 .map(|s| ListItem::new(s.as_str()))
@@ -105,7 +106,7 @@ impl App {
                 )
                 .highlight_symbol("> ");
 
-            frame.render_stateful_widget(list, popup_area, &mut self.suggestion_state);
+            frame.render_stateful_widget(list, popup_area, &mut self.editor.suggestion_state);
         }
     }
 

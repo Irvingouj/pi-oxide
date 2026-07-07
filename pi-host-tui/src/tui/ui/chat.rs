@@ -7,8 +7,6 @@ use ratatui::widgets::{
 use ratatui::Frame;
 
 use crate::app::{App, ChatEntry};
-#[allow(unused_imports)]
-use crate::llm::LlmProvider;
 use crate::theme::Theme;
 
 /// Pure scroll-position computation. Returns the row offset to pass to
@@ -540,10 +538,9 @@ mod tests {
             session_id: None,
         });
         App {
-            agent: Some(runtime),
+            agent_host: Some(crate::agent_host::AgentHost::new(runtime)),
             entries: Vec::new(),
-            input: String::new(),
-            cursor_pos: 0,
+            editor: crate::editor::Editor::new(),
             scroll_offset: 0,
             auto_scroll: true,
             should_quit: false,
@@ -564,19 +561,10 @@ mod tests {
             session_backend: crate::session::FileSystemSessionBackend::new(),
             cwd: std::path::PathBuf::from("."),
             cancelled: false,
-            history: Vec::new(),
-            history_index: None,
-            original_input: String::new(),
-            suggestions: Vec::new(),
-            show_suggestions: false,
-            suggestion_state: ratatui::widgets::ListState::default(),
             model_picker: None,
             extensions: Vec::new(),
             running_tasks: Vec::new(),
             session_logger: None,
-            transcript: Vec::new(),
-            artifacts: pi_core::Artifacts::new(),
-            turn_number: 0,
             budget: pi_core::ContextProjectionBudget::default(),
             context_window: 128_000,
             last_chat_area: Rect::ZERO,
@@ -588,9 +576,6 @@ mod tests {
                 config_path: None,
             },
             thinking_level: pi_core::events::ThinkingLevel::Off,
-            kill_ring: crate::app::KillRing::new(),
-            last_kill_action: false,
-            last_yank: None,
         }
     }
 
@@ -648,6 +633,7 @@ mod tests {
         let (_tx, rx) = std::sync::mpsc::channel();
         app.running_tasks.push(crate::app::RunningTask {
             tool_call_id: pi_core::types::ToolCallId("tc1".to_string()),
+            tool_name: "test_tool".to_string(),
             stream: Box::new(rx),
         });
         let spans = app.build_status_spans();
@@ -707,6 +693,7 @@ mod tests {
         let (_tx, rx) = std::sync::mpsc::channel();
         app.running_tasks.push(crate::app::RunningTask {
             tool_call_id: pi_core::types::ToolCallId("tc1".to_string()),
+            tool_name: "test_tool".to_string(),
             stream: Box::new(rx),
         });
         let spans = app.build_status_spans();

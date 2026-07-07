@@ -19,12 +19,14 @@ impl ModelPicker {
 
     /// Return models matching the current filter.
     pub fn filtered(&self) -> Vec<&str> {
+        if self.filter.is_empty() {
+            return self.models.iter().map(|s| s.as_str()).collect();
+        }
+        let filter_lower = self.filter.to_lowercase();
         self.models
             .iter()
             .map(|s| s.as_str())
-            .filter(|m| {
-                self.filter.is_empty() || m.to_lowercase().contains(&self.filter.to_lowercase())
-            })
+            .filter(|m| m.to_lowercase().contains(&filter_lower))
             .collect()
     }
 

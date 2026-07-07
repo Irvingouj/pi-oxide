@@ -12,7 +12,7 @@ pub struct FileSystemSessionBackend {
 
 impl FileSystemSessionBackend {
     pub fn new() -> Self {
-        let dir = home_dir().join(".pi-oxide").join("sessions");
+        let dir = crate::config::home_dir().join(".pi-oxide").join("sessions");
         std::fs::create_dir_all(&dir).ok();
         Self { dir }
     }
@@ -60,9 +60,4 @@ impl FileSystemSessionBackend {
     }
 }
 
-fn home_dir() -> PathBuf {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
-}
+

@@ -8,11 +8,11 @@ use pi_core::{
     AgentRuntime, Content, LlmChunk, LlmError, LlmResult, StopReason, TextContent, ToolArguments,
     ToolCallId, ToolName,
 };
+
+use crate::agent_host::TransitionParts;
 use pi_core::{ApiName, AssistantMessage, ModelId, ProviderName};
 
 use crate::app::{App, ChatEntry};
-#[allow(unused_imports)]
-use crate::llm::{LlmProvider, LlmStreamState};
 use crate::markdown;
 use crate::session_log::SessionEvent;
 
@@ -28,8 +28,9 @@ impl App {
 
         // Log LLM request
         if let Some(ref logger) = self.session_logger {
+            let turn = self.agent_host.as_ref().expect("agent").turn_number;
             let _ = logger.append(&SessionEvent::LlmRequest {
-                turn: self.turn_number,
+                turn,
                 model: self.llm_client.model_id().to_string(),
                 message_count: context.messages.len(),
             });
@@ -40,11 +41,18 @@ impl App {
             .stream_sync(&context.system_prompt, &context.messages, &context.tools)
         {
             Ok(mut stream) => {
-                // Take streaming agent out so we can feed chunks directly without
-                // borrowing self.agent inside the loop.
-                let runtime = self.agent.take().unwrap();
+                // Extract the runtime so we can feed chunks directly without
+                // borrowing self.agent_host inside the loop.
+                let runtime = self
+                    .agent_host
+                    .as_mut()
+                    .expect("agent")
+                    .take_runtime();
                 let AgentRuntime::Streaming(mut streaming) = runtime else {
-                    self.agent = Some(runtime);
+                    self.agent_host
+                        .as_mut()
+                        .expect("agent")
+                        .set_runtime(runtime);
                     return;
                 };
 
@@ -79,22 +87,42 @@ impl App {
                         }
                     }
                     if self.cancelled {
-                        let transcript = std::mem::take(&mut self.transcript);
-                        let artifacts = std::mem::take(&mut self.artifacts);
-                        let transition = streaming.abort(transcript, artifacts, self.turn_number);
-                        let (
-                            _events,
-                            _actions,
-                            runtime,
-                            transcript,
-                            artifacts,
-                            turn_number,
-                            _markers,
-                        ) = transition.into_parts();
-                        self.transcript = transcript;
-                        self.artifacts = artifacts;
-                        self.turn_number = turn_number;
-                        self.agent = Some(runtime.into_runtime());
+                        let (transcript, artifacts) = (
+                            std::mem::take(
+                                &mut self
+                                    .agent_host
+                                    .as_mut()
+                                    .expect("agent")
+                                    .transcript,
+                            ),
+                            std::mem::take(
+                                &mut self
+                                    .agent_host
+                                    .as_mut()
+                                    .expect("agent")
+                                    .artifacts,
+                            ),
+                        );
+                        let turn = self.agent_host.as_ref().expect("agent").turn_number;
+                        let (events, actions, new_runtime, transcript, artifacts, turn_number, _markers) =
+                            streaming.abort(transcript, artifacts, turn).into_parts();
+                        self.agent_host
+                            .as_mut()
+                            .expect("agent")
+                            .transcript = transcript;
+                        self.agent_host
+                            .as_mut()
+                            .expect("agent")
+                            .artifacts = artifacts;
+                        self.agent_host
+                            .as_mut()
+                            .expect("agent")
+                            .turn_number = turn_number;
+                        self.agent_host
+                            .as_mut()
+                            .expect("agent")
+                            .set_runtime(new_runtime.into_runtime());
+                        let _ = (events, actions);
                         self.running = false;
                         self.streaming_start = None;
                         self.entries.push(ChatEntry::System("Cancelled.".into()));
@@ -110,7 +138,7 @@ impl App {
                             full_text.push_str(&text);
                             self.streaming_text = full_text.clone();
                             if let Some(ChatEntry::Assistant(_)) = self.entries.last() {
-                                let rendered = markdown::render(&full_text, 80);
+                                let rendered = markdown::render(&full_text);
                                 *self.entries.last_mut().unwrap() = ChatEntry::Assistant(rendered);
                             }
                         }
@@ -119,8 +147,9 @@ impl App {
                             self.entries
                                 .push(ChatEntry::System(format!("LLM Error: {message}")));
                             if let Some(ref logger) = self.session_logger {
+                                let turn = self.agent_host.as_ref().expect("agent").turn_number;
                                 let _ = logger.append(&SessionEvent::Error {
-                                    turn: self.turn_number,
+                                    turn,
                                     message: message.clone(),
                                 });
                             }
@@ -140,8 +169,9 @@ impl App {
 
                 // Log LLM response
                 if let Some(ref logger) = self.session_logger {
+                    let turn = self.agent_host.as_ref().expect("agent").turn_number;
                     let _ = logger.append(&SessionEvent::LlmResponse {
-                        turn: self.turn_number,
+                        turn,
                         stop_reason: stop_reason.to_string(),
                     });
                 }
@@ -202,25 +232,26 @@ impl App {
                 };
 
                 let result = LlmResult::Ok(assistant_msg);
-                let transcript = std::mem::take(&mut self.transcript);
-                let artifacts = std::mem::take(&mut self.artifacts);
                 let budget = self.budget.clone();
-                let transition =
-                    streaming.finish_llm(result, transcript, artifacts, self.turn_number, &budget);
-                let (_events, actions, runtime, transcript, artifacts, turn_number, _markers) =
-                    transition.into_parts();
+                let (_events, actions) = self
+                    .agent_host
+                    .as_mut()
+                    .expect("agent")
+                    .transition(move |runtime, transcript, artifacts, turn| {
+                        let AgentRuntime::Streaming(s) = runtime else {
+                            unreachable!("streaming agent was extracted above");
+                        };
+                        TransitionParts::from(s.finish_llm(result, transcript, artifacts, turn, &budget).into_parts())
+                    });
                 tracing::debug!(?actions, "finish_llm");
-                self.transcript = transcript;
-                self.artifacts = artifacts;
-                self.turn_number = turn_number;
-                self.agent = Some(runtime);
                 self.handle_actions(terminal, actions);
             }
             Err(e) => {
                 tracing::error!(error = ?e, "LLM stream failed to start");
                 if let Some(ref logger) = self.session_logger {
+                    let turn = self.agent_host.as_ref().expect("agent").turn_number;
                     let _ = logger.append(&SessionEvent::Error {
-                        turn: self.turn_number,
+                        turn,
                         message: e.to_string(),
                     });
                 }
@@ -232,42 +263,27 @@ impl App {
                     },
                     aborted: false,
                 };
-                let runtime = self.agent.take().unwrap();
-                let transcript = std::mem::take(&mut self.transcript);
-                let artifacts = std::mem::take(&mut self.artifacts);
-                let (_events, actions, new_runtime, transcript, artifacts, turn_number, _markers) =
-                    match runtime {
-                        AgentRuntime::Streaming(streaming) => {
-                            let budget = self.budget.clone();
-                            let transition = streaming.finish_llm(
-                                err_result,
-                                transcript,
-                                artifacts,
-                                self.turn_number,
-                                &budget,
-                            );
-                            transition.into_parts()
+                let budget = self.budget.clone();
+                let (_events, actions) = self
+                    .agent_host
+                    .as_mut()
+                    .expect("agent")
+                    .transition(|runtime, transcript, artifacts, turn| {
+                        match runtime {
+                            AgentRuntime::Streaming(streaming) => {
+                                TransitionParts::from(streaming.finish_llm(
+                                    err_result.clone(),
+                                    transcript,
+                                    artifacts,
+                                    turn,
+                                    &budget,
+                                ).into_parts())
+                            }
+                            other => crate::agent_host::AgentHost::abort_compacting_or_pass_through(
+                                other, transcript, artifacts, turn,
+                            ),
                         }
-                        AgentRuntime::Compacting(compacting) => {
-                            let (ev, act, state, transcript, artifacts, tn, m) = compacting
-                                .abort(transcript, artifacts, self.turn_number)
-                                .into_parts();
-                            (ev, act, state.into_runtime(), transcript, artifacts, tn, m)
-                        }
-                        other => (
-                            vec![],
-                            vec![],
-                            other,
-                            transcript,
-                            artifacts,
-                            self.turn_number,
-                            vec![],
-                        ),
-                    };
-                self.transcript = transcript;
-                self.artifacts = artifacts;
-                self.turn_number = turn_number;
-                self.agent = Some(new_runtime);
+                    });
                 self.handle_actions(terminal, actions);
             }
         }

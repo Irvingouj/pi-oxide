@@ -101,18 +101,11 @@ impl SessionEventLogger {
 // ---------------------------------------------------------------------------
 
 fn session_log_path(session_id: &str) -> PathBuf {
-    home_dir()
+    crate::config::home_dir()
         .join(".pi-oxide")
         .join("sessions")
         .join(session_id)
         .join("events.jsonl")
-}
-
-fn home_dir() -> PathBuf {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
 }
 
 // ---------------------------------------------------------------------------

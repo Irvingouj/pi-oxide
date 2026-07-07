@@ -2,8 +2,11 @@ use clap::Parser;
 
 use crate::host_state::HostState;
 
+mod agent_host;
 mod app;
+mod commands;
 mod config;
+mod editor;
 #[cfg(all(test, unix))]
 mod e2e_tests;
 mod extension;
@@ -22,6 +25,7 @@ mod model_picker;
 mod onboarding;
 #[cfg(test)]
 mod onboarding_test;
+mod scroll;
 mod session;
 mod session_log;
 mod smoke_test;
@@ -105,15 +109,8 @@ fn should_run_onboarding(cli: &Cli) -> bool {
     true
 }
 
-fn home_dir() -> std::path::PathBuf {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
-}
-
 fn main() -> Result<(), app::TuiError> {
-    let log_dir = home_dir().join(".pi-oxide").join("logs");
+    let log_dir = config::home_dir().join(".pi-oxide").join("logs");
     std::fs::create_dir_all(&log_dir).ok();
     let log_file = std::fs::OpenOptions::new()
         .create(true)

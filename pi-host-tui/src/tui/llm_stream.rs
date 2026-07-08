@@ -13,6 +13,7 @@ use crate::agent_host::{CollectedStreamData, CollectedToolCall, StreamOutcome, T
 use pi_core::{ApiName, AssistantMessage, ModelId, ProviderName};
 
 use crate::app::{App, ChatEntry};
+use crate::llm::{LlmProvider, LlmStreamState};
 use crate::markdown;
 use crate::session_log::SessionEvent;
 

@@ -78,6 +78,47 @@ impl<'a> From<&'a ToolDefinition> for OpenAITool<'a> {
 // LlmClient::build_body
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Standalone body builder — used by both sync and async clients
+// ---------------------------------------------------------------------------
+
+/// Build the JSON body for an LLM streaming request.
+pub fn build_body(
+    model: &str,
+    system_prompt: &str,
+    messages: &[pi_core::AgentMessage],
+    tools: &[ToolDefinition],
+    wire_format: WireFormat,
+) -> serde_json::Value {
+    match wire_format {
+        WireFormat::Anthropic => {
+            let body = AnthropicRequest {
+                model,
+                max_tokens: 16384,
+                system: system_prompt,
+                messages: convert_messages(messages),
+                stream: true,
+                tools: tools.iter().map(AnthropicTool::from).collect(),
+            };
+            serde_json::to_value(&body).expect("serialize anthropic request")
+        }
+        WireFormat::OpenAI => {
+            let body = OpenAIRequest {
+                model,
+                max_completion_tokens: 16384,
+                messages: convert_messages_openai(messages, system_prompt),
+                stream: true,
+                tools: tools.iter().map(OpenAITool::from).collect(),
+            };
+            serde_json::to_value(&body).expect("serialize openai request")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LlmClient::build_body (backward compat)
+// ---------------------------------------------------------------------------
+
 impl LlmClient {
     pub(crate) fn build_body(
         &self,
@@ -85,28 +126,6 @@ impl LlmClient {
         messages: &[pi_core::AgentMessage],
         tools: &[ToolDefinition],
     ) -> serde_json::Value {
-        match self.wire_format {
-            WireFormat::Anthropic => {
-                let body = AnthropicRequest {
-                    model: &self.model,
-                    max_tokens: 16384,
-                    system: system_prompt,
-                    messages: convert_messages(messages),
-                    stream: true,
-                    tools: tools.iter().map(AnthropicTool::from).collect(),
-                };
-                serde_json::to_value(&body).expect("serialize anthropic request")
-            }
-            WireFormat::OpenAI => {
-                let body = OpenAIRequest {
-                    model: &self.model,
-                    max_completion_tokens: 16384,
-                    messages: convert_messages_openai(messages, system_prompt),
-                    stream: true,
-                    tools: tools.iter().map(OpenAITool::from).collect(),
-                };
-                serde_json::to_value(&body).expect("serialize openai request")
-            }
-        }
+        build_body(&self.model, system_prompt, messages, tools, self.wire_format)
     }
 }

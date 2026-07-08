@@ -26,6 +26,7 @@ crossterm = "0.29"
 unicode-width = "0.2"
 clap = { version = "4.5", features = ["derive", "env"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "blocking"] }
+arc-swap = "1.7"
 futures = "0.3"
 pulldown-cmark = "0.12"
 syntect = { version = "5.2", default-features = false, features = ["regex-fancy", "parsing", "default-syntaxes", "default-themes", "html", "plist-load"] }

@@ -2,6 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::DefaultTerminal;
 
 use crate::app::App;
+use crate::llm::LlmProvider;
 
 impl App {
     // -----------------------------------------------------------------------
@@ -77,7 +78,14 @@ impl App {
     // Slash commands
     // -----------------------------------------------------------------------
 
+    /// Handle slash command — does NOT render (caller is responsible for publish_snapshot).
     pub(crate) fn handle_command(&mut self, terminal: &mut DefaultTerminal, text: &str) {
+        self.handle_command_inline(text);
+        let _ = terminal.draw(|f| self.render(f));
+    }
+
+    /// Handle slash command without rendering — for async actor loop.
+    pub(crate) fn handle_command_inline(&mut self, text: &str) {
         let parts: Vec<&str> = text.split_whitespace().collect();
         let cmd = parts.first().copied().unwrap_or("");
 
@@ -246,7 +254,5 @@ impl App {
                 )));
             }
         }
-
-        let _ = terminal.draw(|f| self.render(f));
     }
 }

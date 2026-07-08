@@ -1,15 +1,19 @@
 //! LLM streaming client supporting multiple provider wire formats.
 //!
-//! Synchronous streaming via reqwest::blocking. Parses SSE events
-//! and provides an iterator of LlmChunk values with collected state.
+//! Synchronous streaming via reqwest::blocking (backward compat).  
+//! Async streaming via reqwest async + tokio (actor loop standard).
 
-mod discovery;
+mod async_stream;
+pub(crate) mod discovery;
 mod messages;
 mod request;
 mod stream;
 
 #[cfg(test)]
 mod tests;
+
+// Re-export async types  
+pub use async_stream::AsyncLlmStream;
 
 // ---------------------------------------------------------------------------
 // Core types
@@ -23,13 +27,114 @@ pub enum WireFormat {
     OpenAI,
 }
 
+impl WireFormat {
+    /// Resolve provider name string to wire format.
+    pub fn from_provider(provider: &str) -> Self {
+        match provider {
+            "anthropic" | "anthropic-compat" | "deepseek-anthropic" => WireFormat::Anthropic,
+            _ => WireFormat::OpenAI, // openai, deepseek, openai-compat
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct LlmClient {
     client: reqwest::blocking::Client,
+    pub(crate) api_key: String,
+    pub(crate) base_url: String,
+    pub(crate) model: String,
+    pub(crate) wire_format: WireFormat,
+}
+
+/// Async LLM streaming client — uses `reqwest` async API.
+#[derive(Clone)]
+pub struct AsyncLlmClient {
     api_key: String,
     base_url: String,
     model: String,
     wire_format: WireFormat,
+}
+
+impl AsyncLlmClient {
+    pub fn new(api_key: &str, base_url: &str, model: &str, wire_format: WireFormat) -> Self {
+        Self {
+            api_key: api_key.to_string(),
+            base_url: base_url.trim_end_matches('/').to_string(),
+            model: model.to_string(),
+            wire_format,
+        }
+    }
+
+    pub fn api_key(&self) -> &str {
+        &self.api_key
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    pub fn model_id(&self) -> &str {
+        &self.model
+    }
+
+    pub fn set_model(&mut self, model: &str) {
+        self.model = model.to_string();
+    }
+
+    /// Start an async streaming LLM request. Returns a stream that yields `LlmChunk` values.
+    pub async fn stream_async(
+        &self,
+        system_prompt: &str,
+        messages: &[pi_core::AgentMessage],
+        tools: &[pi_core::ToolDefinition],
+    ) -> Result<AsyncLlmStream, Box<dyn std::error::Error>> {
+        let url = if self.wire_format == WireFormat::OpenAI {
+            format!("{}/v1/chat/completions", self.base_url)
+        } else {
+            format!("{}/v1/messages", self.base_url)
+        };
+
+        tracing::debug!(%url, model = %self.model, messages = messages.len(), tools = tools.len(), "POST");
+
+        let body_json = crate::llm::request::build_body(
+            &self.model,
+            system_prompt,
+            messages,
+            tools,
+            self.wire_format,
+        );
+
+        let client = reqwest::Client::new();
+        let mut req_builder = client.post(&url)
+            .header("content-type", "application/json")
+            .json(&body_json);
+
+        match self.wire_format {
+            WireFormat::Anthropic => {
+                req_builder = req_builder
+                    .header("x-api-key", &self.api_key)
+                    .header("anthropic-version", "2023-06-01");
+            }
+            WireFormat::OpenAI => {
+                req_builder = req_builder.header("authorization", format!("Bearer {}", self.api_key));
+            }
+        }
+
+        let resp = req_builder.send().await?;
+
+        tracing::debug!(status = %resp.status(), "API response");
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            tracing::error!(status = %status, url = %url, model = %self.model, body = %text, "Non-2xx API response");
+            return Err(format!("API error {status}: {text}").into());
+        }
+
+        // Collect full response body as bytes
+        let body_bytes = resp.bytes().await?;
+        Ok(AsyncLlmStream::new(body_bytes.to_vec(), self.wire_format))
+    }
 }
 
 /// Streaming response from an LLM provider.
@@ -41,7 +146,7 @@ pub struct LlmStream {
     buffer: String,
     wire_format: WireFormat,
     // Collected state (accumulated during iteration)
-    tool_calls: Vec<PartialToolCall>,
+    pub(crate) tool_calls: Vec<PartialToolCall>,
     stop_reason: Option<String>,
     usage_input: Option<u32>,
     usage_output: Option<u32>,
@@ -49,10 +154,10 @@ pub struct LlmStream {
 }
 
 /// A partial tool call being accumulated from the stream.
-struct PartialToolCall {
-    id: String,
-    name: String,
-    input_json: String,
+pub(crate) struct PartialToolCall {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) input_json: String,
 }
 
 impl LlmStream {
@@ -110,7 +215,7 @@ pub trait ModelDiscovery {
 }
 
 // ---------------------------------------------------------------------------
-// LlmClient — constructor, accessor, stream_sync
+// LlmClient — constructor, accessor, stream_sync + build_body helper
 // ---------------------------------------------------------------------------
 
 impl LlmClient {
@@ -122,6 +227,14 @@ impl LlmClient {
             model: model.to_string(),
             wire_format,
         }
+    }
+
+    pub fn api_key(&self) -> &str {
+        &self.api_key
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     pub fn model_id(&self) -> &str {
@@ -144,14 +257,16 @@ impl LlmClient {
         } else {
             format!("{}/v1/messages", self.base_url)
         };
-        let body = self.build_body(system_prompt, messages, tools);
 
         tracing::debug!(%url, model = %self.model, messages = messages.len(), tools = tools.len(), "POST");
 
         let mut req = self
             .client
             .post(&url)
-            .header("content-type", "application/json");
+            .header("content-type", "application/json")
+            .json(&crate::llm::request::build_body(
+                &self.model, system_prompt, messages, tools, self.wire_format,
+            ));
 
         match self.wire_format {
             WireFormat::Anthropic => {
@@ -164,7 +279,7 @@ impl LlmClient {
             }
         }
 
-        let resp = req.json(&body).send()?;
+        let resp = req.send()?;
 
         tracing::debug!(status = %resp.status(), "API response");
 
@@ -248,6 +363,33 @@ impl LlmProvider for LlmClient {
 
     fn set_model(&mut self, model: &str) {
         LlmClient::set_model(self, model);
+    }
+}
+
+/// Async provider trait — used by the actor loop.
+pub trait AsyncLlmProvider: Sized + Send {
+    async fn stream_async(
+        &self,
+        system_prompt: &str,
+        messages: &[pi_core::AgentMessage],
+        tools: &[pi_core::ToolDefinition],
+    ) -> Result<AsyncLlmStream, Box<dyn std::error::Error>>;
+
+    fn model_id(&self) -> &str;
+}
+
+impl AsyncLlmProvider for AsyncLlmClient {
+    async fn stream_async(
+        &self,
+        system_prompt: &str,
+        messages: &[pi_core::AgentMessage],
+        tools: &[pi_core::ToolDefinition],
+    ) -> Result<AsyncLlmStream, Box<dyn std::error::Error>> {
+        AsyncLlmClient::stream_async(self, system_prompt, messages, tools).await
+    }
+
+    fn model_id(&self) -> &str {
+        AsyncLlmClient::model_id(self)
     }
 }
 

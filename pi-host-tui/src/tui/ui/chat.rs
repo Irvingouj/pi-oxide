@@ -7,6 +7,7 @@ use ratatui::widgets::{
 use ratatui::Frame;
 
 use crate::app::{App, ChatEntry};
+use crate::llm::LlmProvider;
 use crate::theme::Theme;
 
 /// Pure scroll-position computation. Returns the row offset to pass to
@@ -344,7 +345,7 @@ impl App {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "replay")))]
 mod tests {
     use super::*;
 
@@ -577,8 +578,28 @@ mod tests {
                 config_path: None,
             },
             thinking_level: pi_core::events::ThinkingLevel::Off,
-            needs_render: true,
-            last_spinner_frame: "",
+            pending_llm_context: None,
+            wire_format: crate::llm::WireFormat::OpenAI,
+            pending_chunks: None,
+            pending_stream_usage: None,
+            pending_stop_reason: String::new(),
+            pending_tool_calls: Vec::new(),
+            snapshot: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(crate::app::RenderSnapshot {
+                entries: Default::default(),
+                input_text: String::new(),
+                input_cursor_pos: 0,
+                show_suggestions: false,
+                suggestions: Vec::new(),
+                suggestion_selection: None,
+                running: false,
+                streaming_start: None,
+                scroll_offset: 0,
+                auto_scroll: true,
+                last_chat_area: Rect::ZERO,
+                model_name: "test".into(),
+                thinking_level: pi_core::events::ThinkingLevel::Off,
+                show_quit_prompt: false,
+            })),
         }
     }
 

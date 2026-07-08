@@ -121,7 +121,7 @@ pub(crate) fn apply_scroll(
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "replay")))]
 mod tests {
     use super::*;
     use crate::app::{App, ChatEntry};

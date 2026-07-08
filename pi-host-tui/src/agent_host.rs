@@ -221,6 +221,18 @@ impl AgentHost {
         f(&mut self.runtime);
     }
 
+    /// Take ownership of the current runtime (replaces with Uninitialized).
+    /// Used when the streaming lifecycle needs to extract StreamingAgent.
+    pub fn take_runtime(&mut self) -> AgentRuntime {
+        std::mem::replace(&mut self.runtime, AgentRuntime::Uninitialized)
+    }
+
+    /// Install a new runtime in place of whatever is there now.
+    /// Used after the streaming lifecycle transitions to its next state.
+    pub fn set_runtime(&mut self, runtime: AgentRuntime) {
+        let _ = std::mem::replace(&mut self.runtime, runtime);
+    }
+
     /// Execute the full streaming lifecycle: extract StreamingAgent, feed chunks,
     /// and transition — all without the take/set/take dance.
     ///

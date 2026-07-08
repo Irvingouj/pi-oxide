@@ -20,6 +20,8 @@ pub struct ExtensionContext {
 
 pub enum ExtensionOutcome {
     Complete(Result<ToolResult, ToolError>),
+    #[allow(dead_code)]
+    // stream consumed by poll loop in legacy path; reserved for async tool exec
     Running(Box<dyn ToolEventStream>),
 }
 
@@ -33,11 +35,14 @@ impl std::fmt::Debug for ExtensionOutcome {
 }
 
 pub trait ToolEventStream: Send {
+    #[allow(dead_code)] // consumed by poll loop in legacy path; reserved for async tool exec
     fn try_recv(&mut self) -> Option<ToolEvent>;
 }
 
 pub enum ToolEvent {
+    #[allow(dead_code)] // consumed by poll loop in legacy path; reserved for async tool exec
     Update(ToolExecutionUpdate),
+    #[allow(dead_code)]
     Done(Result<ToolResult, ToolError>),
 }
 

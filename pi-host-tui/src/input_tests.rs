@@ -405,7 +405,10 @@ fn tab_fills_partial_command() {
     app.editor.suggestion_state.select(Some(0));
 
     app.handle_key(plain(KeyCode::Tab));
-    assert_eq!(app.editor.input, "/help ", "Tab should fill /help with trailing space");
+    assert_eq!(
+        app.editor.input, "/help ",
+        "Tab should fill /help with trailing space"
+    );
     assert_eq!(app.editor.cursor_pos, 6);
 }
 
@@ -468,9 +471,15 @@ fn tab_single_suggestion_wraps() {
     app.handle_key(plain(KeyCode::Tab));
     assert_eq!(app.editor.input, "/help ");
     app.handle_key(plain(KeyCode::Tab));
-    assert_eq!(app.editor.input, "/help ", "Second Tab should still show /help ");
+    assert_eq!(
+        app.editor.input, "/help ",
+        "Second Tab should still show /help "
+    );
     app.handle_key(plain(KeyCode::Tab));
-    assert_eq!(app.editor.input, "/help ", "Third Tab should still show /help ");
+    assert_eq!(
+        app.editor.input, "/help ",
+        "Third Tab should still show /help "
+    );
 }
 
 /// Backspace after Tab-filled completion works correctly.
@@ -481,7 +490,7 @@ fn backspace_after_tab_fill() {
     app.editor.suggestions = vec!["/help".to_string()];
     app.editor.suggestion_state.select(Some(0));
 
-    app.handle_key(plain(KeyCode::Tab)); // fills /help 
+    app.handle_key(plain(KeyCode::Tab)); // fills /help
     assert_eq!(app.editor.input, "/help ");
 
     app.handle_key(plain(KeyCode::Backspace)); // delete trailing space
@@ -522,8 +531,14 @@ fn enter_accepts_suggestion_and_submits() {
     app.editor.suggestion_state.select(Some(0));
 
     let consumed = app.handle_key(plain(KeyCode::Enter));
-    assert_eq!(app.editor.input, "/help ", "Enter should fill with trailing space");
-    assert!(!app.editor.show_suggestions, "Enter should dismiss suggestions");
+    assert_eq!(
+        app.editor.input, "/help ",
+        "Enter should fill with trailing space"
+    );
+    assert!(
+        !app.editor.show_suggestions,
+        "Enter should dismiss suggestions"
+    );
     assert!(!consumed, "Enter should return false so caller submits");
 }
 
@@ -539,7 +554,10 @@ fn enter_after_tab_cycle_accepts_correct_command() {
     assert!(second != first);
 
     let consumed = app.handle_key(plain(KeyCode::Enter));
-    assert_eq!(app.editor.input, second, "Enter should keep the cycled command");
+    assert_eq!(
+        app.editor.input, second,
+        "Enter should keep the cycled command"
+    );
     assert!(!app.editor.show_suggestions);
     assert!(!consumed, "Enter should return false so caller submits");
 }

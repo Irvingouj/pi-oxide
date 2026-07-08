@@ -500,8 +500,7 @@ fn record_and_replay_single_turn() -> Result<()> {
     );
 
     // Validate cassette content
-    let cassette_json =
-        std::fs::read_to_string(&cassette).expect("should read cassette");
+    let cassette_json = std::fs::read_to_string(&cassette).expect("should read cassette");
     let cassette_data: serde_json::Value =
         serde_json::from_str(&cassette_json).expect("cassette should be valid JSON");
     assert_eq!(cassette_data["version"], 2);
@@ -561,11 +560,7 @@ fn record_and_replay_single_turn() -> Result<()> {
         let found = replay_meaningful
             .iter()
             .any(|r| r.contains(line) || line.contains(r));
-        assert!(
-            found,
-            "Record line not found in replay: '{}'",
-            line
-        );
+        assert!(found, "Record line not found in replay: '{}'", line);
     }
 
     tui2.quit();
@@ -626,8 +621,7 @@ fn record_and_replay_multi_turn() -> Result<()> {
     assert!(cassette.exists(), "Cassette should exist");
 
     // Validate cassette content
-    let cassette_json =
-        std::fs::read_to_string(&cassette).expect("should read cassette");
+    let cassette_json = std::fs::read_to_string(&cassette).expect("should read cassette");
     let cassette_data: serde_json::Value =
         serde_json::from_str(&cassette_json).expect("cassette should be valid JSON");
     assert_eq!(cassette_data["version"], 2);

@@ -124,9 +124,6 @@ pub(crate) fn apply_scroll(
 #[cfg(all(test, not(feature = "replay")))]
 mod tests {
     use super::*;
-    use crate::app::{App, ChatEntry};
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
 
     fn make_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent {
@@ -175,14 +172,12 @@ mod tests {
 
     #[test]
     fn derive_scroll_ctrl_b_not_scroll() {
-        // Ctrl+B is now cursor left (Emacs), not scroll
         let key = make_key(KeyCode::Char('b'), KeyModifiers::CONTROL);
         assert_eq!(derive_scroll_intent(&key), None);
     }
 
     #[test]
     fn derive_scroll_ctrl_f_not_scroll() {
-        // Ctrl+F is now cursor right (Emacs), not scroll
         let key = make_key(KeyCode::Char('f'), KeyModifiers::CONTROL);
         assert_eq!(derive_scroll_intent(&key), None);
     }
@@ -209,7 +204,7 @@ mod tests {
     #[test]
     fn apply_scroll_bottom() {
         let (off, auto) = apply_scroll(ScrollIntent::Bottom, 100, 10, 50, false);
-        assert!(!auto || off == 50); // offset unchanged, auto=true
+        assert!(!auto || off == 50);
         assert!(auto);
     }
 
@@ -242,21 +237,16 @@ mod tests {
     }
 
     #[test]
-    fn handle_key_scroll_shift_up_disengages_auto() {
-        // Simulate what handle_key does for scroll keys:
-        // 1. derive_scroll_intent maps Shift+Up -> ScrollIntent::Up
-        // 2. apply_scroll computes new state
-        // 3. handle_key writes back to self
+    fn apply_scroll_shift_up_disengages_auto() {
         let key = make_key(KeyCode::Up, KeyModifiers::SHIFT);
         let intent = derive_scroll_intent(&key).expect("should be scroll key");
-        // 100 lines, 10 visible, auto_scroll=true, offset=0 (at bottom = 90)
         let (off, auto) = apply_scroll(intent, 100, 10, 0, true);
         assert!(!auto, "auto_scroll should be disengaged");
         assert_eq!(off, 89, "should scroll up one row from bottom");
     }
 
     #[test]
-    fn handle_key_scroll_home_jumps_to_top() {
+    fn apply_scroll_home_jumps_to_top() {
         let key = make_key(KeyCode::Home, KeyModifiers::NONE);
         let intent = derive_scroll_intent(&key).expect("should be scroll key");
         let (off, auto) = apply_scroll(intent, 100, 10, 50, false);
@@ -265,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_key_scroll_end_rearms_auto() {
+    fn apply_scroll_end_rearms_auto() {
         let key = make_key(KeyCode::End, KeyModifiers::NONE);
         let intent = derive_scroll_intent(&key).expect("should be scroll key");
         let (_off, auto) = apply_scroll(intent, 100, 10, 0, false);
@@ -273,152 +263,8 @@ mod tests {
     }
 
     #[test]
-    fn handle_key_plain_up_not_consumed_as_scroll() {
-        // Plain Up (no modifier) should NOT be treated as a scroll key
+    fn apply_scroll_plain_up_not_consumed() {
         let key = make_key(KeyCode::Up, KeyModifiers::NONE);
         assert_eq!(derive_scroll_intent(&key), None);
-    }
-
-    // -----------------------------------------------------------------------
-    // E2E: render -> scroll key -> re-render -> assert buffer content changed
-    // -----------------------------------------------------------------------
-
-    fn build_scroll_entries() -> Vec<ChatEntry> {
-        (0..30)
-            .map(|i| ChatEntry::System(format!("Line {i:02}")))
-            .collect()
-    }
-
-    fn get_backend_render(app: &mut App, terminal: &mut Terminal<TestBackend>) -> String {
-        terminal.draw(|f| app.render(f)).unwrap();
-        terminal.backend().to_string()
-    }
-
-    #[test]
-    fn e2e_home_end_scroll() {
-        let entries = build_scroll_entries();
-        let mut app = App::with_entries_for_test(entries);
-        let backend = ratatui::backend::TestBackend::new(40, 12);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        // Initial render — auto-scroll should show bottom
-        let rendered = get_backend_render(&mut app, &mut terminal);
-        assert!(
-            rendered.contains("Line 29"),
-            "auto-scroll should show bottom; got: {rendered}"
-        );
-        assert!(
-            !rendered.contains("Line 00"),
-            "top should not be visible; got: {rendered}"
-        );
-
-        // Press Home -> jump to top
-        let consumed = app.handle_key(make_key(KeyCode::Home, KeyModifiers::NONE));
-        assert!(consumed, "Home should be consumed as scroll key");
-        let rendered = get_backend_render(&mut app, &mut terminal);
-        assert!(
-            rendered.contains("Line 00"),
-            "after Home, top should be visible; got: {rendered}"
-        );
-        assert!(
-            !rendered.contains("Line 29"),
-            "after Home, bottom should not be visible; got: {rendered}"
-        );
-
-        // Press End -> jump to bottom
-        let consumed = app.handle_key(make_key(KeyCode::End, KeyModifiers::NONE));
-        assert!(consumed, "End should be consumed as scroll key");
-        let rendered = get_backend_render(&mut app, &mut terminal);
-        assert!(
-            rendered.contains("Line 29"),
-            "after End, bottom should be visible; got: {rendered}"
-        );
-        assert!(
-            !rendered.contains("Line 00"),
-            "after End, top should not be visible; got: {rendered}"
-        );
-    }
-
-    #[test]
-    fn e2e_page_scroll() {
-        let entries = build_scroll_entries();
-        let mut app = App::with_entries_for_test(entries);
-        let backend = ratatui::backend::TestBackend::new(40, 12);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        // Initial render at bottom
-        let rendered = get_backend_render(&mut app, &mut terminal);
-        assert!(
-            rendered.contains("Line 29"),
-            "start at bottom; got: {rendered}"
-        );
-
-        // PageUp -> shift up one viewport
-        app.handle_key(make_key(KeyCode::PageUp, KeyModifiers::NONE));
-        let rendered = get_backend_render(&mut app, &mut terminal);
-        assert!(
-            !rendered.contains("Line 29"),
-            "after PageUp, bottom should not be visible; got: {rendered}"
-        );
-        assert!(!app.auto_scroll, "PageUp should disengage auto_scroll");
-
-        // PageDown twice -> back to bottom
-        app.handle_key(make_key(KeyCode::PageDown, KeyModifiers::NONE));
-        app.handle_key(make_key(KeyCode::PageDown, KeyModifiers::NONE));
-        let rendered = get_backend_render(&mut app, &mut terminal);
-        assert!(
-            rendered.contains("Line 29"),
-            "after 2x PageDown, bottom should be visible; got: {rendered}"
-        );
-    }
-
-    #[test]
-    fn e2e_partial_entry_overlap() {
-        // Build entries where one entry is very long (wraps to many lines)
-        // so it may only partially overlap the visible range.
-        // Short entries first to fill up, then one long entry at the end.
-        let mut entries: Vec<ChatEntry> = (0..10)
-            .map(|i| ChatEntry::System(format!("Short {i:02}")))
-            .collect();
-        // One long user message that wraps to ~15 lines at width 40
-        let long_text = (0..15)
-            .map(|i| format!("Long line {i:02} of the big message"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        entries.push(ChatEntry::User(long_text));
-
-        let mut app = App::with_entries_for_test(entries);
-        let backend = ratatui::backend::TestBackend::new(40, 12);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        // Initial render at bottom — should show end of long message
-        let rendered = get_backend_render(&mut app, &mut terminal);
-        assert!(
-            rendered.contains("Long line 14"),
-            "auto-scroll should show end of long message; got: {rendered}"
-        );
-        assert!(
-            !rendered.contains("Short 00"),
-            "top short entries should not be visible; got: {rendered}"
-        );
-
-        // Scroll to top
-        app.handle_key(make_key(KeyCode::Home, KeyModifiers::NONE));
-        let rendered = get_backend_render(&mut app, &mut terminal);
-        assert!(
-            rendered.contains("Short 00"),
-            "after Home, first short entry should be visible; got: {rendered}"
-        );
-
-        // Scroll line by line down until we hit the long message
-        for _ in 0..20 {
-            app.handle_key(make_key(KeyCode::Down, KeyModifiers::SHIFT));
-        }
-        let rendered = get_backend_render(&mut app, &mut terminal);
-        // We should be somewhere in the long message now
-        assert!(
-            rendered.contains("Long line"),
-            "after scrolling down, long message should be visible; got: {rendered}"
-        );
     }
 }

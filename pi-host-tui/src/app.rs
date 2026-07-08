@@ -1,26 +1,24 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::text::Text;
-use ratatui::Frame;
 use thiserror::Error;
 
 use pi_core::{
     AgentAction, AgentMessage, AgentOptions, AgentRuntime, ApiName, ContextProjectionBudget,
     ExecutionMode, Model, ModelId, ModelName, ProviderName, QueueMode, SessionId, ThinkingLevel,
-    ToolCallId, ToolCallPermission, ToolCallPreparation, ToolCallTransform, ToolDefinition,
-    WaitMode,
+    ToolCallPermission, ToolCallPreparation, ToolCallTransform, ToolDefinition, WaitMode,
 };
 
 use crate::agent_host::TransitionParts;
 use crate::config::ResolvedConfig;
+use crate::directives::HostDirective;
 use crate::extension::{BashExtension, BuiltinExtension, Extension};
-use crate::host_state::{HostDirective, HostState};
-use crate::llm::{LlmClient, LlmProvider, WireFormat};
+use crate::host_state::{HostState, SessionContext};
+use crate::llm::{LlmClient, WireFormat};
 use crate::session::FileSystemSessionBackend;
 use crate::session_log::{SessionEvent, SessionEventLogger};
 
@@ -45,16 +43,7 @@ pub enum TuiError {
 pub(crate) enum ChatEntry {
     User(String),
     Assistant(Text<'static>),
-    ToolStart {
-        name: String,
-        args_summary: String,
-    },
-    ToolResult {
-        #[allow(dead_code)] // stored for future UI rendering of tool name
-        name: String,
-        output: String,
-        is_error: bool,
-    },
+
     System(String),
 }
 
@@ -96,25 +85,6 @@ impl ChatEntry {
                 }
                 count + 1 // blank
             }
-            ChatEntry::ToolStart { name, args_summary } => {
-                // Must match emit_entry: " ╭─ {name} {args}"
-                let full = format!(" ╭─ {} {}", name, args_summary);
-                wrapped_lines(&full, width) as u16
-            }
-            ChatEntry::ToolResult {
-                output,
-                is_error: _,
-                ..
-            } => {
-                let mut count: u16 = 0;
-                for line in output.lines() {
-                    // Must match emit_entry: " │ {line}"
-                    let full = format!(" │ {}", line);
-                    count += wrapped_lines(&full, width) as u16;
-                }
-                // Footer: " ╰─✓" or " ╰─✗", plus blank line
-                count + 2
-            }
             ChatEntry::System(text) => {
                 // Must match emit_entry: "◇ {text}"
                 let full = format!("◇ {}", text);
@@ -125,33 +95,27 @@ impl ChatEntry {
 }
 
 // ---------------------------------------------------------------------------
-// Actor commands + render snapshot
+// Render snapshot
 // ---------------------------------------------------------------------------
 
-/// Commands sent to the actor via the message channel.
-pub(crate) enum AppCmd {
-    Key(KeyEvent),
-    Submit(String),
-    Cancel,
-    Resize(u16, u16),
-}
-
-/// Lock-free render snapshot — published by actor, read by render task at 30fps.
+/// Lock-free render snapshot — published by actor, read by render loop at 30fps.
 pub(crate) struct RenderSnapshot {
     pub entries: Arc<[ChatEntry]>,
     pub input_text: String,
     pub input_cursor_pos: usize,
-    pub show_suggestions: bool,
-    pub suggestions: Vec<String>,
-    pub suggestion_selection: Option<usize>,
     pub running: bool,
     pub streaming_start: Option<std::time::Instant>,
-    pub scroll_offset: u16,
-    pub auto_scroll: bool,
-    pub last_chat_area: Rect,
     pub model_name: String,
-    pub thinking_level: ThinkingLevel,
     pub show_quit_prompt: bool,
+    // Suggestions
+    pub show_suggestions: bool,
+    pub suggestions: Vec<String>,
+    pub suggestion_selected: Option<usize>,
+    // Model picker
+    pub show_model_picker: bool,
+    pub model_picker_items: Vec<String>,
+    pub model_picker_selected: usize,
+    pub model_picker_filter: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -169,15 +133,13 @@ pub struct App {
     pub(crate) running: bool,
     pub(crate) streaming_text: String,
     pub(crate) streaming_start: Option<std::time::Instant>,
-    #[allow(dead_code)]
-    pub(crate) current_tools: Vec<(String, String)>,
+
     pub(crate) tool_definitions: Vec<ToolDefinition>,
     pub(crate) llm_client: crate::llm::LlmBackend,
     pub(crate) host_state: Option<HostState>,
     pub(crate) last_usage: Option<(u32, u32, u32)>,
     pub(crate) session_id: Option<String>,
     pub(crate) session_backend: FileSystemSessionBackend,
-    pub(crate) cwd: std::path::PathBuf,
 
     // Cancellation
     pub(crate) cancelled: bool,
@@ -187,10 +149,6 @@ pub struct App {
 
     // Model picker
     pub(crate) model_picker: Option<crate::model_picker::ModelPicker>,
-
-    // Extension-based tool execution
-    pub(crate) extensions: Vec<Box<dyn Extension>>,
-    pub(crate) running_tasks: Vec<RunningTask>,
 
     // Session event logger
     pub(crate) session_logger: Option<SessionEventLogger>,
@@ -202,11 +160,7 @@ pub struct App {
     pub(crate) last_chat_area: Rect,
     pub(crate) resolved_config: ResolvedConfig,
 
-    // Thinking level for input border coloring
-    pub(crate) thinking_level: ThinkingLevel,
-
-    /// Lock-free render snapshot — updated by actor, read at 30fps by render task.
-    #[allow(dead_code)]
+    /// Lock-free render snapshot — updated by actor, read at 30fps by render loop.
     pub(crate) snapshot: std::sync::Arc<ArcSwap<RenderSnapshot>>,
 
     /// Wire format derived from provider (Anthropic or OpenAI).
@@ -220,39 +174,12 @@ pub struct App {
     pub(crate) pending_chunks: Option<Vec<pi_core::LlmChunk>>,
 
     /// Stream metadata collected alongside pending_chunks.
-    #[allow(dead_code)]
     pub(crate) pending_stream_usage: Option<(u32, u32, u32)>,
-    #[allow(dead_code)]
     pub(crate) pending_stop_reason: String,
-    #[allow(dead_code)]
     pub(crate) pending_tool_calls: Vec<crate::agent_host::CollectedToolCall>,
 }
 
-pub(crate) struct RunningTask {
-    pub(crate) tool_call_id: ToolCallId,
-    pub(crate) tool_name: String,
-    pub(crate) stream: Box<dyn crate::extension::ToolEventStream>,
-}
-
 impl App {
-    /// Get the current Braille spinner frame based on elapsed time.
-    pub(crate) fn get_spinner_frame(&self) -> &'static str {
-        const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
-        let elapsed_ms = self
-            .streaming_start
-            .map(|start| start.elapsed().as_millis() as usize)
-            .unwrap_or(0);
-        FRAMES[(elapsed_ms / 120) % FRAMES.len()]
-    }
-
-    pub(crate) fn agent(&self) -> &AgentRuntime {
-        self.agent_host.runtime()
-    }
-
-    pub(crate) fn agent_mut(&mut self) -> &mut AgentRuntime {
-        self.agent_host.runtime_mut()
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         system_prompt: &str,
@@ -261,7 +188,8 @@ impl App {
         base_url: &str,
         session_id: Option<String>,
         host_state: Option<HostState>,
-        cwd: &Path,
+        session_ctx: Option<SessionContext>,
+        _cwd: &Path,
         wire_format: WireFormat,
         provider: &str,
         #[cfg(feature = "record")] record_to: Option<std::path::PathBuf>,
@@ -326,7 +254,15 @@ impl App {
             ));
         }
 
-        let agent_host = crate::agent_host::AgentHost::new(agent);
+        let mut agent_host = crate::agent_host::AgentHost::new(agent);
+        let budget = if let Some(ref ctx) = session_ctx {
+            agent_host.transcript = ctx.transcript.clone();
+            agent_host.artifacts = ctx.artifacts.clone();
+            agent_host.turn_number = ctx.turn_number;
+            ctx.budget.clone()
+        } else {
+            ContextProjectionBudget::default()
+        };
 
         Ok(Self {
             agent_host,
@@ -338,7 +274,7 @@ impl App {
             running: false,
             streaming_text: String::new(),
             streaming_start: None,
-            current_tools: Vec::new(),
+
             tool_definitions: tool_defs,
             llm_client,
             host_state: Some(host_state.unwrap_or_else(|| HostState::new(system_prompt.to_string(), "Summarize the following conversation into a concise summary that preserves the key information, decisions, and context.".to_string()))),
@@ -348,17 +284,13 @@ impl App {
                 .and_then(|id| SessionEventLogger::new(id).ok()),
             session_id,
             session_backend: FileSystemSessionBackend::new(),
-            cwd: cwd.to_path_buf(),
             cancelled: false,
             pending_quit: false,
             model_picker: None,
-            extensions,
-            running_tasks: Vec::new(),
-            budget: ContextProjectionBudget::default(),
+            budget,
             context_window,
             last_chat_area: ratatui::layout::Rect::ZERO,
             resolved_config,
-            thinking_level: ThinkingLevel::Off,
             wire_format,
             pending_llm_context: None,
             pending_chunks: None,
@@ -369,43 +301,48 @@ impl App {
                 entries: Default::default(),
                 input_text: String::new(),
                 input_cursor_pos: 0,
-                show_suggestions: false,
-                suggestions: Vec::new(),
-                suggestion_selection: None,
                 running: false,
                 streaming_start: None,
-                scroll_offset: 0,
-                auto_scroll: true,
-                last_chat_area: Rect::ZERO,
                 model_name: String::from(model_id),
-                thinking_level: ThinkingLevel::Off,
                 show_quit_prompt: false,
+                show_suggestions: false,
+                suggestions: Vec::new(),
+                suggestion_selected: None,
+                show_model_picker: false,
+                model_picker_items: Vec::new(),
+                model_picker_selected: 0,
+                model_picker_filter: String::new(),
             })),
         })
     }
 
     /// Publish current state as a render snapshot — updates ArcSwap for 30fps reads.
     pub(crate) fn publish_snapshot(&self) {
+        let picker = &self.model_picker;
         let snap = RenderSnapshot {
             entries: Arc::from(self.entries.clone()),
             input_text: self.editor.input.clone(),
             input_cursor_pos: self.editor.cursor_pos,
+            running: self.running,
+            streaming_start: self.streaming_start,
+            model_name: self.llm_client.model_id().to_string(),
+            show_quit_prompt: self.pending_quit,
             show_suggestions: self.editor.show_suggestions,
             suggestions: self.editor.suggestions.clone(),
-            suggestion_selection: self.editor.suggestion_state.selected(),
-            running: self.running || !self.running_tasks.is_empty(),
-            streaming_start: self.streaming_start,
-            scroll_offset: self.scroll_offset,
-            auto_scroll: self.auto_scroll,
-            last_chat_area: self.last_chat_area,
-            model_name: self.llm_client.model_id().to_string(),
-            thinking_level: self.thinking_level,
-            show_quit_prompt: self.pending_quit,
+            suggestion_selected: self.editor.suggestion_state.selected(),
+            show_model_picker: picker.is_some(),
+            model_picker_items: picker
+                .as_ref()
+                .map(|p| p.filtered().into_iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default(),
+            model_picker_selected: picker.as_ref().map(|p| p.selected_index).unwrap_or(0),
+            model_picker_filter: picker
+                .as_ref()
+                .map(|p| p.filter_text().to_string())
+                .unwrap_or_default(),
         };
         self.snapshot.store(Arc::new(snap));
     }
-
-
 
     #[allow(unused_variables)]
     fn build_llm_client(
@@ -440,38 +377,29 @@ impl App {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Main event loop
-    // -----------------------------------------------------------------------
+    /// Sum of wrapped line counts for all entries at the given width.
+    fn wrapped_line_count(&self, width: usize) -> u16 {
+        self.entries.iter().map(|e| e.line_count(width)).sum()
+    }
 
-    pub fn run(
-        mut self,
-        terminal: &mut ratatui::DefaultTerminal,
-        _session_backend: &FileSystemSessionBackend,
-    ) -> Result<(), TuiError> {
-        loop {
-// NOTE: The run() loop is replaced by actor_loop + render_task in the async model.
-// This method kept for backward compat (record/replay tests).
-
-            if crossterm::event::poll(Duration::from_millis(33))? {
-                let event = crossterm::event::read()?;
-                if let crossterm::event::Event::Key(key) = event {
-                    if key.kind == KeyEventKind::Press && !self.handle_key(key) {
-                        self.handle_terminal_key(terminal, key);
-                    }
-                }
-            }
-
-            // Poll running async tasks
-            self.poll_running_tasks(terminal);
-
-            if self.should_quit {
-                self.save_session();
-                break;
-            }
+    /// Persist the current session to disk.
+    pub(crate) fn save_session(&self) {
+        let id = self.session_id.as_deref();
+        let host = self.host_state.as_ref();
+        let (id, host) = match (id, host) {
+            (Some(id), Some(h)) => (id, h),
+            _ => return,
+        };
+        let session_ctx = SessionContext {
+            transcript: self.agent_host.transcript.clone(),
+            artifacts: self.agent_host.artifacts.clone(),
+            turn_number: self.agent_host.turn_number,
+            budget: self.budget.clone(),
+        };
+        let data = host.get_persist_data(&session_ctx);
+        if let Err(e) = self.session_backend.save(id, &data) {
+            tracing::warn!(session_id = id, error = ?e, "failed to save session");
         }
-
-        Ok(())
     }
 
     /// Handle keys that don't need the terminal. Returns `true` if the key was consumed.
@@ -593,174 +521,6 @@ impl App {
         }
     }
 
-    /// Handle keys that need the terminal (submit_prompt).
-    fn handle_terminal_key(&mut self, terminal: &mut ratatui::DefaultTerminal, key: KeyEvent) {
-        match key.code {
-            KeyCode::Enter => {
-                if !self.running && !self.editor.input.trim().is_empty() {
-                    let text = self.editor.input.clone();
-                    self.editor.clear_input();
-                    self.submit_prompt(terminal, &text);
-                }
-            }
-            KeyCode::Char(c) => {
-                self.editor.push_char(c);
-            }
-            _ => {}
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Agent loop
-    // -----------------------------------------------------------------------
-
-    fn submit_prompt(&mut self, terminal: &mut ratatui::DefaultTerminal, text: &str) {
-        // Command dispatch
-        if text.starts_with('/') {
-            self.handle_command(terminal, text);
-            return;
-        }
-
-        self.running = true;
-        self.streaming_start = Some(std::time::Instant::now());
-        self.auto_scroll = true;
-        self.cancelled = false;
-        self.entries.push(ChatEntry::User(text.to_string()));
-        self.editor.push_to_history(text);
-
-        let _ = terminal.draw(|f| self.render(f));
-
-        let tool_defs = self.tool_definitions.clone();
-        let compaction_prompt = self
-            .host_state
-            .as_ref()
-            .map(|h| h.compaction_prompt.clone())
-            .unwrap_or_default();
-        let budget = self.budget.clone();
-
-        let (_events, actions) =
-            self.agent_host
-                .transition(|runtime, transcript, artifacts, turn| match runtime {
-                    AgentRuntime::Idle(idle) => TransitionParts::from(
-                        idle.start_turn(
-                            AgentMessage::user(text),
-                            tool_defs,
-                            transcript,
-                            artifacts,
-                            turn,
-                            &budget,
-                            &compaction_prompt,
-                        )
-                        .into_parts(),
-                    ),
-                    AgentRuntime::ReadyToContinue(ready) => {
-                        let (_ev, _act, idle, transcript, artifacts, turn, _m) = ready
-                            .wait_for_input(transcript, artifacts, turn)
-                            .into_parts();
-                        TransitionParts::from(
-                            idle.start_turn(
-                                AgentMessage::user(text),
-                                tool_defs,
-                                transcript,
-                                artifacts,
-                                turn,
-                                &budget,
-                                &compaction_prompt,
-                            )
-                            .into_parts(),
-                        )
-                    }
-                    AgentRuntime::Finished(finished) => {
-                        let (idle, transcript, artifacts, turn) =
-                            finished.into_idle(transcript, artifacts, turn);
-                        TransitionParts::from(
-                            idle.start_turn(
-                                AgentMessage::user(text),
-                                tool_defs,
-                                transcript,
-                                artifacts,
-                                turn,
-                                &budget,
-                                &compaction_prompt,
-                            )
-                            .into_parts(),
-                        )
-                    }
-                    AgentRuntime::Aborted(aborted) => {
-                        let (idle, transcript, artifacts, turn) =
-                            aborted.into_idle(transcript, artifacts, turn);
-                        TransitionParts::from(
-                            idle.start_turn(
-                                AgentMessage::user(text),
-                                tool_defs,
-                                transcript,
-                                artifacts,
-                                turn,
-                                &budget,
-                                &compaction_prompt,
-                            )
-                            .into_parts(),
-                        )
-                    }
-                    AgentRuntime::PreToolCall(mut pre) => {
-                        let disposition = pre.submit_user_message(AgentMessage::user(text));
-                        let (events, actions) = disposition.into_events_actions();
-                        TransitionParts::from((
-                            events,
-                            actions,
-                            pre.into_runtime(),
-                            transcript,
-                            artifacts,
-                            turn,
-                            vec![],
-                        ))
-                    }
-                    AgentRuntime::ExecutingTools(mut exec) => {
-                        let disposition = exec.submit_user_message(AgentMessage::user(text));
-                        let (events, actions) = disposition.into_events_actions();
-                        TransitionParts::from((
-                            events,
-                            actions,
-                            exec.into_runtime(),
-                            transcript,
-                            artifacts,
-                            turn,
-                            vec![],
-                        ))
-                    }
-                    AgentRuntime::Compacting(compacting) => TransitionParts::from((
-                        vec![],
-                        vec![AgentAction::WaitForInput {
-                            mode: WaitMode::Any,
-                        }],
-                        compacting.into_runtime(),
-                        transcript,
-                        artifacts,
-                        turn,
-                        vec![],
-                    )),
-                    other => TransitionParts::from((
-                        vec![],
-                        vec![AgentAction::WaitForInput {
-                            mode: WaitMode::Any,
-                        }],
-                        other,
-                        transcript,
-                        artifacts,
-                        turn,
-                        vec![],
-                    )),
-                });
-
-        if let Some(ref logger) = self.session_logger {
-            let _ = logger.append(&SessionEvent::TurnStart {
-                turn: self.agent_host.turn_number,
-            });
-        }
-        self.handle_actions(terminal, actions);
-        self.save_session();
-    }
-
     fn actions_to_directives(&mut self, actions: Vec<AgentAction>) -> Vec<HostDirective> {
         let mut directives = Vec::new();
         for action in actions {
@@ -837,179 +597,6 @@ impl App {
             }
         }
         directives
-    }
-
-    fn handle_summarize(
-        &mut self,
-        terminal: &mut ratatui::DefaultTerminal,
-        context: pi_core::LlmContext,
-    ) {
-        self.running = true;
-        self.streaming_start = Some(std::time::Instant::now());
-        let mut summary_text = String::new();
-
-        match self
-            .llm_client
-            .stream_sync(&context.system_prompt, &context.messages, &context.tools)
-        {
-            Ok(mut stream) => {
-                for chunk in stream.by_ref() {
-                    match chunk {
-                        pi_core::LlmChunk::TextDelta { text } => {
-                            summary_text.push_str(&text);
-                        }
-                        pi_core::LlmChunk::Done => break,
-                        _ => {}
-                    }
-                }
-                let budget = self.budget.clone();
-                let (_events, actions) =
-                    self.agent_host
-                        .transition(|runtime, transcript, artifacts, turn| {
-                            let AgentRuntime::Compacting(compacting) = runtime else {
-                                return TransitionParts::from((
-                                    vec![],
-                                    vec![],
-                                    runtime,
-                                    transcript,
-                                    artifacts,
-                                    turn,
-                                    vec![],
-                                ));
-                            };
-                            let (events, actions, state, transcript, artifacts, turn, markers) =
-                                compacting
-                                    .accept_summary(
-                                        summary_text.clone(),
-                                        transcript,
-                                        artifacts,
-                                        turn,
-                                        &budget,
-                                    )
-                                    .into_parts();
-                            TransitionParts::from((
-                                events,
-                                actions,
-                                state.into_runtime(),
-                                transcript,
-                                artifacts,
-                                turn,
-                                markers,
-                            ))
-                        });
-                self.handle_actions(terminal, actions);
-            }
-            Err(e) => {
-                self.entries
-                    .push(ChatEntry::System(format!("Summary LLM Error: {e}")));
-                let (_events, _actions) =
-                    self.agent_host
-                        .transition(|runtime, transcript, artifacts, turn| {
-                            crate::agent_host::AgentHost::abort_compacting_or_pass_through(
-                                runtime, transcript, artifacts, turn,
-                            )
-                        });
-                self.running = false;
-                self.streaming_start = None;
-            }
-        }
-    }
-
-    pub(crate) fn handle_actions(
-        &mut self,
-        terminal: &mut ratatui::DefaultTerminal,
-        actions: Vec<AgentAction>,
-    ) {
-        let directives = self.actions_to_directives(actions);
-        let directive_names: Vec<String> = directives
-            .iter()
-            .map(|d| match d {
-                HostDirective::StreamLlm { .. } => "StreamLlm".to_string(),
-                HostDirective::Summarize { .. } => "Summarize".to_string(),
-                HostDirective::ExecuteTools { calls } => format!("ExecuteTools({})", calls.len()),
-                HostDirective::CancelTools { .. } => "CancelTools".to_string(),
-                HostDirective::Persist => "Persist".to_string(),
-                HostDirective::Finished => "Finished".to_string(),
-                HostDirective::WaitForInput { .. } => "WaitForInput".to_string(),
-            })
-            .collect();
-        tracing::debug!(?directive_names, "handle_actions");
-
-        // Track whether TurnEnd has been emitted for this batch
-        let mut turn_ended = false;
-
-        for directive in directives {
-            if self.cancelled {
-                let (_events, _actions) = self.agent_host.transition(
-                    |runtime, transcript, artifacts, turn| match runtime {
-                        AgentRuntime::Streaming(streaming) => {
-                            let (ev, act, state, transcript, artifacts, tn, m) =
-                                streaming.abort(transcript, artifacts, turn).into_parts();
-                            TransitionParts::from((
-                                ev,
-                                act,
-                                state.into_runtime(),
-                                transcript,
-                                artifacts,
-                                tn,
-                                m,
-                            ))
-                        }
-                        other => crate::agent_host::AgentHost::abort_compacting_or_pass_through(
-                            other, transcript, artifacts, turn,
-                        ),
-                    },
-                );
-                self.running = false;
-                self.streaming_start = None;
-                self.entries.push(ChatEntry::System("Cancelled.".into()));
-                let _ = terminal.draw(|f| self.render(f));
-                return;
-            }
-            match directive {
-                HostDirective::StreamLlm { context } => {
-                    self.stream_llm(terminal, context);
-                }
-                HostDirective::Summarize { context } => {
-                    self.handle_summarize(terminal, context);
-                }
-                HostDirective::ExecuteTools { calls } => {
-                    self.execute_tools(terminal, calls);
-                }
-                HostDirective::Finished => {
-                    self.entries.push(ChatEntry::System("Done.".into()));
-                    self.running = false;
-                    self.streaming_start = None;
-                    if !turn_ended {
-                        if let Some(ref logger) = self.session_logger {
-                            let _ = logger.append(&SessionEvent::TurnEnd {
-                                turn: self.agent_host.turn_number,
-                            });
-                            turn_ended = true;
-                        }
-                    }
-                    let _ = terminal.draw(|f| self.render(f));
-                }
-                HostDirective::WaitForInput { .. } => {
-                    self.running = false;
-                    self.streaming_start = None;
-                    if !turn_ended {
-                        if let Some(ref logger) = self.session_logger {
-                            let _ = logger.append(&SessionEvent::TurnEnd {
-                                turn: self.agent_host.turn_number,
-                            });
-                            turn_ended = true;
-                        }
-                    }
-                    self.save_session();
-                    let _ = terminal.draw(|f| self.render(f));
-                }
-                HostDirective::Persist => {
-                    self.save_session();
-                }
-                _ => {}
-            }
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -1189,72 +776,23 @@ impl App {
             }
         }
     }
-
-    pub(crate) fn render(&mut self, frame: &mut Frame) {
-        let [chat_area, input_area, status_area] = Layout::vertical([
-            Constraint::Fill(1),
-            Constraint::Length(3),
-            Constraint::Length(1),
-        ])
-        .areas(frame.area());
-
-        self.last_chat_area = chat_area;
-        self.render_chat(frame, chat_area);
-        self.render_input(frame, input_area);
-        self.render_status(frame, status_area);
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Async actor loop + render task (replaces blocking run() in tokio model)
 // ---------------------------------------------------------------------------
 
-/// Spawn the async LLM streaming task. Returns immediately; chunks are sent back via channel.
-pub(crate) fn spawn_stream_llm(
-    api_key: String,
-    base_url: String,
-    model_id: String,
-    wire_format: crate::llm::WireFormat,
-    context: pi_core::LlmContext,
-    chunk_tx: tokio::sync::mpsc::Sender<pi_core::LlmChunk>,
-) -> tokio::task::JoinHandle<()> {
-    let async_client = crate::llm::AsyncLlmClient::new(
-        &api_key,
-        &base_url,
-        &model_id,
-        wire_format,
-    );
-
-    tokio::spawn(async move {
-        // Collect the response — narrow scope to avoid Box<dyn Error> living across awaits
-        let mut stream = { 
-            match async_client.stream_async(
-                &context.system_prompt,
-                &context.messages,
-                &context.tools,
-            ).await {
-                Ok(s) => s,
-                Err(_e) => return, // Box<dyn StdError> is !Send
-            }
-        };
-
-        // Stream chunks through channel. next_chunk is non-blocking (buffer was collected at init).
-        while let Some(chunk) = stream.next_chunk() {
-            if chunk_tx.send(chunk).await.is_err() {
-                break;  // receiver dropped — cancelled
-            }
-        }
-    })
-}
-
 /// Process pre-collected chunks through the streaming agent (replay/record path).
-fn process_stream_llm_from_chunks(app: &mut App, mut chunks: Vec<pi_core::LlmChunk>) -> Option<Vec<HostDirective>> {
+fn process_stream_llm_from_chunks(
+    app: &mut App,
+    mut chunks: Vec<pi_core::LlmChunk>,
+) -> Option<Vec<HostDirective>> {
+    use crate::agent_host::CollectedToolCall;
+    use crate::markdown;
     use pi_core::{
         message::TokenUsage, timestamp, AssistantMessage, Content, LlmResult, StopReason,
         TextContent, ToolArguments, ToolCallId, ToolName,
     };
-    use crate::agent_host::CollectedToolCall;
-    use crate::markdown;
 
     // Take ownership of the StreamingAgent from agent_host
     let runtime = app.agent_host.take_runtime();
@@ -1283,12 +821,13 @@ fn process_stream_llm_from_chunks(app: &mut App, mut chunks: Vec<pi_core::LlmChu
     for chunk in chunks.drain(..) {
         if app.cancelled {
             app.entries.push(ChatEntry::System("Cancelled.".into()));
-            let (events, actions, aborted, transcript, artifacts, turn, _markers) =
-                streaming.abort(
+            let (events, actions, aborted, transcript, artifacts, turn, _markers) = streaming
+                .abort(
                     std::mem::take(&mut app.agent_host.transcript),
                     std::mem::take(&mut app.agent_host.artifacts),
                     app.agent_host.turn_number,
-                ).into_parts();
+                )
+                .into_parts();
             app.agent_host.set_runtime(aborted.into_runtime());
             app.agent_host.transcript = transcript;
             app.agent_host.artifacts = artifacts;
@@ -1316,7 +855,8 @@ fn process_stream_llm_from_chunks(app: &mut App, mut chunks: Vec<pi_core::LlmChu
             }
             pi_core::LlmChunk::Done => continue,
             pi_core::LlmChunk::Error { message } => {
-                app.entries.push(ChatEntry::System(format!("LLM Error: {message}")));
+                app.entries
+                    .push(ChatEntry::System(format!("LLM Error: {message}")));
                 break;
             }
             _ => {}
@@ -1326,7 +866,9 @@ fn process_stream_llm_from_chunks(app: &mut App, mut chunks: Vec<pi_core::LlmChu
     // Use pre-collected metadata from App fields (set by submit_text)
     let usage = std::mem::take(&mut app.pending_stream_usage);
     let mut stop_reason = std::mem::take(&mut app.pending_stop_reason);
-    if stop_reason.is_empty() { stop_reason.push_str("end_turn"); }
+    if stop_reason.is_empty() {
+        stop_reason.push_str("end_turn");
+    }
     let tool_calls: Vec<CollectedToolCall> = std::mem::take(&mut app.pending_tool_calls);
 
     tracing::debug!(
@@ -1337,16 +879,21 @@ fn process_stream_llm_from_chunks(app: &mut App, mut chunks: Vec<pi_core::LlmChu
     );
 
     // Build tool call content blocks
-    let tool_use_blocks: Vec<Content> = tool_calls.iter().map(|tc| {
-        Content::ToolCall(pi_core::ToolCall {
-            id: ToolCallId::new(&tc.id),
-            name: ToolName::new(&tc.name),
-            arguments: ToolArguments::new(tc.input.clone()),
+    let tool_use_blocks: Vec<Content> = tool_calls
+        .iter()
+        .map(|tc| {
+            Content::ToolCall(pi_core::ToolCall {
+                id: ToolCallId::new(&tc.id),
+                name: ToolName::new(&tc.name),
+                arguments: ToolArguments::new(tc.input.clone()),
+            })
         })
-    }).collect();
+        .collect();
 
     let text_block = if full_text.is_empty() && tool_use_blocks.is_empty() {
-        vec![Content::Text(TextContent { text: String::new() })]
+        vec![Content::Text(TextContent {
+            text: String::new(),
+        })]
     } else if full_text.is_empty() {
         vec![]
     } else {
@@ -1355,10 +902,12 @@ fn process_stream_llm_from_chunks(app: &mut App, mut chunks: Vec<pi_core::LlmChu
 
     let content: Vec<Content> = text_block.into_iter().chain(tool_use_blocks).collect();
 
-    let sr = if stop_reason == "tool_use"
-        || content.iter().any(|c| matches!(c, Content::ToolCall(_))) {
+    let sr =
+        if stop_reason == "tool_use" || content.iter().any(|c| matches!(c, Content::ToolCall(_))) {
             StopReason::ToolUse
-        } else { StopReason::EndTurn };
+        } else {
+            StopReason::EndTurn
+        };
 
     let assistant_msg = AssistantMessage {
         content,
@@ -1377,14 +926,15 @@ fn process_stream_llm_from_chunks(app: &mut App, mut chunks: Vec<pi_core::LlmChu
         },
     };
 
-    let (events, actions, new_runtime, transcript, artifacts, turn, _markers) =
-        streaming.finish_llm(
+    let (events, actions, new_runtime, transcript, artifacts, turn, _markers) = streaming
+        .finish_llm(
             LlmResult::Ok(assistant_msg),
             std::mem::take(&mut app.agent_host.transcript),
             std::mem::take(&mut app.agent_host.artifacts),
             app.agent_host.turn_number,
             &budget,
-        ).into_parts();
+        )
+        .into_parts();
 
     let _ = events;
     app.agent_host.set_runtime(new_runtime);
@@ -1414,12 +964,12 @@ fn process_stream_llm_from_chunks(app: &mut App, mut chunks: Vec<pi_core::LlmChu
 /// chunks through it, then calls `finish_llm` and recurses into follow-up
 /// directives (more streaming, tool execution, etc.).
 pub(crate) async fn process_stream_llm_async(app: &mut App) -> Option<Vec<HostDirective>> {
+    use crate::agent_host::CollectedToolCall;
+    use crate::markdown;
     use pi_core::{
         message::TokenUsage, timestamp, AssistantMessage, Content, LlmResult, StopReason,
         TextContent, ToolArguments, ToolCallId, ToolName,
     };
-    use crate::agent_host::CollectedToolCall;
-    use crate::markdown;
 
     let context = app.pending_llm_context.take()?;
 
@@ -1469,18 +1019,18 @@ pub(crate) async fn process_stream_llm_async(app: &mut App) -> Option<Vec<HostDi
                 aborted: false,
             };
             let budget = app.budget.clone();
-            let (_events, actions) = app.agent_host.transition(
-                |runtime, transcript, artifacts, turn| match runtime {
-                    AgentRuntime::Streaming(streaming) => TransitionParts::from(
-                        streaming
-                            .finish_llm(err_result, transcript, artifacts, turn, &budget)
-                            .into_parts(),
-                    ),
-                    other => crate::agent_host::AgentHost::abort_compacting_or_pass_through(
-                        other, transcript, artifacts, turn,
-                    ),
-                },
-            );
+            let (_events, actions) =
+                app.agent_host
+                    .transition(|runtime, transcript, artifacts, turn| match runtime {
+                        AgentRuntime::Streaming(streaming) => TransitionParts::from(
+                            streaming
+                                .finish_llm(err_result, transcript, artifacts, turn, &budget)
+                                .into_parts(),
+                        ),
+                        other => crate::agent_host::AgentHost::abort_compacting_or_pass_through(
+                            other, transcript, artifacts, turn,
+                        ),
+                    });
             app.cancelled = false;
             app.streaming_start = None;
             app.streaming_text.clear();
@@ -1519,14 +1069,13 @@ pub(crate) async fn process_stream_llm_async(app: &mut App) -> Option<Vec<HostDi
         // Cooperative cancellation check
         if app.cancelled {
             app.entries.push(ChatEntry::System("Cancelled.".into()));
-            let (events, actions, aborted, transcript, artifacts, turn, _markers) =
-                streaming
-                    .abort(
-                        std::mem::take(&mut app.agent_host.transcript),
-                        std::mem::take(&mut app.agent_host.artifacts),
-                        app.agent_host.turn_number,
-                    )
-                    .into_parts();
+            let (events, actions, aborted, transcript, artifacts, turn, _markers) = streaming
+                .abort(
+                    std::mem::take(&mut app.agent_host.transcript),
+                    std::mem::take(&mut app.agent_host.artifacts),
+                    app.agent_host.turn_number,
+                )
+                .into_parts();
             app.agent_host.set_runtime(aborted.into_runtime());
             app.agent_host.transcript = transcript;
             app.agent_host.artifacts = artifacts;
@@ -1602,20 +1151,17 @@ pub(crate) async fn process_stream_llm_async(app: &mut App) -> Option<Vec<HostDi
     } else if full_text.is_empty() {
         vec![]
     } else {
-        vec![Content::Text(TextContent {
-            text: full_text,
-        })]
+        vec![Content::Text(TextContent { text: full_text })]
     };
 
     let content: Vec<Content> = text_block.into_iter().chain(tool_use_blocks).collect();
 
-    let sr = if stop_reason == "tool_use"
-        || content.iter().any(|c| matches!(c, Content::ToolCall(_)))
-    {
-        StopReason::ToolUse
-    } else {
-        StopReason::EndTurn
-    };
+    let sr =
+        if stop_reason == "tool_use" || content.iter().any(|c| matches!(c, Content::ToolCall(_))) {
+            StopReason::ToolUse
+        } else {
+            StopReason::EndTurn
+        };
 
     let assistant_msg = AssistantMessage {
         content,
@@ -1634,16 +1180,15 @@ pub(crate) async fn process_stream_llm_async(app: &mut App) -> Option<Vec<HostDi
         },
     };
 
-    let (events, actions, new_runtime, transcript, artifacts, turn, _markers) =
-        streaming
-            .finish_llm(
-                LlmResult::Ok(assistant_msg),
-                std::mem::take(&mut app.agent_host.transcript),
-                std::mem::take(&mut app.agent_host.artifacts),
-                app.agent_host.turn_number,
-                &budget,
-            )
-            .into_parts();
+    let (events, actions, new_runtime, transcript, artifacts, turn, _markers) = streaming
+        .finish_llm(
+            LlmResult::Ok(assistant_msg),
+            std::mem::take(&mut app.agent_host.transcript),
+            std::mem::take(&mut app.agent_host.artifacts),
+            app.agent_host.turn_number,
+            &budget,
+        )
+        .into_parts();
 
     let _ = events;
     app.agent_host.set_runtime(new_runtime);
@@ -1670,19 +1215,15 @@ pub(crate) async fn process_stream_llm_async(app: &mut App) -> Option<Vec<HostDi
     Some(directives)
 }
 
-
 /// Async actor loop — owns App, polls crossterm events on a separate thread.
 pub(crate) async fn run_actor_loop(mut app: App) {
-    use tokio::time::{sleep as tokio_sleep};
+    use tokio::time::sleep as tokio_sleep;
 
-    let (tx, mut rx) = std::sync::mpsc::channel::<crossterm::event::Event>();
-    std::thread::spawn(move || {
-        loop {
-            if crossterm::event::poll(std::time::Duration::from_millis(16)).unwrap_or(false) {
-                match crossterm::event::read().ok() {
-                    Some(e) => { let _ = tx.send(e); }
-                    None => {}
-                }
+    let (tx, rx) = std::sync::mpsc::channel::<crossterm::event::Event>();
+    std::thread::spawn(move || loop {
+        if crossterm::event::poll(std::time::Duration::from_millis(16)).unwrap_or(false) {
+            if let Ok(e) = crossterm::event::read() {
+                let _ = tx.send(e);
             }
         }
     });
@@ -1718,10 +1259,23 @@ pub(crate) async fn run_actor_loop(mut app: App) {
         // so rendering stays at 30fps even while streaming blocks key input briefly.
         if let Some(directives) = process_stream_llm_async(&mut app).await {
             for directive in directives {
-                match &directive {
-                    HostDirective::Finished => {}
-                    HostDirective::WaitForInput { .. } => {}
-                    _ => {} // other directives handled implicitly
+                match directive {
+                    HostDirective::Finished => {
+                        app.entries.push(ChatEntry::System("Done.".into()));
+                        app.running = false;
+                        app.streaming_start = None;
+                        app.publish_snapshot();
+                    }
+                    HostDirective::WaitForInput { .. } => {
+                        app.running = false;
+                        app.streaming_start = None;
+                        app.save_session();
+                        app.publish_snapshot();
+                    }
+                    HostDirective::Persist => {
+                        app.save_session();
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1730,64 +1284,9 @@ pub(crate) async fn run_actor_loop(mut app: App) {
     }
 }
 
-/// Render task — reads ArcSwap snapshot at fixed frame rate and draws.
-pub(crate) fn render_task(
-    terminal: ratatui::DefaultTerminal,
-    snapshot: Arc<ArcSwap<RenderSnapshot>>,
-) -> tokio::task::JoinHandle<()> {
-    let term = std::sync::Mutex::new(terminal);
-
-    tokio::spawn(async move {
-        use tokio::time::{interval, Duration};
-
-        // ~30fps render rate
-        let frame_duration = Duration::from_millis(33);
-        let mut ticker = interval(frame_duration);
-
-        loop {
-            ticker.tick().await;
-
-            let snap = snapshot.load_full();  // lock-free read of Arc<RenderSnapshot>
-
-            if let Ok(mut t) = term.lock() {
-                if let Err(e) = t.draw(|f| render_from_snapshot(f, &snap)) {
-                    tracing::error!(?e, "render failed");
-                }
-            }
-        }
-    })
-}
-
-/// Pure render function — takes snapshot (no mutation), produces widgets.
-fn render_from_snapshot(frame: &mut Frame, snap: &RenderSnapshot) {
-    let [chat_area, input_area, status_area] = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(3),
-        Constraint::Length(1),
-    ])
-    .areas(frame.area());
-
-    render_chat_from_snapshot(frame, chat_area, snap);
-    render_input_from_snapshot(frame, input_area, snap);
-    render_status_from_snapshot(frame, status_area, snap);
-}
-
-fn render_chat_from_snapshot(_frame: &mut Frame, _chat_area: Rect, _snap: &RenderSnapshot) {
-    // Stub — will be fully implemented when UI modules are refactored.
-    // For now delegate to existing App::render for backward compat.
-}
-
-fn render_input_from_snapshot(_frame: &mut Frame, _input_area: Rect, _snap: &RenderSnapshot) {
-    // Stub
-}
-
-fn render_status_from_snapshot(_frame: &mut Frame, _status_area: Rect, _snap: &RenderSnapshot) {
-    // Stub — show model name and status bar
-}
-
 #[cfg(all(test, not(feature = "replay")))]
 impl App {
-    /// Build a minimal App for render/scroll E2E tests — no agent, no tools, dummy LLM.
+    /// Build a minimal App for unit tests — no agent, no tools, dummy LLM.
     pub(crate) fn with_entries_for_test(entries: Vec<ChatEntry>) -> Self {
         Self {
             agent_host: crate::agent_host::AgentHost::new(pi_core::AgentRuntime::Uninitialized),
@@ -1799,19 +1298,15 @@ impl App {
             running: false,
             streaming_text: String::new(),
             streaming_start: None,
-            current_tools: Vec::new(),
             tool_definitions: Vec::new(),
             llm_client: LlmClient::new("x", "x", "test", WireFormat::OpenAI),
             host_state: None,
             last_usage: None,
             session_id: None,
             session_backend: FileSystemSessionBackend::new(),
-            cwd: std::path::PathBuf::from("."),
             cancelled: false,
             pending_quit: false,
             model_picker: None,
-            extensions: Vec::new(),
-            running_tasks: Vec::new(),
             session_logger: None,
             budget: ContextProjectionBudget::default(),
             context_window: 0,
@@ -1823,7 +1318,6 @@ impl App {
                 base_url: "x".into(),
                 config_path: None,
             },
-            thinking_level: ThinkingLevel::Off,
             pending_llm_context: None,
             wire_format: WireFormat::OpenAI,
             pending_chunks: None,
@@ -1834,17 +1328,17 @@ impl App {
                 entries: Default::default(),
                 input_text: String::new(),
                 input_cursor_pos: 0,
-                show_suggestions: false,
-                suggestions: Vec::new(),
-                suggestion_selection: None,
                 running: false,
                 streaming_start: None,
-                scroll_offset: 0,
-                auto_scroll: true,
-                last_chat_area: Rect::ZERO,
                 model_name: "test".into(),
-                thinking_level: ThinkingLevel::Off,
                 show_quit_prompt: false,
+                show_suggestions: false,
+                suggestions: Vec::new(),
+                suggestion_selected: None,
+                show_model_picker: false,
+                model_picker_items: Vec::new(),
+                model_picker_selected: 0,
+                model_picker_filter: String::new(),
             })),
         }
     }

@@ -12,8 +12,8 @@ use std::ffi::CString;
 use std::os::unix::io::{IntoRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -53,7 +53,10 @@ fn record_server_binary() -> PathBuf {
 
 fn fixture_path(name: &str) -> PathBuf {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or(".".to_string());
-    PathBuf::from(&manifest_dir).join("tests").join("fixtures").join(name)
+    PathBuf::from(&manifest_dir)
+        .join("tests")
+        .join("fixtures")
+        .join(name)
 }
 
 // ---------------------------------------------------------------------------
@@ -73,12 +76,18 @@ fn open_pty() -> Result<(RawFd, RawFd)> {
 
 fn send_raw(fd: RawFd, data: &[u8]) {
     let res = unsafe {
-        libc::write(fd, data.as_ptr() as *const libc::c_void, data.len() as libc::size_t)
+        libc::write(
+            fd,
+            data.as_ptr() as *const libc::c_void,
+            data.len() as libc::size_t,
+        )
     };
     assert!(res >= 0, "write to pty failed");
 }
 
-fn send_enter(fd: RawFd) { send_raw(fd, b"\r"); }
+fn send_enter(fd: RawFd) {
+    send_raw(fd, b"\r");
+}
 
 fn send_char(fd: RawFd, c: char) {
     let mut buf = [0u8; 4];
@@ -99,16 +108,32 @@ fn read_pty_timeout(fd: RawFd, timeout_ms: i32) -> Vec<u8> {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() { break; }
+        if remaining.is_zero() {
+            break;
+        }
         let poll_timeout_ms = remaining.as_millis().max(1) as libc::c_int;
-        let mut pfd = libc::pollfd { fd: fd as libc::c_int, events: libc::POLLIN, revents: 0 };
-        if unsafe { libc::poll(&mut pfd, 1, poll_timeout_ms) } <= 0 { break; }
-        if pfd.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) == 0 { break; }
+        let mut pfd = libc::pollfd {
+            fd: fd as libc::c_int,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if unsafe { libc::poll(&mut pfd, 1, poll_timeout_ms) } <= 0 {
+            break;
+        }
+        if pfd.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) == 0 {
+            break;
+        }
         let mut chunk = [0u8; 8192];
         let res = unsafe {
-            libc::read(fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len() as libc::size_t)
+            libc::read(
+                fd,
+                chunk.as_mut_ptr() as *mut libc::c_void,
+                chunk.len() as libc::size_t,
+            )
         };
-        if res <= 0 { break; }
+        if res <= 0 {
+            break;
+        }
         buf.extend_from_slice(&chunk[..res as usize]);
     }
     buf
@@ -118,12 +143,15 @@ fn strip_ansi(input: &[u8]) -> String {
     let s = String::from_utf8_lossy(input);
     let re = regex::Regex::new(
         r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b\([A-HP-Z]|\x1b\[7m|\x1b\[27m|\x1b\[\??\d+[hl]",
-    ).unwrap();
+    )
+    .unwrap();
     re.replace_all(&s, "").to_string()
 }
 
 fn is_alive(pid: c_int) -> bool {
-    if unsafe { libc::kill(pid, 0) } != 0 { return false; }
+    if unsafe { libc::kill(pid, 0) } != 0 {
+        return false;
+    }
     let mut status: c_int = 0;
     (unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) }) <= 0
 }
@@ -135,7 +163,9 @@ fn kill_child(pid: u32) {
     let mut status: c_int = 0;
     for _ in 0..10 {
         let ret = unsafe { libc::waitpid(pid as c_int, &mut status, libc::WNOHANG) };
-        if ret != 0 { break; }
+        if ret != 0 {
+            break;
+        }
         thread::sleep(Duration::from_millis(100));
     }
 }
@@ -144,17 +174,25 @@ fn kill_child(pid: u32) {
 // Replay server manager
 // ---------------------------------------------------------------------------
 
-struct ReplayServer { child: Child }
+struct ReplayServer {
+    child: Child,
+}
 
 impl ReplayServer {
     fn start(port: u16, cassette: &Path) -> Result<Self> {
         let binary = record_server_binary();
-        assert!(binary.exists(), "pi-record-server not found at {}", binary.display());
+        assert!(
+            binary.exists(),
+            "pi-record-server not found at {}",
+            binary.display()
+        );
 
         let child = Command::new(&binary)
             .arg("replay")
-            .arg("--port").arg(port.to_string())
-            .arg("--cassette").arg(cassette.to_string_lossy().to_string())
+            .arg("--port")
+            .arg(port.to_string())
+            .arg("--cassette")
+            .arg(cassette.to_string_lossy().to_string())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -169,7 +207,9 @@ impl ReplayServer {
                 kill_child(child.id());
                 anyhow::bail!("replay server did not start within 5s");
             }
-            if client.get(&url).send().is_ok() { break; }
+            if client.get(&url).send().is_ok() {
+                break;
+            }
             thread::sleep(Duration::from_millis(100));
         }
         Ok(Self { child })
@@ -177,14 +217,19 @@ impl ReplayServer {
 }
 
 impl Drop for ReplayServer {
-    fn drop(&mut self) { kill_child(self.child.id()); }
+    fn drop(&mut self) {
+        kill_child(self.child.id());
+    }
 }
 
 // ---------------------------------------------------------------------------
 // PTY TUI runner
 // ---------------------------------------------------------------------------
 
-struct TuiRunner { master_fd: RawFd, child_pid: c_int }
+struct TuiRunner {
+    master_fd: RawFd,
+    child_pid: c_int,
+}
 
 impl TuiRunner {
     fn start(port: u16) -> Result<Self> {
@@ -202,13 +247,19 @@ impl TuiRunner {
         match pid {
             -1 => anyhow::bail!("fork failed"),
             0 => {
-                unsafe { libc::close(master_fd); }
-                unsafe { libc::signal(libc::SIGINT, libc::SIG_IGN); }
+                unsafe {
+                    libc::close(master_fd);
+                }
+                unsafe {
+                    libc::signal(libc::SIGINT, libc::SIG_IGN);
+                }
                 unsafe {
                     libc::dup2(slave_fd, libc::STDIN_FILENO);
                     libc::dup2(slave_fd, libc::STDOUT_FILENO);
                     libc::dup2(slave_fd, libc::STDERR_FILENO);
-                    if slave_fd > 2 { libc::close(slave_fd); }
+                    if slave_fd > 2 {
+                        libc::close(slave_fd);
+                    }
                 }
 
                 let mut env_ptrs: Vec<*const libc::c_char> = env_strings
@@ -231,7 +282,8 @@ impl TuiRunner {
 
                 let prog = CString::new(binary.to_string_lossy().to_string()).unwrap();
                 let skip = CString::new("--skip-onboarding").unwrap();
-                let argv: [*const libc::c_char; 3] = [prog.as_ptr(), skip.as_ptr(), std::ptr::null()];
+                let argv: [*const libc::c_char; 3] =
+                    [prog.as_ptr(), skip.as_ptr(), std::ptr::null()];
 
                 unsafe {
                     libc::execve(argv[0], argv.as_ptr(), env_ptrs.as_ptr());
@@ -241,8 +293,13 @@ impl TuiRunner {
                 }
             }
             child_pid => {
-                unsafe { libc::close(slave_fd); }
-                Ok(Self { master_fd, child_pid })
+                unsafe {
+                    libc::close(slave_fd);
+                }
+                Ok(Self {
+                    master_fd,
+                    child_pid,
+                })
             }
         }
     }
@@ -264,10 +321,14 @@ impl TuiRunner {
 
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() { break; }
+            if remaining.is_zero() {
+                break;
+            }
             let chunk = read_pty_timeout(self.master_fd, 500);
             if chunk.is_empty() {
-                if last_read.elapsed() > Duration::from_secs(2) { break; }
+                if last_read.elapsed() > Duration::from_secs(2) {
+                    break;
+                }
                 thread::sleep(Duration::from_millis(200));
                 continue;
             }
@@ -289,7 +350,9 @@ impl TuiRunner {
         type_string(self.master_fd, "/quit");
         send_enter(self.master_fd);
         for _ in 0..10 {
-            if !is_alive(self.child_pid) { break; }
+            if !is_alive(self.child_pid) {
+                break;
+            }
             thread::sleep(Duration::from_millis(200));
         }
     }
@@ -297,8 +360,12 @@ impl TuiRunner {
 
 impl Drop for TuiRunner {
     fn drop(&mut self) {
-        if is_alive(self.child_pid) { kill_child(self.child_pid as u32); }
-        unsafe { libc::close(self.master_fd); }
+        if is_alive(self.child_pid) {
+            kill_child(self.child_pid as u32);
+        }
+        unsafe {
+            libc::close(self.master_fd);
+        }
     }
 }
 
@@ -318,7 +385,11 @@ fn next_port() -> u16 {
 #[cfg_attr(target_os = "windows", ignore)]
 fn replay_cassette_multi_turn_offline() -> Result<()> {
     let cassette = fixture_path("deepseek_http.cassette.json");
-    assert!(cassette.exists(), "fixture not found: {}", cassette.display());
+    assert!(
+        cassette.exists(),
+        "fixture not found: {}",
+        cassette.display()
+    );
 
     let port = next_port();
     let _server = ReplayServer::start(port, &cassette)?;
@@ -329,12 +400,20 @@ fn replay_cassette_multi_turn_offline() -> Result<()> {
     // Turn 1: "Say hello in one word" → cassette entry 0 returns "hello"
     let out1 = tui.submit_prompt("Say hello in one word", 10);
     eprintln!("=== TURN 1 ===\n{}", out1);
-    assert!(out1.contains("hello"), "Turn 1 should contain 'hello'; got:\n{}", out1);
+    assert!(
+        out1.contains("hello"),
+        "Turn 1 should contain 'hello'; got:\n{}",
+        out1
+    );
 
     // Turn 2: "What is 7*8? One word." → cassette entry 1 returns "Fifty-six"
     let out2 = tui.submit_prompt("What is 7*8? One word.", 10);
     eprintln!("=== TURN 2 ===\n{}", out2);
-    assert!(out2.contains("ifty-six"), "Turn 2 should contain 'ifty-six'; got:\n{}", out2);
+    assert!(
+        out2.contains("ifty-six"),
+        "Turn 2 should contain 'ifty-six'; got:\n{}",
+        out2
+    );
 
     // Turn 3: cassette exhausted → pio shows "Done" silently (known behavior)
     let out3 = tui.submit_prompt("anything", 5);
@@ -372,7 +451,9 @@ fn replay_cassette_exhausts() -> Result<()> {
     let resp = reqwest::blocking::Client::new()
         .post(format!("http://localhost:{port}/v1/chat/completions"))
         .header("content-type", "application/json")
-        .body(r#"{"model":"deepseek-chat","messages":[{"role":"user","content":"x"}],"stream":true}"#)
+        .body(
+            r#"{"model":"deepseek-chat","messages":[{"role":"user","content":"x"}],"stream":true}"#,
+        )
         .send()?;
     assert_eq!(resp.status().as_u16(), 503, "4th request should exhaust");
     assert!(resp.text()?.contains("exhausted"));

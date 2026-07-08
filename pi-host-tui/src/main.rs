@@ -10,6 +10,7 @@ mod agent_host;
 mod app;
 mod commands;
 mod config;
+mod directives;
 #[cfg(all(test, unix))]
 mod e2e_tests;
 mod editor;
@@ -42,15 +43,18 @@ mod theme;
 mod tools;
 #[cfg(test)]
 mod tools_test;
-mod tui;
-
 // ---------------------------------------------------------------------------
 // Pure render from snapshot (no App borrow — safe for ArcSwap read)
 // ---------------------------------------------------------------------------
 
 fn render_from_snapshot(frame: &mut ratatui::Frame<'_>, snap: &RenderSnapshot) {
     use crate::app::ChatEntry;
-    use ratatui::{layout::{Constraint, Layout}, style::{Color, Modifier, Style}, text::{Line as LineText, Span as TextSpan}, widgets::*};
+    use ratatui::{
+        layout::{Constraint, Layout},
+        style::{Color, Modifier, Style},
+        text::{Line as LineText, Span as TextSpan},
+        widgets::*,
+    };
 
     let [chat_area, input_area, status_area] = Layout::vertical([
         Constraint::Fill(1),
@@ -67,7 +71,12 @@ fn render_from_snapshot(frame: &mut ratatui::Frame<'_>, snap: &RenderSnapshot) {
             ChatEntry::User(text) => {
                 lines.push(LineText::from(vec![
                     TextSpan::styled("▌ ", Style::default().fg(Color::Cyan)),
-                    TextSpan::styled("You", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    TextSpan::styled(
+                        "You",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     TextSpan::raw(": "),
                 ]));
                 for l in text.lines() {
@@ -80,9 +89,11 @@ fn render_from_snapshot(frame: &mut ratatui::Frame<'_>, snap: &RenderSnapshot) {
             }
             ChatEntry::Assistant(text) => {
                 for line in &text.lines {
-                    let is_blank = line.spans.is_empty() || line.spans.iter().all(|s| s.content.as_ref().is_empty());
+                    let is_blank = line.spans.is_empty()
+                        || line.spans.iter().all(|s| s.content.as_ref().is_empty());
                     if !is_blank {
-                        let mut spans: Vec<TextSpan<'static>> = vec![TextSpan::styled("▌ ", Style::default().fg(Color::Cyan))];
+                        let mut spans: Vec<TextSpan<'static>> =
+                            vec![TextSpan::styled("▌ ", Style::default().fg(Color::Cyan))];
                         for span in &line.spans {
                             spans.push(TextSpan::styled(span.content.to_string(), span.style));
                         }
@@ -91,25 +102,6 @@ fn render_from_snapshot(frame: &mut ratatui::Frame<'_>, snap: &RenderSnapshot) {
                         lines.push(LineText::raw(""));
                     }
                 }
-                lines.push(LineText::raw(""));
-            }
-            ChatEntry::ToolStart { name, args_summary } => {
-                lines.push(LineText::from(vec![
-                    TextSpan::styled(" ╭─ ", Style::default().fg(Color::DarkGray)),
-                    TextSpan::styled(name.clone(), Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
-                    TextSpan::styled(format!(" {}", args_summary), Style::default().fg(Color::Rgb(80, 80, 80))),
-                ]));
-            }
-            ChatEntry::ToolResult { output, is_error, .. } => {
-                let color = if *is_error { Color::Red } else { Color::DarkGray };
-                for l in output.lines() {
-                    lines.push(LineText::from(vec![
-                        TextSpan::styled(" │ ", Style::default().fg(color)),
-                        TextSpan::styled(l.to_string(), Style::default().fg(Color::Rgb(150, 150, 150))),
-                    ]));
-                }
-                let icon = if *is_error { "✗" } else { "✓" };
-                lines.push(LineText::from(vec![TextSpan::styled(format!(" ╰─{}", icon), Style::default().fg(color))]));
                 lines.push(LineText::raw(""));
             }
             ChatEntry::System(text) => {
@@ -124,34 +116,192 @@ fn render_from_snapshot(frame: &mut ratatui::Frame<'_>, snap: &RenderSnapshot) {
 
     // Streaming spinner indicator in chat area
     if snap.running {
-        let elapsed_ms = snap.streaming_start.map(|s| s.elapsed().as_millis() as usize).unwrap_or(0);
+        let elapsed_ms = snap
+            .streaming_start
+            .map(|s| s.elapsed().as_millis() as usize)
+            .unwrap_or(0);
         const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "▓", "█", "▒", "░"];
         let spinner = FRAMES[(elapsed_ms / 120) % FRAMES.len()];
         lines.push(LineText::from(vec![
-            TextSpan::styled(format!("  {} ", spinner), Style::default().fg(Color::Yellow)),
-            TextSpan::styled("Thinking", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+            TextSpan::styled(
+                format!("  {} ", spinner),
+                Style::default().fg(Color::Yellow),
+            ),
+            TextSpan::styled(
+                "Thinking",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            ),
         ]));
     }
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, chat_area);
+    // When suggestions are active, steal space from chat_area (not input_area)
+    let (chat_render_area, sug_area) = if snap.show_suggestions && !snap.suggestions.is_empty() {
+        let sug_height = snap.suggestions.len() as u16 + 1;
+        let rects = Layout::vertical([Constraint::Fill(1), Constraint::Length(sug_height)])
+            .split(chat_area);
+        (rects[0], Some(rects[1]))
+    } else {
+        (chat_area, None)
+    };
 
-    // Input area
+    frame.render_widget(paragraph, chat_render_area);
+
+    if let Some(area) = sug_area {
+        render_suggestions(frame, area, snap);
+    }
     render_input_from_snapshot(frame, input_area, snap);
+
+    // Model picker overlay
+    if snap.show_model_picker {
+        render_model_picker(frame, chat_area, snap);
+    }
 
     // Status bar
     let status_line = LineText::from(vec![
-        TextSpan::styled(" pio", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        TextSpan::styled(
+            " pio",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         TextSpan::raw(" · "),
         TextSpan::styled(&snap.model_name, Style::default().fg(Color::DarkGray)),
     ]);
-    let status = Paragraph::new(status_line)
-        .style(Style::default().bg(Color::Rgb(20, 20, 30)).fg(Color::DarkGray));
+    let status = Paragraph::new(status_line).style(
+        Style::default()
+            .bg(Color::Rgb(20, 20, 30))
+            .fg(Color::DarkGray),
+    );
     frame.render_widget(status, status_area);
 }
 
-fn render_input_from_snapshot(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, snap: &RenderSnapshot) {
-    use ratatui::{style::{Color, Modifier, Style}, text::{Line as LineText, Span as TextSpan}, widgets::*};
+/// Render command suggestions list above the input area.
+fn render_suggestions(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    snap: &RenderSnapshot,
+) {
+    use ratatui::{
+        style::{Color, Modifier, Style},
+        text::{Line as LineText, Span as TextSpan},
+        widgets::*,
+    };
+
+    let mut lines: Vec<LineText<'static>> = Vec::new();
+    for (i, sug) in snap.suggestions.iter().enumerate() {
+        let is_selected = snap.suggestion_selected == Some(i);
+        let prefix = if is_selected { "▸ " } else { "  " };
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Rgb(140, 140, 140))
+        };
+        lines.push(LineText::from(vec![
+            TextSpan::styled(prefix.to_string(), style),
+            TextSpan::styled(sug.to_string(), style),
+        ]));
+    }
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, area);
+}
+
+/// Render model picker overlay — centered in the chat area.
+fn render_model_picker(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    snap: &RenderSnapshot,
+) {
+    use ratatui::{
+        layout::{Constraint, Layout},
+        style::{Color, Modifier, Style},
+        text::{Line as LineText, Span as TextSpan},
+        widgets::*,
+    };
+
+    let picker_height =
+        (snap.model_picker_items.len() as u16 + 3).min(area.height.saturating_sub(2));
+    let picker_width = (area.width / 2).max(30).min(area.width.saturating_sub(2));
+
+    // Center: split horizontally (Fill, picker, Fill), then vertically (Fill, picker, Fill)
+    let center_x = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(picker_width),
+        Constraint::Fill(1),
+    ])
+    .split(area)[1];
+    let picker_area = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(picker_height),
+        Constraint::Fill(1),
+    ])
+    .split(center_x)[1];
+
+    let mut lines: Vec<LineText> = Vec::new();
+    // Header
+    lines.push(LineText::from(vec![TextSpan::styled(
+        " Model Selection ",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )]));
+    // Filter line
+    lines.push(LineText::from(vec![
+        TextSpan::styled("Filter: ", Style::default().fg(Color::Rgb(120, 120, 120))),
+        TextSpan::styled(
+            snap.model_picker_filter.clone(),
+            Style::default()
+                .fg(Color::Rgb(180, 180, 180))
+                .add_modifier(Modifier::ITALIC),
+        ),
+    ]));
+    lines.push(LineText::raw(""));
+    // Model list
+    for (i, model) in snap.model_picker_items.iter().enumerate() {
+        let is_selected = i == snap.model_picker_selected;
+        let prefix = if is_selected { "▸ " } else { "  " };
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Rgb(140, 140, 140))
+        };
+        lines.push(LineText::from(vec![
+            TextSpan::styled(prefix.to_string(), style),
+            TextSpan::styled(model.clone(), style),
+        ]));
+    }
+    // Footer
+    lines.push(LineText::raw(""));
+    lines.push(LineText::from(vec![TextSpan::styled(
+        "Enter: select  Esc: cancel  ↑↓: navigate",
+        Style::default().fg(Color::Rgb(100, 100, 100)),
+    )]));
+
+    let paragraph = Paragraph::new(lines).block(
+        Block::new()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Rgb(60, 60, 90))),
+    );
+    frame.render_widget(paragraph, picker_area);
+}
+
+fn render_input_from_snapshot(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    snap: &RenderSnapshot,
+) {
+    use ratatui::{
+        style::{Color, Modifier, Style},
+        text::{Line as LineText, Span as TextSpan},
+        widgets::*,
+    };
 
     let mut spans = vec![
         TextSpan::styled("▌ ", Style::default().fg(Color::Cyan)),
@@ -161,29 +311,43 @@ fn render_input_from_snapshot(frame: &mut ratatui::Frame<'_>, area: ratatui::lay
     if snap.show_quit_prompt {
         spans.push(TextSpan::styled(
             " Press Ctrl+C again to quit",
-            Style::default().fg(Color::Red).add_modifier(Modifier::ITALIC),
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(Modifier::ITALIC),
         ));
     } else if snap.running {
-        let elapsed_ms = snap.streaming_start.map(|s| s.elapsed().as_millis() as usize).unwrap_or(0);
+        let elapsed_ms = snap
+            .streaming_start
+            .map(|s| s.elapsed().as_millis() as usize)
+            .unwrap_or(0);
         const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "▓", "█", "▒", "░"];
         let spinner = FRAMES[(elapsed_ms / 120) % FRAMES.len()];
         spans.push(TextSpan::styled(
             format!(" {}", spinner),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::ITALIC),
         ));
     }
 
     let input_text = ratatui::text::Text::from(LineText::from(spans));
-    let paragraph = Paragraph::new(input_text)
-        .block(Block::new()
+    let paragraph = Paragraph::new(input_text).block(
+        Block::new()
             .borders(Borders::TOP)
-            .border_style(Style::default().fg(Color::Rgb(40, 40, 60))));
+            .border_style(Style::default().fg(Color::Rgb(40, 40, 60))),
+    );
     frame.render_widget(paragraph, area);
 
     // Cursor position: "▌ " prefix (2 chars) + cursor offset into text
-    let input_width = unicode_width::UnicodeWidthStr::width(&snap.input_text[..snap.input_cursor_pos.min(snap.input_text.len())]) as u16;
+    let input_width = unicode_width::UnicodeWidthStr::width(
+        &snap.input_text[..snap.input_cursor_pos.min(snap.input_text.len())],
+    ) as u16;
     frame.set_cursor_position(ratatui::layout::Position {
-        x: area.x.saturating_add(2).saturating_add(input_width).min(area.x + area.width - 1),
+        x: area
+            .x
+            .saturating_add(2)
+            .saturating_add(input_width)
+            .min(area.x + area.width - 1),
         y: area.y + 1, // Block::borders(TOP) draws on row area.y
     });
 }
@@ -201,7 +365,7 @@ async fn run_async(
     let term_clone = terminal.clone();
     let snap_clone = snapshot.clone();
     let render_handle = tokio::spawn(async move {
-        use std::time::{Duration as Td};
+        use std::time::Duration as Td;
         let mut interval = tokio::time::interval(Td::from_millis(33));
 
         loop {
@@ -219,7 +383,6 @@ async fn run_async(
     // Abort render task so it doesn't panic on drop (current_thread runtime)
     render_handle.abort();
 }
-
 
 // ---------------------------------------------------------------------------
 // CLI + ONBOARDING (unchanged)
@@ -268,13 +431,22 @@ struct Cli {
 }
 
 fn should_run_onboarding(cli: &Cli) -> bool {
-    if cli.model.is_some() || cli.provider.is_some() || cli.api_key.is_some() || cli.base_url.is_some() {
+    if cli.model.is_some()
+        || cli.provider.is_some()
+        || cli.api_key.is_some()
+        || cli.base_url.is_some()
+    {
         return false;
     }
     if config::project_config_path().exists() || config::global_config_path().exists() {
         return false;
     }
-    let api_key_envs = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "PI_API_KEY"];
+    let api_key_envs = [
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "PI_API_KEY",
+    ];
     for key in &api_key_envs {
         if std::env::var(key).ok().is_some_and(|v| !v.is_empty()) {
             return false;
@@ -327,10 +499,15 @@ fn main() -> Result<(), app::TuiError> {
         )
     };
 
-    let system_prompt = cli.system.clone().unwrap_or_else(|| "You are a helpful coding assistant.".into());
+    let system_prompt = cli
+        .system
+        .clone()
+        .unwrap_or_else(|| "You are a helpful coding assistant.".into());
 
     let wire_format = match resolved.provider.as_str() {
-        "anthropic" | "anthropic-compat" | "deepseek-anthropic" => crate::llm::WireFormat::Anthropic,
+        "anthropic" | "anthropic-compat" | "deepseek-anthropic" => {
+            crate::llm::WireFormat::Anthropic
+        }
         "openai" | "openai-compat" | "deepseek" => crate::llm::WireFormat::OpenAI,
         other => {
             eprintln!("Unknown provider: {other}. Supported: anthropic, openai, deepseek");
@@ -339,16 +516,19 @@ fn main() -> Result<(), app::TuiError> {
     };
 
     let session_backend = session::FileSystemSessionBackend::new();
-    let mut host_state = None;
-
-    if let Some(ref id) = cli.session_id {
+    let (host_state, session_ctx) = if let Some(ref id) = cli.session_id {
         if let Some(data) = session_backend.load(id) {
-            host_state = Some(HostState::restore(data.clone()));
+            let (hs, ctx) = HostState::restore(data);
+            (Some(hs), Some(ctx))
+        } else {
+            (None, None)
         }
-    }
+    } else {
+        (None, None)
+    };
 
     let cwd = std::env::current_dir()?;
-    let terminal: Arc<std::sync::Mutex<ratatui::DefaultTerminal>> = 
+    let terminal: Arc<std::sync::Mutex<ratatui::DefaultTerminal>> =
         Arc::new(std::sync::Mutex::new(ratatui::init()));
     print!("\x1b[2 q"); // steady block cursor
 
@@ -359,6 +539,7 @@ fn main() -> Result<(), app::TuiError> {
         &resolved.base_url,
         cli.session_id.clone(),
         host_state,
+        session_ctx,
         &cwd,
         wire_format,
         &resolved.provider,
@@ -371,7 +552,7 @@ fn main() -> Result<(), app::TuiError> {
 
     // Publish initial snapshot before starting tasks
     app.publish_snapshot();
-    
+
     // Clone the shared ArcSwap so render task and actor share the same instance.
     let snapshot = app.snapshot.clone();
 
@@ -385,4 +566,3 @@ fn main() -> Result<(), app::TuiError> {
     print!("\x1b[0 q");
     Ok(())
 }
-

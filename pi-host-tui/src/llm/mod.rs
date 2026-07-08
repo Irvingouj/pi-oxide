@@ -12,7 +12,7 @@ mod stream;
 #[cfg(test)]
 mod tests;
 
-// Re-export async types  
+// Re-export async types
 pub use async_stream::AsyncLlmStream;
 
 // ---------------------------------------------------------------------------
@@ -29,6 +29,7 @@ pub enum WireFormat {
 
 impl WireFormat {
     /// Resolve provider name string to wire format.
+    #[allow(dead_code)] // used by config resolution
     pub fn from_provider(provider: &str) -> Self {
         match provider {
             "anthropic" | "anthropic-compat" | "deepseek-anthropic" => WireFormat::Anthropic,
@@ -65,20 +66,18 @@ impl AsyncLlmClient {
         }
     }
 
+    #[allow(dead_code)] // used by config inspection
     pub fn api_key(&self) -> &str {
         &self.api_key
     }
 
+    #[allow(dead_code)]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
 
     pub fn model_id(&self) -> &str {
         &self.model
-    }
-
-    pub fn set_model(&mut self, model: &str) {
-        self.model = model.to_string();
     }
 
     /// Start an async streaming LLM request. Returns a stream that yields `LlmChunk` values.
@@ -105,7 +104,8 @@ impl AsyncLlmClient {
         );
 
         let client = reqwest::Client::new();
-        let mut req_builder = client.post(&url)
+        let mut req_builder = client
+            .post(&url)
             .header("content-type", "application/json")
             .json(&body_json);
 
@@ -116,7 +116,8 @@ impl AsyncLlmClient {
                     .header("anthropic-version", "2023-06-01");
             }
             WireFormat::OpenAI => {
-                req_builder = req_builder.header("authorization", format!("Bearer {}", self.api_key));
+                req_builder =
+                    req_builder.header("authorization", format!("Bearer {}", self.api_key));
             }
         }
 
@@ -229,10 +230,12 @@ impl LlmClient {
         }
     }
 
+    #[allow(dead_code)] // used by config inspection
     pub fn api_key(&self) -> &str {
         &self.api_key
     }
 
+    #[allow(dead_code)]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -265,7 +268,11 @@ impl LlmClient {
             .post(&url)
             .header("content-type", "application/json")
             .json(&crate::llm::request::build_body(
-                &self.model, system_prompt, messages, tools, self.wire_format,
+                &self.model,
+                system_prompt,
+                messages,
+                tools,
+                self.wire_format,
             ));
 
         match self.wire_format {
@@ -366,7 +373,7 @@ impl LlmProvider for LlmClient {
     }
 }
 
-/// Async provider trait — used by the actor loop.
+#[allow(dead_code)] // used by actor loop for async streaming
 pub trait AsyncLlmProvider: Sized + Send {
     async fn stream_async(
         &self,

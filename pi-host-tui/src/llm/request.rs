@@ -120,12 +120,19 @@ pub fn build_body(
 // ---------------------------------------------------------------------------
 
 impl LlmClient {
+    #[allow(dead_code)] // used by LlmClient::stream_sync
     pub(crate) fn build_body(
         &self,
         system_prompt: &str,
         messages: &[pi_core::AgentMessage],
         tools: &[ToolDefinition],
     ) -> serde_json::Value {
-        build_body(&self.model, system_prompt, messages, tools, self.wire_format)
+        build_body(
+            &self.model,
+            system_prompt,
+            messages,
+            tools,
+            self.wire_format,
+        )
     }
 }

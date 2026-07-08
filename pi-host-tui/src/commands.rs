@@ -1,8 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::DefaultTerminal;
 
 use crate::app::App;
-use crate::llm::LlmProvider;
 
 impl App {
     // -----------------------------------------------------------------------
@@ -31,8 +29,8 @@ impl App {
 
     fn switch_model(&mut self, model_id: &str) {
         self.llm_client.set_model(model_id);
-        self.agent_mut().state_mut().model.id = pi_core::ModelId::new(model_id);
-        self.agent_mut().state_mut().model.name = pi_core::ModelName::new(model_id);
+        self.agent_host.runtime_mut().state_mut().model.id = pi_core::ModelId::new(model_id);
+        self.agent_host.runtime_mut().state_mut().model.name = pi_core::ModelName::new(model_id);
         self.entries.push(crate::app::ChatEntry::System(format!(
             "Model switched to {model_id}"
         )));
@@ -78,12 +76,6 @@ impl App {
     // Slash commands
     // -----------------------------------------------------------------------
 
-    /// Handle slash command — does NOT render (caller is responsible for publish_snapshot).
-    pub(crate) fn handle_command(&mut self, terminal: &mut DefaultTerminal, text: &str) {
-        self.handle_command_inline(text);
-        let _ = terminal.draw(|f| self.render(f));
-    }
-
     /// Handle slash command without rendering — for async actor loop.
     pub(crate) fn handle_command_inline(&mut self, text: &str) {
         let parts: Vec<&str> = text.split_whitespace().collect();
@@ -128,12 +120,13 @@ impl App {
                     "load" => {
                         if let Some(id) = parts.get(2) {
                             if let Some(data) = self.session_backend.load(id) {
-                                let host_state =
-                                    crate::host_state::HostState::restore(data.clone());
+                                let (host_state, session_ctx) =
+                                    crate::host_state::HostState::restore(data);
                                 self.agent_host.reset();
-                                self.agent_host.transcript = data.transcript;
-                                self.agent_host.artifacts = data.artifacts;
-                                self.agent_host.turn_number = data.turn_number;
+                                self.agent_host.transcript = session_ctx.transcript;
+                                self.agent_host.artifacts = session_ctx.artifacts;
+                                self.agent_host.turn_number = session_ctx.turn_number;
+                                self.budget = session_ctx.budget;
                                 self.host_state = Some(host_state);
                                 self.session_id = Some(id.to_string());
                                 self.session_logger =

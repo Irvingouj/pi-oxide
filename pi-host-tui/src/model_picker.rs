@@ -2,16 +2,14 @@
 
 pub struct ModelPicker {
     models: Vec<String>,
-    current_model: String,
     filter: String,
-    selected_index: usize,
+    pub(crate) selected_index: usize,
 }
 
 impl ModelPicker {
-    pub fn new(models: Vec<String>, current_model: String) -> Self {
+    pub fn new(models: Vec<String>, _current_model: String) -> Self {
         Self {
             models,
-            current_model,
             filter: String::new(),
             selected_index: 0,
         }
@@ -77,22 +75,6 @@ impl ModelPicker {
     pub fn filter_text(&self) -> &str {
         &self.filter
     }
-
-    /// Return the total number of models.
-    pub fn total_count(&self) -> usize {
-        self.models.len()
-    }
-
-    /// Return the number of filtered results.
-    #[allow(dead_code)]
-    pub fn filtered_count(&self) -> usize {
-        self.filtered().len()
-    }
-
-    /// Return the current model ID (for display).
-    pub fn current_model(&self) -> &str {
-        &self.current_model
-    }
 }
 
 #[cfg(test)]
@@ -114,7 +96,7 @@ mod tests {
     #[test]
     fn new_shows_all_models_when_no_filter() {
         let picker = make_picker();
-        assert_eq!(picker.filtered_count(), 4);
+        assert_eq!(picker.filtered().len(), 4);
         assert_eq!(
             picker.filtered(),
             vec![
@@ -142,7 +124,7 @@ mod tests {
         picker.append_char('D');
         picker.append_char('E');
         picker.append_char('E');
-        assert_eq!(picker.filtered_count(), 3); // all deepseek
+        assert_eq!(picker.filtered().len(), 3); // all deepseek
     }
 
     #[test]
@@ -184,11 +166,11 @@ mod tests {
         let mut picker = make_picker();
         picker.append_char('g');
         picker.append_char('p');
-        assert_eq!(picker.filtered_count(), 1); // gpt-5.5
+        assert_eq!(picker.filtered().len(), 1); // gpt-5.5
         picker.backspace();
-        assert_eq!(picker.filtered_count(), 1); // "g" still only gpt-5.5
+        assert_eq!(picker.filtered().len(), 1); // "g" still only gpt-5.5
         picker.backspace();
-        assert_eq!(picker.filtered_count(), 4);
+        assert_eq!(picker.filtered().len(), 4);
     }
 
     #[test]

@@ -29,22 +29,9 @@ pub enum SessionEvent {
         turn: u32,
         stop_reason: String,
     },
-    ToolCall {
-        turn: u32,
-        tool_call_id: String,
-        tool_name: String,
-    },
-    ToolResult {
-        turn: u32,
-        tool_call_id: String,
-        truncated: bool,
-    },
     Error {
         turn: u32,
         message: String,
-    },
-    TurnEnd {
-        turn: u32,
     },
 }
 
@@ -172,14 +159,19 @@ mod tests {
 
         let logger = SessionEventLogger::new(&session_id).unwrap();
         logger.append(&SessionEvent::TurnStart { turn: 1 }).unwrap();
-        logger.append(&SessionEvent::TurnEnd { turn: 1 }).unwrap();
+        logger
+            .append(&SessionEvent::Error {
+                turn: 1,
+                message: "test end".into(),
+            })
+            .unwrap();
 
         let path = session_log_path(&session_id);
         let content = std::fs::read_to_string(path).unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("\"turn_start\""));
-        assert!(lines[1].contains("\"turn_end\""));
+        assert!(lines[1].contains("\"error\""));
 
         // Cleanup
         std::fs::remove_dir_all(&tmp_dir).ok();

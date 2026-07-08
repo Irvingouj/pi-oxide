@@ -1,7 +1,7 @@
 //! Async LLM stream using reqwest response body.
 //!
 //! Collects the full SSE response into memory, then parses chunks synchronously  
-//! via `.next_chunk()`. For typical LLM responses (< 1MB), this avoids needing 
+//! via `.next_chunk()`. For typical LLM responses (< 1MB), this avoids needing
 //! tokio_util and is simpler while remaining fast enough for TUI rendering at 30fps.
 
 use super::{CollectedToolCall, PartialToolCall, WireFormat};
@@ -37,32 +37,28 @@ impl AsyncLlmStream {
         }
     }
 
-    /// Read the next chunk from buffer (non-blocking after init). 
+    /// Read the next chunk from buffer (non-blocking after init).
     pub fn next_chunk(&mut self) -> Option<pi_core::LlmChunk> {
         if self.done || !self.has_remaining() {
             return None;
         }
 
-        // Recompute remaining each iteration — pos advances inside the loop.
-        let mut remaining = match self.text.get(self.pos..) {
-            Some(s) => s,
-            None => { self.done = true; return None; },
-        };
-
         loop {
-            // Refresh remaining after pos advanced on previous iteration
-            if let Some(refreshed) = self.text.get(self.pos..) {
-                remaining = refreshed;
-            } else {
-                break;
-            }
+            let remaining = match self.text.get(self.pos..) {
+                Some(s) => s,
+                None => {
+                    self.done = true;
+                    return None;
+                }
+            };
             match self.wire_format {
                 WireFormat::Anthropic => {
                     // Anthropic: SSE with \n\n event boundaries
                     if let Some(pos) = remaining.find("\n\n") {
                         let event_text = remaining[..pos].to_string();
                         self.pos += pos + 2;
-                        if let Some(chunk) = parse_anthropic_sse_event(&mut self.state, &event_text) {
+                        if let Some(chunk) = parse_anthropic_sse_event(&mut self.state, &event_text)
+                        {
                             return Some(chunk);
                         }
                     } else {
@@ -138,6 +134,7 @@ impl AsyncLlmStream {
             .collect()
     }
 
+    #[allow(dead_code)] // used by consumers to check for more chunks
     pub fn has_more(&self) -> bool {
         !self.done && self.has_remaining()
     }
@@ -187,8 +184,16 @@ pub(super) fn parse_anthropic_sse_event(
             if let Ok(block) = serde_json::from_str::<serde_json::Value>(data) {
                 if let Some(cb) = block.get("content_block") {
                     if cb.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
-                        let id = cb.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        let name = cb.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let id = cb
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let name = cb
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
                         state.tool_calls.push(PartialToolCall {
                             id,
                             name,
@@ -204,11 +209,16 @@ pub(super) fn parse_anthropic_sse_event(
                 if let Some(d) = delta.get("delta") {
                     match d.get("type").and_then(|v| v.as_str()).unwrap_or("") {
                         "text_delta" => {
-                            let text = d.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let text = d
+                                .get("text")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             return Some(pi_core::LlmChunk::TextDelta { text });
                         }
                         "input_json_delta" => {
-                            let json_str = d.get("partial_json")
+                            let json_str = d
+                                .get("partial_json")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
@@ -226,13 +236,15 @@ pub(super) fn parse_anthropic_sse_event(
             if let Ok(delta) = serde_json::from_str::<serde_json::Value>(data) {
                 // message_delta: extract output tokens + stop_reason
                 if event_type == "message_delta" {
-                    if let Some(output_tokens) = delta.get("usage")
+                    if let Some(output_tokens) = delta
+                        .get("usage")
                         .and_then(|u| u.get("output_tokens"))
                         .and_then(|v| v.as_u64())
                     {
                         state.usage_output = Some(output_tokens as u32);
                     }
-                    if let Some(stop) = delta.get("delta")
+                    if let Some(stop) = delta
+                        .get("delta")
                         .and_then(|d| d.get("stop_reason"))
                         .and_then(|v| v.as_str())
                     {
@@ -245,7 +257,8 @@ pub(super) fn parse_anthropic_sse_event(
         "message_stop" => Some(pi_core::LlmChunk::Done),
         "error" => {
             let msg = match serde_json::from_str::<serde_json::Value>(data) {
-                Ok(v) => v.get("error")
+                Ok(v) => v
+                    .get("error")
                     .and_then(|e| e.get("message"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown API error")
@@ -283,7 +296,7 @@ pub(super) fn parse_openai_sse_line(
         }
     }
 
-    // Check finish_reason first  
+    // Check finish_reason first
     if let Some(finish_reason) = json
         .get("choices")
         .and_then(|c| c.as_array())
@@ -299,7 +312,8 @@ pub(super) fn parse_openai_sse_line(
         state.stop_reason = Some(stop.to_string());
     }
 
-    let delta = json.get("choices")
+    let delta = json
+        .get("choices")
         .and_then(|c| c.as_array())
         .and_then(|c| c.first())
         .and_then(|c| c.get("delta"))?;
@@ -307,7 +321,9 @@ pub(super) fn parse_openai_sse_line(
     // Text delta
     if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
         if !text.is_empty() {
-            return Some(pi_core::LlmChunk::TextDelta { text: text.to_string() });
+            return Some(pi_core::LlmChunk::TextDelta {
+                text: text.to_string(),
+            });
         }
     }
 

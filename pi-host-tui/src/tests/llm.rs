@@ -1,5 +1,5 @@
-use super::messages::{convert_messages, convert_messages_openai};
-use super::*;
+use crate::llm::messages::{convert_messages, convert_messages_openai};
+use crate::llm::*;
 
 // ---------------------------------------------------------------------------
 // Serialization regression tests — ensure content block types serialize as

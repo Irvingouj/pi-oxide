@@ -1,174 +1,20 @@
 //! Replay-only E2E tests — fully offline, no API key, deterministic.
 //!
 //! These tests use pre-recorded HTTP cassettes committed to
-//! `tests/fixtures/deepseek_http.cassette.json`. The pi-record-server
-//! replays the cassette, and pio runs against it in a PTY.
+//! pi-host-tui/tests/fixtures/. The pi-record-server replays the cassette,
+//! and pio runs against it in a PTY.
 //!
 //! No network, no API key, no #[ignore]. Runs in `cargo test`.
 
 use anyhow::{Context, Result};
-use libc::c_int;
-use std::ffi::CString;
-use std::os::unix::io::{IntoRawFd, RawFd};
+use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
-// ---------------------------------------------------------------------------
-// Binary paths
-// ---------------------------------------------------------------------------
-
-fn pio_binary() -> PathBuf {
-    static PIO: Mutex<Option<PathBuf>> = Mutex::new(None);
-    let mut bin = PIO.lock().unwrap();
-    if let Some(ref p) = *bin {
-        return p.clone();
-    }
-    let p = if let Ok(path) = std::env::var("CARGO_BIN_EXE_pio") {
-        PathBuf::from(path)
-    } else {
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or(".".to_string());
-        let root = PathBuf::from(&manifest_dir).parent().unwrap().to_path_buf();
-        root.join("target/debug/pio")
-    };
-    *bin = Some(p.clone());
-    p
-}
-
-fn record_server_binary() -> PathBuf {
-    static RS: Mutex<Option<PathBuf>> = Mutex::new(None);
-    let mut bin = RS.lock().unwrap();
-    if let Some(ref p) = *bin {
-        return p.clone();
-    }
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or(".".to_string());
-    let root = PathBuf::from(&manifest_dir).parent().unwrap().to_path_buf();
-    let p = root.join("target/debug/pi-record-server");
-    *bin = Some(p.clone());
-    p
-}
-
-fn fixture_path(name: &str) -> PathBuf {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or(".".to_string());
-    PathBuf::from(&manifest_dir)
-        .join("tests")
-        .join("fixtures")
-        .join(name)
-}
-
-// ---------------------------------------------------------------------------
-// PTY helpers
-// ---------------------------------------------------------------------------
-
-fn open_pty() -> Result<(RawFd, RawFd)> {
-    let winsize = nix::pty::Winsize {
-        ws_row: 40,
-        ws_col: 120,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let pty = nix::pty::openpty(Some(&winsize), None).context("openpty")?;
-    Ok((pty.master.into_raw_fd(), pty.slave.into_raw_fd()))
-}
-
-fn send_raw(fd: RawFd, data: &[u8]) {
-    let res = unsafe {
-        libc::write(
-            fd,
-            data.as_ptr() as *const libc::c_void,
-            data.len() as libc::size_t,
-        )
-    };
-    assert!(res >= 0, "write to pty failed");
-}
-
-fn send_enter(fd: RawFd) {
-    send_raw(fd, b"\r");
-}
-
-fn send_char(fd: RawFd, c: char) {
-    let mut buf = [0u8; 4];
-    let s = c.encode_utf8(&mut buf);
-    send_raw(fd, s.as_bytes());
-}
-
-fn type_string(fd: RawFd, s: &str) {
-    for c in s.chars() {
-        send_char(fd, c);
-        thread::sleep(Duration::from_millis(10));
-    }
-    thread::sleep(Duration::from_millis(50));
-}
-
-fn read_pty_timeout(fd: RawFd, timeout_ms: i32) -> Vec<u8> {
-    let mut buf = Vec::new();
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        let poll_timeout_ms = remaining.as_millis().max(1) as libc::c_int;
-        let mut pfd = libc::pollfd {
-            fd: fd as libc::c_int,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        if unsafe { libc::poll(&mut pfd, 1, poll_timeout_ms) } <= 0 {
-            break;
-        }
-        if pfd.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) == 0 {
-            break;
-        }
-        let mut chunk = [0u8; 8192];
-        let res = unsafe {
-            libc::read(
-                fd,
-                chunk.as_mut_ptr() as *mut libc::c_void,
-                chunk.len() as libc::size_t,
-            )
-        };
-        if res <= 0 {
-            break;
-        }
-        buf.extend_from_slice(&chunk[..res as usize]);
-    }
-    buf
-}
-
-fn strip_ansi(input: &[u8]) -> String {
-    let s = String::from_utf8_lossy(input);
-    let re = regex::Regex::new(
-        r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b\([A-HP-Z]|\x1b\[7m|\x1b\[27m|\x1b\[\??\d+[hl]",
-    )
-    .unwrap();
-    re.replace_all(&s, "").to_string()
-}
-
-fn is_alive(pid: c_int) -> bool {
-    if unsafe { libc::kill(pid, 0) } != 0 {
-        return false;
-    }
-    let mut status: c_int = 0;
-    (unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) }) <= 0
-}
-
-fn kill_child(pid: u32) {
-    unsafe { libc::kill(pid as c_int, libc::SIGINT) };
-    thread::sleep(Duration::from_millis(500));
-    unsafe { libc::kill(pid as c_int, libc::SIGKILL) };
-    let mut status: c_int = 0;
-    for _ in 0..10 {
-        let ret = unsafe { libc::waitpid(pid as c_int, &mut status, libc::WNOHANG) };
-        if ret != 0 {
-            break;
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-}
+use crate::helpers;
 
 // ---------------------------------------------------------------------------
 // Replay server manager
@@ -180,7 +26,7 @@ struct ReplayServer {
 
 impl ReplayServer {
     fn start(port: u16, cassette: &Path) -> Result<Self> {
-        let binary = record_server_binary();
+        let binary = helpers::record_server_binary();
         assert!(
             binary.exists(),
             "pi-record-server not found at {}",
@@ -198,13 +44,12 @@ impl ReplayServer {
             .spawn()
             .context("failed to start pi-record-server")?;
 
-        // Wait for ready
         let url = format!("http://localhost:{port}/v1/models");
         let client = reqwest::blocking::Client::new();
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if Instant::now() > deadline {
-                kill_child(child.id());
+                helpers::kill_child(child.id());
                 anyhow::bail!("replay server did not start within 5s");
             }
             if client.get(&url).send().is_ok() {
@@ -218,7 +63,7 @@ impl ReplayServer {
 
 impl Drop for ReplayServer {
     fn drop(&mut self) {
-        kill_child(self.child.id());
+        helpers::kill_child(self.child.id());
     }
 }
 
@@ -228,15 +73,15 @@ impl Drop for ReplayServer {
 
 struct TuiRunner {
     master_fd: RawFd,
-    child_pid: c_int,
+    child_pid: libc::c_int,
 }
 
 impl TuiRunner {
     fn start(port: u16) -> Result<Self> {
-        let binary = pio_binary();
+        let binary = helpers::pio_binary();
         assert!(binary.exists(), "pio not found at {}", binary.display());
 
-        let (master_fd, slave_fd) = open_pty()?;
+        let (master_fd, slave_fd) = helpers::open_pty_pair()?;
 
         let env_strings: Vec<String> = std::env::vars_os()
             .map(|(k, v)| format!("{}={}", k.to_string_lossy(), v.to_string_lossy()))
@@ -247,12 +92,8 @@ impl TuiRunner {
         match pid {
             -1 => anyhow::bail!("fork failed"),
             0 => {
-                unsafe {
-                    libc::close(master_fd);
-                }
-                unsafe {
-                    libc::signal(libc::SIGINT, libc::SIG_IGN);
-                }
+                unsafe { libc::close(master_fd) };
+                unsafe { libc::signal(libc::SIGINT, libc::SIG_IGN) };
                 unsafe {
                     libc::dup2(slave_fd, libc::STDIN_FILENO);
                     libc::dup2(slave_fd, libc::STDOUT_FILENO);
@@ -264,7 +105,7 @@ impl TuiRunner {
 
                 let mut env_ptrs: Vec<*const libc::c_char> = env_strings
                     .into_iter()
-                    .filter_map(|s| CString::new(s).ok())
+                    .filter_map(|s| std::ffi::CString::new(s).ok())
                     .map(|s| s.into_raw() as *const libc::c_char)
                     .collect();
 
@@ -274,14 +115,14 @@ impl TuiRunner {
                     "PI_MODEL=deepseek-chat".into(),
                     "PI_API_KEY=test-key-not-real".into(),
                 ] {
-                    if let Ok(c) = CString::new(kv.as_str()) {
+                    if let Ok(c) = std::ffi::CString::new(kv.as_str()) {
                         env_ptrs.push(c.into_raw() as *const libc::c_char);
                     }
                 }
                 env_ptrs.push(std::ptr::null());
 
-                let prog = CString::new(binary.to_string_lossy().to_string()).unwrap();
-                let skip = CString::new("--skip-onboarding").unwrap();
+                let prog = std::ffi::CString::new(binary.to_string_lossy().to_string()).unwrap();
+                let skip = std::ffi::CString::new("--skip-onboarding").unwrap();
                 let argv: [*const libc::c_char; 3] =
                     [prog.as_ptr(), skip.as_ptr(), std::ptr::null()];
 
@@ -293,9 +134,7 @@ impl TuiRunner {
                 }
             }
             child_pid => {
-                unsafe {
-                    libc::close(slave_fd);
-                }
+                unsafe { libc::close(slave_fd) };
                 Ok(Self {
                     master_fd,
                     child_pid,
@@ -306,14 +145,13 @@ impl TuiRunner {
 
     fn wait_ready(&mut self) -> String {
         thread::sleep(Duration::from_millis(600));
-        strip_ansi(&read_pty_timeout(self.master_fd, 300))
+        helpers::strip_ansi(&helpers::read_pty_timeout(self.master_fd, 300))
     }
 
-    /// Type prompt, press Enter, wait for stream to complete.
     fn submit_prompt(&mut self, text: &str, timeout_secs: u64) -> String {
-        type_string(self.master_fd, text);
+        helpers::type_string(self.master_fd, text);
         thread::sleep(Duration::from_millis(100));
-        send_enter(self.master_fd);
+        helpers::send_enter(self.master_fd);
 
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
         let mut all_output = Vec::new();
@@ -324,7 +162,7 @@ impl TuiRunner {
             if remaining.is_zero() {
                 break;
             }
-            let chunk = read_pty_timeout(self.master_fd, 500);
+            let chunk = helpers::read_pty_timeout(self.master_fd, 500);
             if chunk.is_empty() {
                 if last_read.elapsed() > Duration::from_secs(2) {
                     break;
@@ -338,19 +176,19 @@ impl TuiRunner {
             let s = String::from_utf8_lossy(&all_output);
             if s.contains("Done") || s.contains("[DONE]") {
                 thread::sleep(Duration::from_millis(300));
-                let final_chunk = read_pty_timeout(self.master_fd, 300);
+                let final_chunk = helpers::read_pty_timeout(self.master_fd, 300);
                 all_output.extend_from_slice(&final_chunk);
                 break;
             }
         }
-        strip_ansi(&all_output)
+        helpers::strip_ansi(&all_output)
     }
 
     fn quit(&mut self) {
-        type_string(self.master_fd, "/quit");
-        send_enter(self.master_fd);
+        helpers::type_string(self.master_fd, "/quit");
+        helpers::send_enter(self.master_fd);
         for _ in 0..10 {
-            if !is_alive(self.child_pid) {
+            if !helpers::is_alive(self.child_pid) {
                 break;
             }
             thread::sleep(Duration::from_millis(200));
@@ -360,12 +198,10 @@ impl TuiRunner {
 
 impl Drop for TuiRunner {
     fn drop(&mut self) {
-        if is_alive(self.child_pid) {
-            kill_child(self.child_pid as u32);
+        if helpers::is_alive(self.child_pid) {
+            helpers::kill_child(self.child_pid as u32);
         }
-        unsafe {
-            libc::close(self.master_fd);
-        }
+        unsafe { libc::close(self.master_fd) };
     }
 }
 
@@ -384,7 +220,7 @@ fn next_port() -> u16 {
 #[test]
 #[cfg_attr(target_os = "windows", ignore)]
 fn replay_cassette_multi_turn_offline() -> Result<()> {
-    let cassette = fixture_path("deepseek_http.cassette.json");
+    let cassette = helpers::fixture_path("deepseek_http.cassette.json");
     assert!(
         cassette.exists(),
         "fixture not found: {}",
@@ -395,30 +231,21 @@ fn replay_cassette_multi_turn_offline() -> Result<()> {
     let _server = ReplayServer::start(port, &cassette)?;
     let mut tui = TuiRunner::start(port)?;
     let initial = tui.wait_ready();
-    assert!(initial.contains("Ready"), "TUI should show Ready");
+    assert!(initial.contains("Ready"));
 
     // Turn 1: "Say hello in one word" → cassette entry 0 returns "hello"
     let out1 = tui.submit_prompt("Say hello in one word", 10);
-    eprintln!("=== TURN 1 ===\n{}", out1);
-    assert!(
-        out1.contains("hello"),
-        "Turn 1 should contain 'hello'; got:\n{}",
-        out1
-    );
+    assert!(out1.contains("hello"), "Turn 1 should contain 'hello'");
 
     // Turn 2: "What is 7*8? One word." → cassette entry 1 returns "Fifty-six"
     let out2 = tui.submit_prompt("What is 7*8? One word.", 10);
-    eprintln!("=== TURN 2 ===\n{}", out2);
     assert!(
         out2.contains("ifty-six"),
-        "Turn 2 should contain 'ifty-six'; got:\n{}",
-        out2
+        "Turn 2 should contain 'ifty-six'"
     );
 
-    // Turn 3: cassette exhausted → pio shows "Done" silently (known behavior)
-    let out3 = tui.submit_prompt("anything", 5);
-    eprintln!("=== TURN 3 (exhausted) ===\n{}", out3);
-    // Pio shows Done but no assistant text when cassette is exhausted
+    // Turn 3: cassette exhausted → pio shows "Done" silently
+    let _out3 = tui.submit_prompt("anything", 5);
 
     tui.quit();
     drop(tui);
@@ -431,23 +258,21 @@ fn replay_cassette_multi_turn_offline() -> Result<()> {
 #[test]
 #[cfg_attr(target_os = "windows", ignore)]
 fn replay_cassette_exhausts() -> Result<()> {
-    let cassette = fixture_path("deepseek_http.cassette.json");
+    let cassette = helpers::fixture_path("deepseek_http.cassette.json");
     let port = next_port();
     let _server = ReplayServer::start(port, &cassette)?;
 
-    // Consume all 3 entries
+    // Consume all entries
     for _ in 0..2 {
         let resp = reqwest::blocking::Client::new()
             .post(format!("http://localhost:{port}/v1/chat/completions"))
             .header("content-type", "application/json")
             .body(r#"{"model":"deepseek-chat","messages":[{"role":"user","content":"x"}],"stream":true}"#)
             .send()?;
-        assert!(resp.status().is_success(), "entry should be served");
-        // Drain the body
+        assert!(resp.status().is_success());
         let _ = resp.bytes()?;
     }
 
-    // 3rd request should get 503
     let resp = reqwest::blocking::Client::new()
         .post(format!("http://localhost:{port}/v1/chat/completions"))
         .header("content-type", "application/json")
@@ -455,7 +280,7 @@ fn replay_cassette_exhausts() -> Result<()> {
             r#"{"model":"deepseek-chat","messages":[{"role":"user","content":"x"}],"stream":true}"#,
         )
         .send()?;
-    assert_eq!(resp.status().as_u16(), 503, "4th request should exhaust");
+    assert_eq!(resp.status().as_u16(), 503);
     assert!(resp.text()?.contains("exhausted"));
 
     Ok(())

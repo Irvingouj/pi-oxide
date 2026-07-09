@@ -1725,6 +1725,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pi-host-tui-e2e"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "nix 0.30.1",
+ "regex",
+ "reqwest",
+ "serde_json",
+]
+
+[[package]]
 name = "pi-host-web"
 version = "0.4.0"
 dependencies = [

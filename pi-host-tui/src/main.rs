@@ -11,14 +11,9 @@ mod app;
 mod commands;
 mod config;
 mod directives;
-#[cfg(all(test, unix))]
-mod e2e_tests;
 mod editor;
 mod extension;
 mod host_state;
-#[cfg(test)]
-#[cfg(not(feature = "replay"))]
-mod input_tests;
 mod llm;
 #[cfg(any(feature = "record", feature = "replay"))]
 mod llm_cassette;
@@ -29,20 +24,13 @@ mod llm_replay;
 mod markdown;
 mod model_picker;
 mod onboarding;
-#[cfg(test)]
-mod onboarding_test;
-#[cfg(all(test, unix))]
-mod record_replay_test;
-#[cfg(all(test, unix))]
-mod replay_e2e_test;
 mod scroll;
 mod session;
 mod session_log;
-mod smoke_test;
+#[cfg(test)]
+mod tests;
 mod theme;
 mod tools;
-#[cfg(test)]
-mod tools_test;
 // ---------------------------------------------------------------------------
 // Pure render from snapshot (no App borrow — safe for ArcSwap read)
 // ---------------------------------------------------------------------------

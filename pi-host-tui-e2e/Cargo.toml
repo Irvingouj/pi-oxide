@@ -1,0 +1,23 @@
+[package]
+name = "pi-host-tui-e2e"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "End-to-end PTY tests for pi-host-tui (pio CLI)"
+
+# No lib or bin — test-only crate
+
+[dependencies]
+anyhow = "1.0"
+nix = { version = "0.30", features = ["process", "signal", "term"] }
+libc = "0.2"
+regex = "1.11"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json"] }
+serde_json = { workspace = true }
+
+[features]
+default = []
+# Run tests only when both pi-host-tui and pi-record-server have been built
+# e.g. cargo test -p pi-host-tui-e2e

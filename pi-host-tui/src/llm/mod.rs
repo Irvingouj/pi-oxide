@@ -5,12 +5,9 @@
 
 mod async_stream;
 pub(crate) mod discovery;
-mod messages;
+pub(crate) mod messages;
 mod request;
 mod stream;
-
-#[cfg(test)]
-mod tests;
 
 // Re-export async types
 pub use async_stream::AsyncLlmStream;

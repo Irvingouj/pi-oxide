@@ -30,6 +30,7 @@ export interface Logger {
 export interface AgentConfig {
 	sessionId: string;
 	model: AgentModel;
+	initialHistory?: readonly AgentHistoryEntry[];
 	tools?: AgentTools | AgentTools[];
 	store?: AgentStore;
 	instructions?: string;
@@ -95,6 +96,7 @@ export type AgentEventName =
 	| "messageStart"
 	| "text"
 	| "messageEnd"
+	| "historyMessage"
 	| "toolStart"
 	| "toolUpdate"
 	| "toolEnd"
@@ -118,6 +120,8 @@ export type AgentEventHandler<E extends AgentEventName> =
 			? (delta: string) => void
 			: E extends "messageEnd"
 				? (message: AgentMessage) => void
+				: E extends "historyMessage"
+					? (message: AgentHistoryMessage) => void
 				: E extends "toolStart"
 					? (tool: AgentToolRun) => void
 					: E extends "toolUpdate"
@@ -147,6 +151,51 @@ export interface AgentMessage {
 	stopReason?: string;
 	errorMessage?: string;
 }
+
+export interface AgentHistoryEntry {
+	entryId: string;
+	turnNumber: number;
+	message: AgentHistoryMessage;
+}
+
+export type AgentHistoryMessage =
+	| {
+			role: "user";
+			content: AgentHistoryContentBlock[];
+			timestamp: number;
+	  }
+	| {
+			role: "assistant";
+			content: AgentHistoryContentBlock[];
+			api: string;
+			provider: string;
+			model: string;
+			stopReason: AgentHistoryStopReason;
+			errorMessage?: string;
+			timestamp: number;
+			usage: TokenUsage;
+	  }
+	| {
+			role: "tool_result";
+			content: AgentHistoryContentBlock[];
+			tool_call_id: string;
+			tool_name: string;
+			details?: Record<string, unknown>;
+			is_error: boolean;
+			timestamp: number;
+	  };
+
+export type AgentHistoryContentBlock = Exclude<
+	AgentContentBlock,
+	{ type: "file" }
+>;
+
+export type AgentHistoryStopReason =
+	| "end_turn"
+	| "max_tokens"
+	| "tool_use"
+	| "aborted"
+	| "error";
 
 export type AgentContentBlock =
 	| { type: "text"; text: string }

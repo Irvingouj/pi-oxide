@@ -13,6 +13,8 @@ import type {
 	AgentArtifactRef,
 	AgentContentBlock,
 	AgentError,
+	AgentHistoryContentBlock,
+	AgentHistoryMessage,
 	AgentMessage,
 	AgentRunResult,
 	AgentStatus,
@@ -119,6 +121,10 @@ export class EventMapper {
 					state.messages.push(msg);
 				}
 				events.push({ type: "messageEnd", payload: msg });
+				events.push({
+					type: "historyMessage",
+					payload: this.convertWasmHistoryMessage(rawEvent.message),
+				});
 				break;
 			}
 
@@ -330,6 +336,53 @@ export class EventMapper {
 			}
 		}
 		return events;
+	}
+
+	private convertWasmHistoryMessage(msg: WasmAgentMessage): AgentHistoryMessage {
+		const content = msg.content.map((block) => this.convertHistoryContent(block));
+
+		switch (msg.role) {
+			case "user":
+				return { role: "user", content, timestamp: msg.timestamp };
+			case "assistant":
+				return {
+					role: "assistant",
+					content,
+					api: msg.api,
+					provider: msg.provider,
+					model: msg.model,
+					stopReason: msg.stop_reason,
+					...(msg.error_message ? { errorMessage: msg.error_message } : {}),
+					timestamp: msg.timestamp,
+					usage: msg.usage,
+				};
+			case "tool_result":
+				return {
+					role: "tool_result",
+					content,
+					tool_call_id: msg.tool_call_id,
+					tool_name: msg.tool_name,
+					...(msg.details ? { details: msg.details } : {}),
+					is_error: msg.is_error,
+					timestamp: msg.timestamp,
+				};
+		}
+	}
+
+	private convertHistoryContent(block: Content): AgentHistoryContentBlock {
+		switch (block.type) {
+			case "text":
+				return { type: "text", text: block.text };
+			case "tool_call":
+				return {
+					type: "tool_call",
+					id: block.id,
+					name: block.name,
+					arguments: block.arguments,
+				};
+			case "image":
+				return { type: "image", mimeType: block.media_type, data: block.data };
+		}
 	}
 
 	private convertWasmMessage(msg: WasmAgentMessage): AgentMessage {

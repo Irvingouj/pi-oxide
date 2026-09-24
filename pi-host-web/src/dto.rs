@@ -178,6 +178,22 @@ pub enum AgentMessage {
     ToolResult(ToolResultMessage),
 }
 
+/// A transcript message seeded when creating a branch from an existing session path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct AgentHistoryEntry {
+    pub entry_id: String,
+    pub turn_number: u32,
+    pub message: AgentMessage,
+}
+
+/// Typed session history supplied when creating a new branch runtime.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct AgentHistory {
+    pub entries: Vec<AgentHistoryEntry>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(tag = "type", rename_all = "snake_case")]

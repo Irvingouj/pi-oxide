@@ -89,6 +89,8 @@ pub(crate) enum HostError {
     },
     #[error("invalid session JSON")]
     InvalidSessionJson,
+    #[error("compaction summary must not be empty")]
+    EmptyCompactionSummary,
 }
 
 impl HostError {
@@ -97,6 +99,7 @@ impl HostError {
             HostError::BadHandle(_) => "bad_handle",
             HostError::WrongPhase { .. } => "wrong_phase",
             HostError::InvalidSessionJson => "invalid_session_json",
+            HostError::EmptyCompactionSummary => "empty_compaction_summary",
         }
     }
     pub(crate) fn to_dto(&self) -> ErrorDto {

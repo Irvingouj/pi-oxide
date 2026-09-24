@@ -172,7 +172,27 @@ export async function runTurnWithHostAgent(
 					case "summarize": {
 						const ctx = action.context as import("../../pi_host_web.js").LlmContext;
 						logger.info("Summarizing context");
-						const summary = (await config.llm.summarize?.(ctx.messages, signal)) ?? "";
+						const summarize = config.llm.summarize;
+						if (!summarize) {
+							throw new HostError(
+								"compaction_unavailable",
+								"No summarizer is configured for context compaction",
+							);
+						}
+						let summary: string;
+						try {
+							summary = await summarize(ctx.messages, signal);
+						} catch (error: unknown) {
+							if (signal?.aborted) checkAbort();
+							throw error;
+						}
+						checkAbort();
+						if (summary.trim().length === 0) {
+							throw new HostError(
+								"empty_compaction_summary",
+								"The summarizer returned an empty context summary",
+							);
+						}
 						step = unwrap(hostAcceptCompaction(hostAgent.handle, summary, [])) as typeof step;
 						for (const e of step.events) config.onEvent?.(e as import("../../pi_host_web.js").AgentEvent);
 						await processStepMarkers(step, hostAgent, config);

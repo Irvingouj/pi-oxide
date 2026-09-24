@@ -1,9 +1,17 @@
-import type { Content, ContextProjectionBudget, Model, AgentMessage as WasmAgentMessage } from "../../pi_host_web.js";
+import type {
+	AgentHistoryEntry as WasmAgentHistoryEntry,
+	AgentMessage as WasmAgentMessage,
+	Content,
+	ContextProjectionBudget,
+	Model,
+} from "../../pi_host_web.js";
 import type { ArtifactStore } from "../bindings/types.ts";
 import { createAgentError } from "../errors.ts";
 import type {
 	AgentArtifact,
 	AgentConfig,
+	AgentHistoryEntry,
+	AgentHistoryMessage,
 	AgentInput,
 	AgentMessage,
 	AgentModel,
@@ -93,6 +101,61 @@ export function mergeMetadata(
 	const inputMetadata = typeof input === "object" ? input.metadata : undefined;
 	if (!inputMetadata && !runMetadata) return undefined;
 	return { ...inputMetadata, ...runMetadata };
+}
+
+export function buildInitialHistory(
+	history: readonly AgentHistoryEntry[],
+): WasmAgentHistoryEntry[] {
+	return history.map((entry) => ({
+		entry_id: entry.entryId,
+		turn_number: entry.turnNumber,
+		message: historyMessageToWasm(entry.message),
+	}));
+}
+
+function historyMessageToWasm(message: AgentHistoryMessage): WasmAgentMessage {
+	const content: Content[] = message.content.map((block) => {
+		switch (block.type) {
+			case "text":
+				return { type: "text", text: block.text };
+			case "tool_call":
+				return {
+					type: "tool_call",
+					id: block.id,
+					name: block.name,
+					arguments: block.arguments,
+				};
+			case "image":
+				return { type: "image", media_type: block.mimeType, data: block.data };
+		}
+	});
+
+	switch (message.role) {
+		case "user":
+			return { role: "user", content, timestamp: message.timestamp };
+		case "assistant":
+			return {
+				role: "assistant",
+				content,
+				api: message.api,
+				provider: message.provider,
+				model: message.model,
+				stop_reason: message.stopReason,
+				...(message.errorMessage ? { error_message: message.errorMessage } : {}),
+				timestamp: message.timestamp,
+				usage: message.usage,
+			};
+		case "tool_result":
+			return {
+				role: "tool_result",
+				content,
+				tool_call_id: message.tool_call_id,
+				tool_name: message.tool_name,
+				...(message.details ? { details: message.details } : {}),
+				is_error: message.is_error,
+				timestamp: message.timestamp,
+			};
+	}
 }
 
 export function buildUserMessage(input: string | AgentInput): WasmAgentMessage {

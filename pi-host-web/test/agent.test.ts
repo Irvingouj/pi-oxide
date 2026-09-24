@@ -12,6 +12,7 @@ import { ensureInit } from "../sdk/init.ts";
 import type {
 	AgentConfig,
 	AgentError,
+	AgentHistoryMessage,
 	AgentRunResult,
 	AgentStatus,
 	ModelRequest,
@@ -85,6 +86,71 @@ describe("Agent class", () => {
 	});
 
 	describe("TM-2: run() happy path", () => {
+		it("starts from supplied history before the new user turn", async () => {
+			const requests: ModelRequest[] = [];
+			const agent = new Agent({
+				sessionId: "test-initial-history",
+				model: defineModel({
+					id: "history-model",
+					generate: async (request) => {
+						requests.push(request);
+						return {
+							content: [{ type: "text", text: "Continued" }],
+							stopReason: "end",
+						};
+					},
+				}),
+				initialHistory: [
+					{
+						entryId: "entry-user",
+						turnNumber: 1,
+						message: {
+							role: "user",
+							content: [{ type: "text", text: "Earlier question" }],
+							timestamp: 1,
+						},
+					},
+					{
+						entryId: "entry-assistant",
+						turnNumber: 1,
+						message: {
+							role: "assistant",
+							content: [{ type: "text", text: "Earlier answer" }],
+							api: "mock-api",
+							provider: "mock-provider",
+							model: "history-model",
+							stopReason: "end_turn",
+							timestamp: 2,
+							usage: {
+								input: 0,
+								output: 0,
+								cache_read: 0,
+								cache_write: 0,
+								total_tokens: 0,
+							},
+						},
+					},
+				],
+			});
+
+			await agent.run("Continue from there");
+
+			assert.deepEqual(
+				requests[0]?.messages.map((message) => [
+					message.role,
+					message.content
+						.filter((block) => block.type === "text")
+						.map((block) => block.text)
+						.join(""),
+				]),
+				[
+					["user", "Earlier question"],
+					["assistant", "Earlier answer"],
+					["user", "Continue from there"],
+				],
+			);
+		});
+
 		it("returns completed result with text", async () => {
 			const agent = new Agent({
 				sessionId: "test-run",
@@ -562,6 +628,24 @@ describe("Agent class", () => {
 			assert.ok(events.includes("messageStart"), "should emit messageStart");
 			assert.ok(events.includes("text"), "should emit text");
 			assert.ok(events.includes("messageEnd"), "should emit messageEnd");
+		});
+
+		it("emits complete typed history messages after each message ends", async () => {
+			const agent = new Agent({
+				sessionId: "test-history-events",
+				model: makeMockModel("Earlier answer"),
+			});
+			const history: AgentHistoryMessage[] = [];
+			agent.on("historyMessage", (message) => history.push(message));
+
+			await agent.run("Earlier question");
+
+			assert.deepEqual(history.map((message) => message.role), [
+				"user",
+				"assistant",
+			]);
+			assert.equal(history[0]?.role === "user" ? history[0].content[0]?.text : "", "Earlier question");
+			assert.equal(history[1]?.role === "assistant" ? history[1].content[0]?.text : "", "Earlier answer");
 		});
 	});
 

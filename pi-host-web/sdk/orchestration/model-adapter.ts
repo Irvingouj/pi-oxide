@@ -273,9 +273,17 @@ export async function defaultSummarizer(
 		signal,
 	};
 	const response = await model.generate(summaryRequest);
-	const text = response.content
+	if (signal?.aborted) {
+		throw new DOMException("Summary request was cancelled", "AbortError");
+	}
+	if (response.stopReason === "error") {
+		throw new Error("Summary model request failed");
+	}
+	const summary = response.content
 		.filter((c): c is { type: "text"; text: string } => c.type === "text")
 		.map((c) => c.text)
-		.join("\n");
-	return text || "[Context summarized]";
+		.join("\n")
+		.trim();
+	if (!summary) throw new Error("Summary model returned no text");
+	return summary;
 }

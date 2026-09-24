@@ -1,5 +1,6 @@
 import {
 	createHostAgent,
+	createHostAgentWithHistory,
 	destroyHostAgent,
 	getHostAgentPersistData,
 	hostSteer,
@@ -11,6 +12,7 @@ import {
 import { getLogger } from "../internal/logger.ts";
 import {
 	buildContextBudget,
+	buildInitialHistory,
 	buildModelOptions,
 } from "../orchestration/config-builders.ts";
 import type { AgentConfig } from "../types.ts";
@@ -70,6 +72,19 @@ export async function createHostAgentInstance(
 			handle: number;
 		};
 		handle = restored.handle;
+	} else if (config.initialHistory && config.initialHistory.length > 0) {
+		logger.info("Creating host agent from transcript history", {
+			sessionId: config.sessionId,
+			messageCount: config.initialHistory.length,
+		});
+		const result = unwrap(
+			createHostAgentWithHistory(
+				options,
+				buildContextBudget(config.context),
+				{ entries: buildInitialHistory(config.initialHistory) },
+			),
+		) as { handle: number };
+		handle = result.handle;
 	} else {
 		logger.info("Creating new host agent", { sessionId: config.sessionId });
 		const result = unwrap(

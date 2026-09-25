@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.11] - 2026-09-25
+
+### Added
+
+- Typed session-history seeding and history-message events in the web SDK, allowing hosts to restore and persist the authoritative agent transcript.
+
+### Fixed
+
+- Compaction now commits only after a valid, non-empty summary succeeds; failed or cancelled summarization leaves the existing transcript intact.
+
 ## [0.9.6] - 2026-06-27
 
 ### Added

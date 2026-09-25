@@ -33,7 +33,10 @@ pub fn create_host_agent_with_history(
 ) -> CreateHostAgentResult {
     console_error_panic_hook::set_once();
     init_tracing();
-    info!(history_count = history.entries.len(), "createHostAgentWithHistory called");
+    info!(
+        history_count = history.entries.len(),
+        "createHostAgentWithHistory called"
+    );
     let core_options: pi_core::AgentOptions = try_conv!(options.try_into());
     let core_budget: pi_core::ContextProjectionBudget = try_conv!(budget.try_into());
     let mut transcript = Vec::with_capacity(history.entries.len());

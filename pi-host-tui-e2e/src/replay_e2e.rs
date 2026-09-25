@@ -8,7 +8,7 @@
 
 use anyhow::{Context, Result};
 use std::os::unix::io::RawFd;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::thread;

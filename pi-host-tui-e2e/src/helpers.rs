@@ -69,9 +69,14 @@ fn resolve_binary(name: &str) -> PathBuf {
         name,
         candidate.display()
     );
+    let package = match name {
+        "pio" => "pi-host-tui",
+        "pi-record-server" => "pi-record-server",
+        _ => panic!("no workspace package mapping for binary '{name}'"),
+    };
     let status = std::process::Command::new("cargo")
         .arg("build")
-        .args(["-p", &format!("pi-{name}")])
+        .args(["-p", package, "--bin", name])
         .current_dir(&workspace_root)
         .status();
 

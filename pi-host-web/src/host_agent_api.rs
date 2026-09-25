@@ -25,6 +25,65 @@ pub fn create_host_agent(
     ok(CreateHostAgentOutput { handle })
 }
 
+#[wasm_bindgen(js_name = "createHostAgentWithHistory")]
+pub fn create_host_agent_with_history(
+    options: AgentOptions,
+    budget: ContextProjectionBudget,
+    history: AgentHistory,
+) -> CreateHostAgentResult {
+    console_error_panic_hook::set_once();
+    init_tracing();
+    info!(
+        history_count = history.entries.len(),
+        "createHostAgentWithHistory called"
+    );
+    let core_options: pi_core::AgentOptions = try_conv!(options.try_into());
+    let core_budget: pi_core::ContextProjectionBudget = try_conv!(budget.try_into());
+    let mut transcript = Vec::with_capacity(history.entries.len());
+    let mut turn_number = 0;
+
+    for entry in history.entries {
+        turn_number = turn_number.max(entry.turn_number);
+        let message: pi_core::AgentMessage = try_conv!(entry.message.try_into());
+        let trimmed = match message {
+            pi_core::AgentMessage::User(message) => pi_core::TrimmedMessage::User(message),
+            pi_core::AgentMessage::Assistant(message) => {
+                pi_core::TrimmedMessage::Assistant(message)
+            }
+            pi_core::AgentMessage::ToolResult(message) => {
+                pi_core::TrimmedMessage::OriginalTool(pi_core::OriginalToolResult {
+                    entry_id: entry.entry_id,
+                    tool_call_id: message.tool_call_id,
+                    tool_name: message.tool_name,
+                    content: message.content,
+                    is_error: message.is_error,
+                    turn: entry.turn_number,
+                })
+            }
+        };
+        transcript.push(trimmed);
+    }
+
+    let artifacts = pi_core::Artifacts::new();
+    let mut runtime = AgentRuntime::new(core_options.clone());
+    runtime.initialize_entry_counter(&transcript, &artifacts);
+    let host_state = HostState::new(
+        core_options.system_prompt.clone(),
+        "Summarize the following conversation into a concise summary that preserves the key information, decisions, and context.".to_string(),
+    );
+    let agent = HostAgent {
+        runtime,
+        host_state,
+        transcript,
+        artifacts,
+        turn_number,
+        budget: core_budget,
+    };
+    let handle = put_host_agent(agent);
+    info!(handle, "host agent created with history");
+    ok(CreateHostAgentOutput { handle })
+}
+
 #[wasm_bindgen(js_name = "destroyHostAgent")]
 pub fn destroy_host_agent(handle: u32) -> EmptyResult {
     console_error_panic_hook::set_once();
@@ -522,6 +581,9 @@ pub fn host_accept_compaction(
     _compacted_entry_ids: Vec<String>,
 ) -> TurnResultResult {
     console_error_panic_hook::set_once();
+    if summary.trim().is_empty() {
+        return err(&HostError::EmptyCompactionSummary);
+    }
     let mut host_agent = match take_host_agent(handle) {
         Ok(a) => a,
         Err(e) => return err(&e),

@@ -30,6 +30,7 @@ export interface Logger {
 export interface AgentConfig {
 	sessionId: string;
 	model: AgentModel;
+	initialHistory?: readonly AgentInitialHistoryEntry[];
 	tools?: AgentTools | AgentTools[];
 	store?: AgentStore;
 	instructions?: string;
@@ -95,6 +96,7 @@ export type AgentEventName =
 	| "messageStart"
 	| "text"
 	| "messageEnd"
+	| "historyMessage"
 	| "toolStart"
 	| "toolUpdate"
 	| "toolEnd"
@@ -118,6 +120,8 @@ export type AgentEventHandler<E extends AgentEventName> =
 			? (delta: string) => void
 			: E extends "messageEnd"
 				? (message: AgentMessage) => void
+				: E extends "historyMessage"
+					? (message: AgentHistoryMessage) => void
 				: E extends "toolStart"
 					? (tool: AgentToolRun) => void
 					: E extends "toolUpdate"
@@ -144,9 +148,70 @@ export interface AgentMessage {
 	content: AgentContentBlock[];
 	timestamp?: number;
 	tool_call_id?: string;
+	/** Present for tool results so model adapters can distinguish failed calls. */
+	is_error?: boolean;
 	stopReason?: string;
 	errorMessage?: string;
 }
+
+export interface AgentHistoryEntry {
+	entryId: string;
+	turnNumber: number;
+	message: AgentHistoryMessage;
+}
+
+/** History messages accepted when seeding a new runtime from an existing branch. */
+export type AgentInitialHistoryMessage =
+	| Extract<AgentHistoryMessage, { role: "user" }>
+	| Extract<AgentHistoryMessage, { role: "assistant" }>
+	| (Omit<Extract<AgentHistoryMessage, { role: "tool_result" }>, "details"> & {
+			details?: never;
+	  });
+
+export interface AgentInitialHistoryEntry {
+	entryId: string;
+	turnNumber: number;
+	message: AgentInitialHistoryMessage;
+}
+
+export type AgentHistoryMessage =
+	| {
+			role: "user";
+			content: AgentHistoryContentBlock[];
+			timestamp: number;
+	  }
+	| {
+			role: "assistant";
+			content: AgentHistoryContentBlock[];
+			api: string;
+			provider: string;
+			model: string;
+			stopReason: AgentHistoryStopReason;
+			errorMessage?: string;
+			timestamp: number;
+			usage: TokenUsage;
+	  }
+	| {
+			role: "tool_result";
+			content: AgentHistoryContentBlock[];
+			tool_call_id: string;
+			tool_name: string;
+			details?: Record<string, unknown>;
+			is_error: boolean;
+			timestamp: number;
+	  };
+
+export type AgentHistoryContentBlock = Exclude<
+	AgentContentBlock,
+	{ type: "file" }
+>;
+
+export type AgentHistoryStopReason =
+	| "end_turn"
+	| "max_tokens"
+	| "tool_use"
+	| "aborted"
+	| "error";
 
 export type AgentContentBlock =
 	| { type: "text"; text: string }
@@ -295,7 +360,9 @@ export interface AgentError {
 		| "internal_error"
 		| "agent_disposed"
 		| "agent_busy"
-		| "agent_not_initialized";
+		| "agent_not_initialized"
+		| "compaction_unavailable"
+		| "empty_compaction_summary";
 	message: string;
 	cause?: unknown;
 	recoverable: boolean;

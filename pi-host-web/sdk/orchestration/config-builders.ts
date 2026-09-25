@@ -1,9 +1,17 @@
-import type { Content, ContextProjectionBudget, Model, AgentMessage as WasmAgentMessage } from "../../pi_host_web.js";
+import type {
+	AgentHistoryEntry as WasmAgentHistoryEntry,
+	AgentMessage as WasmAgentMessage,
+	Content,
+	ContextProjectionBudget,
+	Model,
+} from "../../pi_host_web.js";
 import type { ArtifactStore } from "../bindings/types.ts";
 import { createAgentError } from "../errors.ts";
 import type {
 	AgentArtifact,
 	AgentConfig,
+	AgentInitialHistoryEntry,
+	AgentInitialHistoryMessage,
 	AgentInput,
 	AgentMessage,
 	AgentModel,
@@ -95,6 +103,60 @@ export function mergeMetadata(
 	return { ...inputMetadata, ...runMetadata };
 }
 
+export function buildInitialHistory(
+	history: readonly AgentInitialHistoryEntry[],
+): WasmAgentHistoryEntry[] {
+	return history.map((entry) => ({
+		entry_id: entry.entryId,
+		turn_number: entry.turnNumber,
+		message: historyMessageToWasm(entry.message),
+	}));
+}
+
+function historyMessageToWasm(message: AgentInitialHistoryMessage): WasmAgentMessage {
+	const content: Content[] = message.content.map((block) => {
+		switch (block.type) {
+			case "text":
+				return { type: "text", text: block.text };
+			case "tool_call":
+				return {
+					type: "tool_call",
+					id: block.id,
+					name: block.name,
+					arguments: block.arguments,
+				};
+			case "image":
+				return { type: "image", media_type: block.mimeType, data: block.data };
+		}
+	});
+
+	switch (message.role) {
+		case "user":
+			return { role: "user", content, timestamp: message.timestamp };
+		case "assistant":
+			return {
+				role: "assistant",
+				content,
+				api: message.api,
+				provider: message.provider,
+				model: message.model,
+				stop_reason: message.stopReason,
+				...(message.errorMessage !== undefined ? { error_message: message.errorMessage } : {}),
+				timestamp: message.timestamp,
+				usage: message.usage,
+			};
+		case "tool_result":
+			return {
+				role: "tool_result",
+				content,
+				tool_call_id: message.tool_call_id,
+				tool_name: message.tool_name,
+				is_error: message.is_error,
+				timestamp: message.timestamp,
+			};
+	}
+}
+
 export function buildUserMessage(input: string | AgentInput): WasmAgentMessage {
 	const text = typeof input === "string" ? input : input.text;
 	const content: Content[] = [{ type: "text", text }];
@@ -138,7 +200,8 @@ export function convertWasmMessagesToAgentMessages(messages: WasmAgentMessage[])
 			return { type: "text" as const, text: "" };
 		}),
 		timestamp: Date.now(),
-		tool_call_id: msg.role === "tool_result" ? (msg as unknown as { tool_call_id: string }).tool_call_id : undefined,
+		tool_call_id: msg.role === "tool_result" ? msg.tool_call_id : undefined,
+		is_error: msg.role === "tool_result" ? msg.is_error : undefined,
 	}));
 }
 

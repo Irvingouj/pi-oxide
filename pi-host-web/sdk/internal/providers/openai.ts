@@ -91,7 +91,7 @@ export function openaiCompatible(config: {
 						return {
 							role: "tool" as const,
 							tool_call_id: msg.tool_call_id ?? "",
-							content: text,
+							content: msg.is_error ? `Tool execution failed:\n${text}` : text,
 						};
 					}
 					default: {

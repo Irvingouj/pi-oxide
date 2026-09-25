@@ -11,7 +11,7 @@
 //!
 //! Requires: Unix (macOS/Linux).
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use libc::c_int;
 use std::ffi::CString;
 use std::os::unix::io::RawFd;
@@ -146,12 +146,6 @@ impl E2EHarness {
     /// Send a typed string with small delays between chars.
     fn type_string(&mut self, s: &str) {
         helpers::type_string(self.master_fd, s);
-    }
-
-    /// Read accumulated output.
-    fn read_output(&mut self, timeout_ms: i32) -> String {
-        let data = helpers::read_pty_timeout(self.master_fd, timeout_ms);
-        helpers::strip_ansi(&data)
     }
 }
 

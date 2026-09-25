@@ -24,7 +24,6 @@ use crate::helpers;
 
 struct RecordServer {
     child: Child,
-    port: u16,
 }
 
 impl RecordServer {
@@ -72,7 +71,7 @@ impl RecordServer {
             thread::sleep(Duration::from_millis(100));
         }
 
-        Ok(Self { child, port })
+        Ok(Self { child })
     }
 }
 

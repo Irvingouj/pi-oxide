@@ -12,6 +12,10 @@ All notable changes to this project will be documented in this file.
 
 - Compaction now commits only after a valid, non-empty summary succeeds; failed or cancelled summarization leaves the existing transcript intact.
 
+### Changed
+
+- `@pi-oxide/pi-host-web` SDK version bumped to `0.9.11`. WASM bindings rebuilt.
+
 ## [0.9.6] - 2026-06-27
 
 ### Added

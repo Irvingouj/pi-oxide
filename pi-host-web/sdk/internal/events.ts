@@ -352,7 +352,7 @@ export class EventMapper {
 					provider: msg.provider,
 					model: msg.model,
 					stopReason: msg.stop_reason,
-					...(msg.error_message ? { errorMessage: msg.error_message } : {}),
+					...(typeof msg.error_message === "string" ? { errorMessage: msg.error_message } : {}),
 					timestamp: msg.timestamp,
 					usage: msg.usage,
 				};
@@ -403,7 +403,7 @@ export class EventMapper {
 				error_message?: string;
 			};
 			if (asm.stop_reason) base.stopReason = asm.stop_reason;
-			if (asm.error_message) base.errorMessage = asm.error_message;
+			if (typeof asm.error_message === "string") base.errorMessage = asm.error_message;
 		}
 		return base;
 	}

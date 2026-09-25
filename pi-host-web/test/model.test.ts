@@ -223,6 +223,7 @@ describe("convertMessages", () => {
 					role: "tool_result",
 					content: [{ type: "text", text: "result" }],
 					tool_call_id: "tc1",
+					is_error: true,
 				},
 			];
 
@@ -247,7 +248,7 @@ describe("convertMessages", () => {
 			// Tool result message
 			assert.equal(body.messages[2].role, "tool");
 			assert.equal(body.messages[2].tool_call_id, "tc1");
-			assert.equal(body.messages[2].content, "result");
+			assert.equal(body.messages[2].content, "Tool execution failed:\nresult");
 
 			global.fetch = fetch;
 		});

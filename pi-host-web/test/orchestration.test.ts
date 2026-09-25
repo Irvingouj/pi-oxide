@@ -6,6 +6,7 @@ import {
 	type AgentMessage as WasmAgentMessage,
 } from "../sdk/index.ts";
 import { defineModel } from "../sdk/model.ts";
+import { buildInitialHistory } from "../sdk/orchestration/config-builders.ts";
 import {
 	createEngineAgent,
 	resetAgentState,
@@ -15,7 +16,12 @@ import {
 import { SnapshotSerializer } from "../sdk/snapshot.ts";
 import { memoryStore } from "../sdk/stores.ts";
 import { defineTools, tool } from "../sdk/tools.ts";
-import type { AgentConfig, AgentMessage, AgentToolCall } from "../sdk/types.ts";
+import type {
+	AgentConfig,
+	AgentInitialHistoryEntry,
+	AgentMessage,
+	AgentToolCall,
+} from "../sdk/types.ts";
 
 await ensureInit();
 
@@ -87,6 +93,37 @@ const testTools = defineTools({
 		input: z.object({}),
 		run: () => ({ result: "ok" }),
 	}),
+});
+
+describe("Initial history seeding", () => {
+	it("preserves an explicitly empty assistant error message", () => {
+		const entry: AgentInitialHistoryEntry = {
+			entryId: "assistant-error",
+			turnNumber: 1,
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "" }],
+				api: "test",
+				provider: "test",
+				model: "test-model",
+				stopReason: "error",
+				errorMessage: "",
+				timestamp: 1,
+				usage: {
+					input: 0,
+					output: 0,
+					cache_read: 0,
+					cache_write: 0,
+					total_tokens: 0,
+				},
+			},
+		};
+		const seeded = buildInitialHistory([entry]);
+		const message = seeded[0]?.message;
+
+		assert.ok(message?.role === "assistant");
+		assert.equal(message.error_message, "");
+	});
 });
 
 describe("Engine", () => {

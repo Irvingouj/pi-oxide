@@ -46,6 +46,8 @@ export type {
 	AgentHistoryContentBlock,
 	AgentHistoryEntry,
 	AgentHistoryMessage,
+	AgentInitialHistoryEntry,
+	AgentInitialHistoryMessage,
 	AgentHistoryStopReason,
 	AgentInput,
 	AgentMessage,

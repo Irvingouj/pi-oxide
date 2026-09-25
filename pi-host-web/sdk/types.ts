@@ -30,7 +30,7 @@ export interface Logger {
 export interface AgentConfig {
 	sessionId: string;
 	model: AgentModel;
-	initialHistory?: readonly AgentHistoryEntry[];
+	initialHistory?: readonly AgentInitialHistoryEntry[];
 	tools?: AgentTools | AgentTools[];
 	store?: AgentStore;
 	instructions?: string;
@@ -148,6 +148,8 @@ export interface AgentMessage {
 	content: AgentContentBlock[];
 	timestamp?: number;
 	tool_call_id?: string;
+	/** Present for tool results so model adapters can distinguish failed calls. */
+	is_error?: boolean;
 	stopReason?: string;
 	errorMessage?: string;
 }
@@ -156,6 +158,20 @@ export interface AgentHistoryEntry {
 	entryId: string;
 	turnNumber: number;
 	message: AgentHistoryMessage;
+}
+
+/** History messages accepted when seeding a new runtime from an existing branch. */
+export type AgentInitialHistoryMessage =
+	| Extract<AgentHistoryMessage, { role: "user" }>
+	| Extract<AgentHistoryMessage, { role: "assistant" }>
+	| (Omit<Extract<AgentHistoryMessage, { role: "tool_result" }>, "details"> & {
+			details?: never;
+	  });
+
+export interface AgentInitialHistoryEntry {
+	entryId: string;
+	turnNumber: number;
+	message: AgentInitialHistoryMessage;
 }
 
 export type AgentHistoryMessage =
@@ -344,7 +360,9 @@ export interface AgentError {
 		| "internal_error"
 		| "agent_disposed"
 		| "agent_busy"
-		| "agent_not_initialized";
+		| "agent_not_initialized"
+		| "compaction_unavailable"
+		| "empty_compaction_summary";
 	message: string;
 	cause?: unknown;
 	recoverable: boolean;

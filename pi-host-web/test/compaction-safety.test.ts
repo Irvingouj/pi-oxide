@@ -1,12 +1,16 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { hostAcceptCompaction, startTurn } from "../pi_host_web.js";
+import { buildUserMessage } from "../sdk/orchestration/config-builders.ts";
+import { modelResponseToLlmStream } from "../sdk/orchestration/model-adapter.ts";
+import { runTurnWithHostAgent } from "../sdk/bindings/turn-loop.ts";
 import { Agent } from "../sdk/agent.ts";
 import { createHostAgentInstance } from "../sdk/bindings/host-agent.ts";
 import { ensureInit } from "../sdk/index.ts";
 import { memoryStore } from "../sdk/stores.ts";
+import type { AgentRunConfig } from "../sdk/bindings/types.ts";
 import type {
-	AgentHistoryEntry,
+	AgentInitialHistoryEntry,
 	AgentModel,
 	AgentStore,
 } from "../sdk/types.ts";
@@ -15,7 +19,7 @@ await ensureInit();
 
 const sessionId = "compaction-safety-session";
 
-function historySeed(): AgentHistoryEntry[] {
+function historySeed(): AgentInitialHistoryEntry[] {
 	const usage = {
 		input: 0,
 		output: 0,
@@ -131,6 +135,39 @@ function assertUncompactedHistory(snapshotText: string): void {
 }
 
 describe("compaction safety", () => {
+	it("calls the summarizer with its LLM adapter as the receiver", async () => {
+		const host = await createHostAgentInstance({
+			sessionId,
+			model: modelWithSummarizer(async () => "unused"),
+			initialHistory: historySeed(),
+			context: { maxTokens: 10 },
+		});
+		let receiver: AgentRunConfig["llm"] | undefined;
+		const llm: AgentRunConfig["llm"] = {
+			call: async () =>
+				modelResponseToLlmStream(
+					{ content: [{ type: "text", text: "Continued" }], stopReason: "end" },
+					new AbortController().signal,
+				),
+			summarize: async function (messages) {
+				receiver = this;
+				return messages.length > 0 ? "summary" : "empty";
+			},
+		};
+
+		try {
+			await runTurnWithHostAgent(host, buildUserMessage("Current request"), {
+				llm,
+				tools: {},
+				llmTools: [],
+			});
+		} finally {
+			host.destroy();
+		}
+
+		assert.equal(receiver, llm);
+	});
+
 	it("rejects empty summaries at the WASM boundary without consuming the host", async () => {
 		const host = await createHostAgentInstance({
 			sessionId,
@@ -173,6 +210,7 @@ describe("compaction safety", () => {
 
 		assert.equal(summarizeCalled, true, "test must exercise compaction");
 		assert.equal(result.status, "failed");
+		assert.equal(result.error?.code, "empty_compaction_summary");
 		assertUncompactedHistory(snapshotText);
 	});
 

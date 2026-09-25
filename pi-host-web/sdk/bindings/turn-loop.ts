@@ -172,8 +172,7 @@ export async function runTurnWithHostAgent(
 					case "summarize": {
 						const ctx = action.context as import("../../pi_host_web.js").LlmContext;
 						logger.info("Summarizing context");
-						const summarize = config.llm.summarize;
-						if (!summarize) {
+						if (!config.llm.summarize) {
 							throw new HostError(
 								"compaction_unavailable",
 								"No summarizer is configured for context compaction",
@@ -181,7 +180,7 @@ export async function runTurnWithHostAgent(
 						}
 						let summary: string;
 						try {
-							summary = await summarize(ctx.messages, signal);
+							summary = await config.llm.summarize(ctx.messages, signal);
 						} catch (error: unknown) {
 							if (signal?.aborted) checkAbort();
 							throw error;

@@ -151,6 +151,69 @@ describe("Agent class", () => {
 			);
 		});
 
+		it("preserves failed tool results in model requests", async () => {
+			const requests: ModelRequest[] = [];
+			const agent = new Agent({
+				sessionId: "test-failed-tool-history",
+				model: defineModel({
+					id: "history-model",
+					generate: async (request) => {
+						requests.push(request);
+						return {
+							content: [{ type: "text", text: "Continue safely" }],
+							stopReason: "end",
+						};
+					},
+				}),
+				initialHistory: [
+					{
+						entryId: "entry-tool-call",
+						turnNumber: 1,
+						message: {
+							role: "assistant",
+							content: [
+								{ type: "tool_call", id: "call-1", name: "lookup", arguments: {} },
+							],
+							api: "mock-api",
+							provider: "mock-provider",
+							model: "history-model",
+							stopReason: "tool_use",
+							timestamp: 1,
+							usage: {
+								input: 0,
+								output: 0,
+								cache_read: 0,
+								cache_write: 0,
+								total_tokens: 0,
+							},
+						},
+					},
+					{
+						entryId: "entry-failed-tool-result",
+						turnNumber: 1,
+						message: {
+							role: "tool_result",
+							content: [{ type: "text", text: "Lookup failed" }],
+							tool_call_id: "call-1",
+							tool_name: "lookup",
+							is_error: true,
+							timestamp: 2,
+						},
+					},
+				],
+			});
+
+			await agent.run("Try another approach");
+			agent.dispose();
+
+			assert.equal(
+				requests[0]?.messages.some(
+					(message) => message.role === "tool_result" && message.is_error === true,
+				),
+				true,
+			);
+		});
+
 		it("returns completed result with text", async () => {
 			const agent = new Agent({
 				sessionId: "test-run",

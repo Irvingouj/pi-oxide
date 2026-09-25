@@ -10,8 +10,8 @@ import { createAgentError } from "../errors.ts";
 import type {
 	AgentArtifact,
 	AgentConfig,
-	AgentHistoryEntry,
-	AgentHistoryMessage,
+	AgentInitialHistoryEntry,
+	AgentInitialHistoryMessage,
 	AgentInput,
 	AgentMessage,
 	AgentModel,
@@ -104,7 +104,7 @@ export function mergeMetadata(
 }
 
 export function buildInitialHistory(
-	history: readonly AgentHistoryEntry[],
+	history: readonly AgentInitialHistoryEntry[],
 ): WasmAgentHistoryEntry[] {
 	return history.map((entry) => ({
 		entry_id: entry.entryId,
@@ -113,7 +113,7 @@ export function buildInitialHistory(
 	}));
 }
 
-function historyMessageToWasm(message: AgentHistoryMessage): WasmAgentMessage {
+function historyMessageToWasm(message: AgentInitialHistoryMessage): WasmAgentMessage {
 	const content: Content[] = message.content.map((block) => {
 		switch (block.type) {
 			case "text":
@@ -141,7 +141,7 @@ function historyMessageToWasm(message: AgentHistoryMessage): WasmAgentMessage {
 				provider: message.provider,
 				model: message.model,
 				stop_reason: message.stopReason,
-				...(message.errorMessage ? { error_message: message.errorMessage } : {}),
+				...(message.errorMessage !== undefined ? { error_message: message.errorMessage } : {}),
 				timestamp: message.timestamp,
 				usage: message.usage,
 			};
@@ -151,7 +151,6 @@ function historyMessageToWasm(message: AgentHistoryMessage): WasmAgentMessage {
 				content,
 				tool_call_id: message.tool_call_id,
 				tool_name: message.tool_name,
-				...(message.details ? { details: message.details } : {}),
 				is_error: message.is_error,
 				timestamp: message.timestamp,
 			};
@@ -201,7 +200,8 @@ export function convertWasmMessagesToAgentMessages(messages: WasmAgentMessage[])
 			return { type: "text" as const, text: "" };
 		}),
 		timestamp: Date.now(),
-		tool_call_id: msg.role === "tool_result" ? (msg as unknown as { tool_call_id: string }).tool_call_id : undefined,
+		tool_call_id: msg.role === "tool_result" ? msg.tool_call_id : undefined,
+		is_error: msg.role === "tool_result" ? msg.is_error : undefined,
 	}));
 }
 
